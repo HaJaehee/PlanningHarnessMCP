@@ -1,6 +1,6 @@
 # 09 · Defects and Lessons
 
-The 22 real defects found while hardening the server, each with root cause, symptom, and fix.
+The 24 real defects found while hardening the server, each with root cause, symptom, and fix.
 **This is the highest-value page for predicting where the next bug is.** Every one lived in a
 place that had no test, and several were *silent* — the server reported success while losing
 data or disarming the safety gate. D16 and D17 were found in *use* rather than by testing, and
@@ -321,6 +321,7 @@ the perfect forgery. Every piece of context you give a weak model to help it do 
 equally a way to *look* like it did the work — so when you add one, ask what the laziest
 possible use of it would be, and close that first.
 
+<a id="d20"></a>
 ## D20 — the model could approve its own plan (1.14.0)
 
 **Root cause:** `_approve` guarded on `plan.approval.requested_at`, which answers "was this
@@ -341,6 +342,7 @@ field that tracks the first will always look most permissive while you wait for 
 a guard protects against the model inventing an input, check the channel the *human* uses, not
 a flag the server set on the model's behalf.
 
+<a id="d21"></a>
 ## D21 — the heartbeat bet, and the swallowed cancellation (1.14.0)
 
 **Root cause:** the blocking wait extended past the client's 60 s request timeout by sending
@@ -364,6 +366,7 @@ so later slices shrink under it. The heartbeat is still sent, but nothing depend
 cannot read back. And a notification you "safely ignore" is often a measurement you are
 throwing away: cancellation was the only direct evidence of the one number that mattered.
 
+<a id="d22"></a>
 ## D22 — a new browser tab per approval, and a rebuild that ate what you typed (1.14.0)
 
 **Root cause:** two independent bugs that only became painful together. `_surface` called
@@ -392,6 +395,7 @@ question is why the input was somewhere a re-render could reach. Also: a functio
 `_open_browser_once` that opens the browser every time is exactly the kind of bug a reader skims
 past, because the name asserts the invariant the code forgot.
 
+<a id="d23"></a>
 ## D23 — close the approval window and it never comes back (1.14.1)
 
 **Root cause:** the D22 fix overshot. `_opened_once` is a **permanent** latch: the first
@@ -415,6 +419,7 @@ only half a test; the missing half is that it happens again once the reason expi
 for "too often" lands, ask what now makes it happen *at all* — and prefer a timestamp to a
 boolean whenever the condition being tracked is one the world can undo.
 
+<a id="d24"></a>
 ## D24 — a new window every 45 seconds, at a human already looking at the page (1.14.2)
 
 **Root cause:** the D23 fix put the whole weight on `page_is_being_watched()`, and that

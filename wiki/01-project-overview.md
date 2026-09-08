@@ -1,5 +1,9 @@
 # 01 · Project Overview
 
+> **Prior page:** [00-why-a-harness.md](00-why-a-harness.md) frames the same problem *without*
+> the air-gap constraint — an agent with a scratchpad and a memory file drifts for the same
+> structural reasons. Read it first if the question is "why is any harness necessary?".
+
 ## The problem
 
 A corporate LLM runs in an **air-gapped datacenter**. We reach it only through an

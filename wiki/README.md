@@ -9,7 +9,7 @@ it forces a `PLAN → HUMAN APPROVAL → EXECUTE → REPORT` lifecycle and physi
 agent loop until a human approves. **Zero third-party dependencies** — Python 3.9+ standard
 library only, because the deployment target has no package index.
 
-Current version: **1.8.1** · 147 unit tests + 5 end-to-end smoke tests, all passing.
+Current version: **1.15.1** · 363 unit tests + 6 end-to-end smoke tests, all passing.
 
 ---
 
@@ -17,6 +17,7 @@ Current version: **1.8.1** · 147 unit tests + 5 end-to-end smoke tests, all pas
 
 | If your task is about… | Read |
 |---|---|
+| **Why a harness at all** — why memory + a scratchpad are not enough | [00-why-a-harness.md](00-why-a-harness.md) |
 | Understanding what this is and why | [01-project-overview.md](01-project-overview.md) |
 | How the server is built (modules, request pipeline) | [02-architecture.md](02-architecture.md) |
 | The four tools and their response contract | [03-tool-contract.md](03-tool-contract.md) + [data/tool-schemas.json](data/tool-schemas.json) |
@@ -36,11 +37,14 @@ config, and version history as JSON/XML.
 
 ## The single most important thing to internalise
 
-**Every hard problem in this project came from a place that had no test.** Across the session
-that built versions 1.6–1.8.1, thirteen real defects were found, and *every one* surfaced the
-moment a test was written for a previously-untested seam: threaded transport, SSE, file
-locking, store failure paths, leniency edge cases, concurrent sessions. Several were
-"silent" — the server reported success while losing data or disarming the safety gate.
+**Every hard problem in this project came from a place nobody was looking at.** Twenty-four
+defects are catalogued so far. Through 1.8.1, thirteen of them surfaced the moment a test was
+written for a previously-untested seam — threaded transport, SSE, file locking, store failure
+paths, leniency edge cases, concurrent sessions — and several were "silent": the server reported
+success while losing data or disarming the safety gate. The later ones needed the other three
+lenses: D16 and D17 were found *in use*, D18 and D19 by **looking at the running system**,
+D20–D22 by reading the other side's source and issue tracker, and D23–D24 in **live testing**,
+against a green suite that asserted only half of each guarantee.
 
 So the working rule for continuing this project is: **before changing behaviour, write the
 test that pins the current behaviour; before trusting a path, write the test that fuzzes it.**

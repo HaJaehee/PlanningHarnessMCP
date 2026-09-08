@@ -1,22 +1,27 @@
 # 07 · Testing
 
-**147 unit tests + 5 end-to-end smoke tests, all passing** (as of 1.8.1). Standard-library
+**363 unit tests + 6 end-to-end smoke tests, all passing** (as of 1.15.1). Standard-library
 `unittest` only. This project's defect history proves the rule: *test the seam before you
 trust it.* See [09-defects-and-lessons.md](09-defects-and-lessons.md).
 
 ## Running
 
 ```bash
-python -m unittest discover -s tests          # unit suite (~13 s)
-python tests/smoke_stdio.py                    # stdio end-to-end
-python tests/smoke_blocking_approval.py        # blocking approval, real subprocess
-python tests/smoke_shared_approval.py          # one page across 2 processes
-python tests/smoke_multi_plan.py               # concurrent plans, 2 processes
-python tests/smoke_sse.py                       # SSE transport end-to-end
+python -m unittest discover -s tests     # unit suite (~48 s)
+python tests/smoke_stdio.py              # stdio end-to-end
+python tests/smoke_blocking_approval.py  # blocking approval, real subprocess
+python tests/smoke_shared_approval.py    # one page across 2 processes
+python tests/smoke_multi_plan.py         # concurrent plans, 2 processes
+python tests/smoke_sse.py                # SSE transport end-to-end
+python tests/smoke_chunked_approval.py   # chunked approval wait (default mode)
 ```
 
-`python tools/verify_install.py` runs the unit suite **and all five smoke tests** as part of
-the GO/NO-GO acceptance check on the target machine. Set `PYTHONUTF8=1` on Windows.
+Set `PYTHONUTF8=1` on Windows.
+
+`python tools/verify_install.py` runs the unit suite **and five of the six smoke tests** as part
+of the GO/NO-GO acceptance check on the target machine. `smoke_chunked_approval` is *not* in that
+list, even though chunked waiting has been the **default** approval mode since 1.14.0 — so the
+acceptance check does not exercise the path the target machine will actually take.
 
 ## Unit suite layout (`tests/test_server.py`)
 
