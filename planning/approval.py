@@ -528,8 +528,8 @@ textarea.tc{display:none;min-height:2.4rem;margin:.4rem 0 0 1.95em;width:calc(10
   .chip.idle{background:#2a2115;color:#d9a441}
 }
 </style></head><body><div class="card" id="root">
-<div class="idle">현재 승인 요청 메시지가 없습니다.<br>
-<span style="font-size:.85rem">에이전트가 계획을 제출하면 여기에 표시됩니다.</span></div></div>
+<div class="idle">현재 대기 중인 승인 요청이 없습니다.<br>
+<span style="font-size:.85rem">에이전트가 계획을 제출하면 이곳에 표시됩니다.</span></div></div>
 <script>
 let seen='',busy=false,flash=null,pendingCount=0;
 const IDLE_TITLE='planning-mcp 승인';
@@ -773,8 +773,8 @@ function taskRows(d){
              :'<div class="ev none">(증거 기록 없음)</div>';
     }
     row+='<textarea class="tc" data-req="'+esc(d.id)+'" data-tid="'+esc(String(t.task_id))+
-      '" placeholder="'+(done?'이 태스크를 어떻게 다시 해야 하는지 적어주세요'
-                             :'이 태스크에 대한 의견 (선택)')+'"></textarea>';
+      '" placeholder="'+(done?'해당 태스크의 재작업 요청 사항을 입력해 주십시오'
+                             :'해당 태스크에 대한 의견을 입력해 주십시오 (선택 사항)')+'"></textarea>';
     return row+'</div>';
   }).join('')+'</div>';
 }
@@ -782,12 +782,12 @@ function render(list){
   const root=document.getElementById('root');
   // Matches the static placeholder above, so the page does not flicker between two
   // different wordings when the first poll lands.
-  if(!list.length){root.innerHTML='<div class="idle">현재 승인 요청 메시지가 없습니다.<br>'+
-    '<span style="font-size:.85rem">에이전트가 계획을 제출하면 여기에 표시됩니다.</span></div>';return;}
+  if(!list.length){root.innerHTML='<div class="idle">현재 대기 중인 승인 요청이 없습니다.<br>'+
+    '<span style="font-size:.85rem">에이전트가 계획을 제출하면 이곳에 표시됩니다.</span></div>';return;}
   // 여러 세션이 동시에 승인을 기다릴 수 있으므로 큐 전체를 보여준다.
   root.innerHTML=list.map(d=>{
     if(d.decided){
-      const label={APPROVED:'승인함',REJECTED:'거절함',REVISE:'수정 요청함'}[d.decided]||d.decided;
+      const label={APPROVED:'승인되었습니다',REJECTED:'거절되었습니다',REVISE:'수정 요청되었습니다'}[d.decided]||d.decided;
       return '<div class="done">'+esc(d.plan_id)+' — '+label+
         '<br><span style="font-weight:400;opacity:.6;font-size:.9rem">'+
         '에이전트가 이 결정을 반영합니다.</span></div>';
@@ -803,15 +803,15 @@ function render(list){
       :'<h1>'+(d.phase==='COMPLETION'?'완료 확인':'승인 요청')+' · '+esc(d.plan_id)+
        '</h1><p class="goal">'+esc(d.goal)+'</p><pre>'+esc(d.display)+'</pre>';
     html+=d.agent_waiting
-      ? '<div class="chip live">에이전트가 대기 중입니다 · 결정하시면 바로 이어집니다</div>'
-      : '<div class="chip idle">에이전트가 대기를 멈췄습니다 · 지금 결정하셔도 반영되지만, '+
-        '채팅에 아무 메시지나 한 번 보내야 이어집니다</div>';
+      ? '<div class="chip live">에이전트가 대기 중입니다 · 결정하시면 작업이 바로 이어집니다</div>'
+      : '<div class="chip idle">에이전트가 대기를 멈췄습니다 · 지금 결정하셔도 반영되며, '+
+        '채팅창에 메시지를 입력하시면 진행이 재개됩니다</div>';
     html+='<textarea id="c-'+esc(d.id)+
-      '" placeholder="전체 의견 (거절 사유도 여기에)"></textarea>';
+      '" placeholder="전체 의견을 입력해 주십시오 (거절 사유도 여기에 입력하실 수 있습니다)"></textarea>';
     if(perTask)html+='<label class="scope"><input type="checkbox" id="all-'+esc(d.id)+
       '"> '+
-      (d.phase==='COMPLETION'?'계획 자체를 다시 세우기 (태스크 추가·삭제·순서 변경은 이쪽)'
-                             :'계획 전체를 다시 세우기 (태스크 추가·삭제·순서 변경은 이쪽)')+
+      (d.phase==='COMPLETION'?'계획 자체를 다시 세우기 (태스크 추가·삭제·순서 변경 시 선택)'
+                             :'계획 전체를 다시 세우기 (태스크 추가·삭제·순서 변경 시 선택)')+
       '</label>';
     return html+'<div class="row">'+
       '<button class="ok" onclick="decide(\\''+esc(d.id)+'\\',\\'APPROVED\\')">승인</button>'+
@@ -820,11 +820,11 @@ function render(list){
       '<button class="no" onclick="decide(\\''+esc(d.id)+
       '\\',\\'REJECTED\\')">거절</button></div>';
   }).join('<hr style="border:0;border-top:1px solid #ccd0d5;margin:1.75rem 0">')+
-    '<p class="hint">태스크의 [의견] · [다시 작업] 을 누르면 그 태스크에만 요청을 남길 수 '+
-    '있습니다. 완료 보고에서는 지목한 태스크만 다시 실행되고, 나머지 태스크의 결과는 '+
+    '<p class="hint">태스크의 [의견] 또는 [다시 작업] 버튼을 누르면 해당 태스크에만 요청을 남기실 수 '+
+    '있습니다. 완료 보고 단계에서는 지정하신 태스크만 다시 실행되며, 나머지 태스크의 결과는 '+
     '그대로 유지됩니다.<br>'+
-    '결정하기 전까지 해당 에이전트는 아무것도 실행하지 못합니다. '+
-    '요청은 응답하실 때까지 사라지지 않으니 천천히 검토하셔도 됩니다.</p>';
+    '결정하시기 전까지 해당 에이전트는 후속 작업을 진행하지 못합니다. '+
+    '요청은 응답하실 때까지 사라지지 않으니 천천히 검토해 주시기 바랍니다.</p>';
 }
 async function decide(id,dec){
   if(busy)return;busy=true;alertOff();

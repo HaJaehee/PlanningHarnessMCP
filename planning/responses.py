@@ -76,7 +76,7 @@ def render_completion_report(plan: Plan, plan_summary: str | None = None) -> str
     the human what the agent claims it did, task by task, is the only thing that catches
     a model that marked everything DONE with invented result_log text.
     """
-    lines = ["완료 보고 - 이 계획을 종료하기 전에 확인하세요."]
+    lines = ["완료 보고 - 이 계획을 종료하기 전에 확인해 주시기 바랍니다."]
     if plan.goal:
         lines.append(f"목표: {plan.goal}")
     if plan_summary:
@@ -98,7 +98,7 @@ def render_completion_report(plan: Plan, plan_summary: str | None = None) -> str
     lines.append("")
     lines.append(
         f"이 에이전트는 {len(plan.tasks)}개 태스크의 완료를 보고했습니다. "
-        "실제로 완료하였나요? (승인 / 수정 요청 / 거절)"
+        "실제로 완료되었습니까? (승인 / 수정 요청 / 거절)"
     )
     return "\n".join(lines)
 
