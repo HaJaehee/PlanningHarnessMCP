@@ -483,7 +483,7 @@ types, nulls and 100k-char strings across all four tools — it must never raise
 
 Applied before validation so that near-miss calls succeed instead of erroring:
 
-- Case/alias normalization: `done|complete|completed|finished` → `DONE`; `in progress|started|doing|running` → `IN_PROGRESS`; `fail|error|failed` → `FAILED`; `yes|y|ok|approve|승인|네` → `APPROVED`; `no|cancel|reject|취소|아니오` → `REJECTED`.
+- Case/alias normalization: `done|complete|completed|finished|완료` → `DONE`; `in progress|started|doing|running|진행중` → `IN_PROGRESS`; `fail|error|failed|실패` → `FAILED`; `yes|y|ok|approve|승인|네|예|진행|좋아요` → `APPROVED`; `no|cancel|reject|취소|아니오|아니요|거부|거절` → `REJECTED`.
 
   > **Client-side validation caveat (observed in practice):** these enum aliases only help when
   > the MCP client forwards the raw value. Strict clients (observed: Claude Code) validate

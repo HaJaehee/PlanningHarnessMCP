@@ -209,8 +209,8 @@ Run these first; they are deterministic and catch most bugs before you burn corp
 |---|---|
 | `{"status": "done"}` / `"Done"` / `"completed"` / `"finished"` | `DONE` |
 | `{"status": "in progress"}` / `"started"` / `"running"` | `IN_PROGRESS` |
-| `{"decision": "네"}` / `"ok"` / `"y"` / `"승인"` | `APPROVED` |
-| `{"decision": "취소"}` / `"no"` / `"reject"` | `REJECTED` |
+| `{"decision": "네"}` / `"예"` / `"ok"` / `"y"` / `"승인"` | `APPROVED` |
+| `{"decision": "취소"}` / `"아니오"` / `"아니요"` / `"거절"` / `"no"` / `"reject"` | `REJECTED` |
 | `{"need_more_thinking": "false"}` / `0` / `"False"` | `False` |
 | `{"step_number": "3"}` | `3` |
 | `{"task_list": "a\nb\nc"}` | `["a","b","c"]` |

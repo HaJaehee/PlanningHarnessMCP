@@ -405,7 +405,7 @@ model ── request_user_approval(ASK_USER) ──►  server
                                                │   so the page never even redraws)
         …repeats while the human thinks, up to approval_timeout (900s) total…
                                                │
-        human clicks 승인 / 거절 / 수정요청 ──────┤
+        human clicks 승인 / 거절 / 수정 요청 ──────┤
         ◄── APPROVED + next_task ───────────────┘  (the slice in flight returns it)
 ```
 
