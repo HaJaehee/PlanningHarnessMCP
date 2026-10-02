@@ -1,5 +1,5 @@
 {
-  "_comment": "Generated from planning/schemas.py (build_tool_definitions). 'tools' is the default configuration (standard profile, chunked blocking approval, auto_advance). Since 1.16.0 the advertised text varies with the configuration; 'variants' holds the parts that differ.",
+  "_comment": "Generated from planning/schemas.py (build_tool_definitions). 'tools' is the default configuration (standard profile, chunked blocking approval, auto_advance, alternatives on). Since 1.16.0 the advertised text varies with the configuration; 'variants' holds the parts that differ.",
   "tools": [
     {
       "name": "plan_and_think",
@@ -70,6 +70,54 @@
           "plan_id": {
             "type": "string",
             "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+          },
+          "alternatives": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "The task's number in task_list (first = 1). Example: 2"
+                },
+                "title": {
+                  "type": "string",
+                  "description": "Another way to do that task. Example: 'Export the table to CSV and total it with a script'"
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Its trade-off, short. Example: 'faster, loses formatting'"
+                }
+              },
+              "required": [
+                "task_id",
+                "title"
+              ]
+            },
+            "description": "OPTIONAL. Other ways to do a task, ONLY when the choice depends on the user's preference - not on facts you can check yourself. The task in task_list is your recommendation; the user picks one option on the approval page and you are told which. At most 3 per task, 3 tasks per plan. Example: [{\"task_id\": 2, \"title\": \"Export to CSV and total it with a script\", \"reason\": \"faster, loses formatting\"}]"
+          },
+          "recommended_reasons": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Example: 2"
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Example: 'keeps the report formatting'"
+                }
+              },
+              "required": [
+                "task_id",
+                "reason"
+              ]
+            },
+            "description": "OPTIONAL. Why you recommend the task_list version of a task that has alternatives. Example: [{\"task_id\": 2, \"reason\": \"keeps the report formatting\"}]"
           }
         },
         "required": [
@@ -173,7 +221,7 @@
     "model_profile=reasoning": {
       "plan_and_think": {
         "name": "plan_and_think",
-        "description": "STEP 1 - RECORD YOUR PLAN.\nCall this first for each NEW user request. When a response says next_action = ANSWER_USER, write the answer instead - that is not a new request.\n\nYou have already reasoned about the request. Record the result in ONE call:\ngoal + task_list, with need_more_thinking = false.\n\nDo not re-check the plan here. The user reviews it on the approval page before\nanything runs - that review is the verification step.\n\nIf the user commented on particular tasks, the server names them: send task_updates\ninstead of task_list, rewriting only those tasks.",
+        "description": "STEP 1 - RECORD YOUR PLAN.\nCall this first for each NEW user request. When a response says next_action = ANSWER_USER, write the answer instead - that is not a new request.\n\nYou have already reasoned about the request. Record the result in ONE call:\ngoal + task_list, with need_more_thinking = false.\n\nDo not re-check the plan here. The user reviews it on the approval page before\nanything runs - that review is the verification step.\n\nIf the user commented on particular tasks, the server names them: send task_updates\ninstead of task_list, rewriting only those tasks.\nIf you are torn between two ways of doing a task, do not reconsider. Put the one you\nprefer in task_list and the other in alternatives. The user picks.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -225,6 +273,54 @@
             "plan_id": {
               "type": "string",
               "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+            },
+            "alternatives": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The task's number in task_list (first = 1). Example: 2"
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "Another way to do that task. Example: 'Export the table to CSV and total it with a script'"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "description": "Its trade-off, short. Example: 'faster, loses formatting'"
+                  }
+                },
+                "required": [
+                  "task_id",
+                  "title"
+                ]
+              },
+              "description": "OPTIONAL. Other ways to do a task, ONLY when the choice depends on the user's preference - not on facts you can check yourself. The task in task_list is your recommendation; the user picks one option on the approval page and you are told which. At most 3 per task, 3 tasks per plan. Example: [{\"task_id\": 2, \"title\": \"Export to CSV and total it with a script\", \"reason\": \"faster, loses formatting\"}]"
+            },
+            "recommended_reasons": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Example: 2"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "description": "Example: 'keeps the report formatting'"
+                  }
+                },
+                "required": [
+                  "task_id",
+                  "reason"
+                ]
+              },
+              "description": "OPTIONAL. Why you recommend the task_list version of a task that has alternatives. Example: [{\"task_id\": 2, \"reason\": \"keeps the report formatting\"}]"
             }
           },
           "required": [
@@ -298,10 +394,99 @@
             "plan_id": {
               "type": "string",
               "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+            },
+            "choices": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "OPTIONAL, with decision='APPROVED' only. The option the user picked in chat for each task that offered a choice, as a letter: A = your recommendation, B / C / D = the alternatives in order. Leave a task out to keep A. Example: {\"2\": \"B\"}"
             }
           },
           "required": [
             "decision"
+          ]
+        }
+      }
+    },
+    "alternatives=false": {
+      "plan_and_think": {
+        "name": "plan_and_think",
+        "description": "STEP 1 - PLAN BEFORE YOU ACT.\nCall this first for each NEW user request. When a response says next_action = ANSWER_USER, write the answer instead - that is not a new request.\n\nHOW TO USE:\n- One call per thinking step, starting at step_number = 1. Send the same goal each time.\n- When your task breakdown is ready, send need_more_thinking = false with task_list.\n  It does not need to be perfect: the user reviews it before anything runs.\n- Each response says how many thinking steps are left. When none are left, the server\n  sends your latest task_list to the user as it stands.\n\nIF THE USER COMMENTED ON PARTICULAR TASKS:\nThe server names them. Send task_updates instead of task_list, rewriting only those\ntasks. Every other task was already accepted - leave it alone.\n\nDo not execute anything or answer the user while planning.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "string",
+              "description": "One sentence restating what the user ultimately wants. Repeat the SAME goal text on every step. Example: 'Summarize the Q3 sales report and email it to the team lead.' If the user CORRECTS the goal, keep sending the old text here and put the corrected one in revised_goal."
+            },
+            "revised_goal": {
+              "type": "string",
+              "description": "OPTIONAL. Use ONLY when the user says the goal itself was wrong or has changed - for example 'no, I meant the Q4 report, not Q3'. Put the corrected goal here and leave 'goal' as the text you have been sending, so the server can find the plan and record the change. Do NOT use it to reword or paraphrase the same goal. Example: 'Summarize the Q4 sales report and email it to the team lead.'"
+            },
+            "thought": {
+              "type": "string",
+              "description": "Your reasoning for this step, in one or two sentences. Example: 'I must first locate the Q3 report file before I can summarize it.'"
+            },
+            "step_number": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Which thinking step this is. Starts at 1 and increases by exactly 1 each call. Example: 2"
+            },
+            "total_steps": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "How many thinking steps you expect to need in total. Example: 3"
+            },
+            "need_more_thinking": {
+              "type": "boolean",
+              "description": "false = task_list is ready (it does not need to be perfect - the user reviews it). true = you need another thinking step. Example: false"
+            },
+            "task_list": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "REQUIRED when need_more_thinking is false. A flat list of plain-text action items, in execution order. Plain strings only - do NOT send objects, do NOT add numbering, do NOT add status. The server assigns task_id automatically. Example: [\"Locate the Q3 sales report file\", \"Extract the revenue table\", \"Write a 5-line summary\", \"Send the summary by email\"]"
+            },
+            "task_updates": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The task the user commented on. Example: 3"
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "The rewritten task, answering the user's comment. Example: 'Copy the revenue table into the summary unchanged'"
+                  }
+                },
+                "required": [
+                  "task_id",
+                  "title"
+                ]
+              },
+              "description": "ONLY use this when the server told you the user commented on specific tasks. Rewrite JUST those tasks; every task you do not list stays exactly as it is. Do NOT send task_list at the same time, and do NOT use this to add, delete or reorder tasks - that requires a full task_list. Example: [{\"task_id\": 3, \"title\": \"Copy the revenue table in unchanged\"}]"
+            },
+            "revises_step": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "OPTIONAL - normally left out. The step_number of an earlier step that this step replaces. Example: 2"
+            },
+            "plan_id": {
+              "type": "string",
+              "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+            }
+          },
+          "required": [
+            "goal",
+            "thought",
+            "step_number",
+            "total_steps",
+            "need_more_thinking"
           ]
         }
       }

@@ -61,6 +61,21 @@ Optional: `task_list` (required when finalizing), `task_updates`, `revised_goal`
   silently widen the approval: the response says the human approved the *previous* goal and
   tells the model to re-plan and re-approve if the tasks no longer serve the corrected one.
 - On finalize → `plan_status: AWAITING_APPROVAL`, `next_action: CALL_REQUEST_USER_APPROVAL`.
+- **Alternatives (2.0.0).** `task_list` is the model's *recommendation*. For a task whose right
+  way depends on the user's preference it may add `alternatives:
+  [{"task_id", "title", "reason"}]` (other ways to do that task) and `recommended_reasons:
+  [{"task_id", "reason"}]` (why it prefers its own) - the `{task_id, ...}` shape `task_updates`
+  already taught it. `task_id` numbers into the same call's `task_list`. The server turns them
+  into each task's `options` (index 0 = the recommendation) after validating: unknown numbers,
+  a repeat of the recommendation, duplicates and DONE tasks (carried through a redraft) are
+  dropped with a note; at most `PLANNING_MCP_MAX_ALTERNATIVES` (3) per task and
+  `PLANNING_MCP_MAX_CHOICE_POINTS` (3) tasks per plan. The finalize response names the tasks
+  that offer a choice (`choice_points`). Alternatives sent while still thinking are kept with
+  the draft (`draft_alternatives`) and go with it if the server submits the draft; a new draft
+  `task_list` replaces them. `task_updates` cannot carry alternatives, and rewriting a task
+  drops its choice. Advertised in both profiles; only the reasoning profile is also told "if
+  you are torn between two ways, put the other in alternatives - the user picks". Turned off
+  with `PLANNING_MCP_ALTERNATIVES=off` (not advertised, ignored with a note).
 - **Convergence (1.16.0, [D25](09-defects-and-lessons.md#d25)).**
   - *Thinking budget.* A drafting round may take `PLANNING_MCP_MAX_THINKING_STEPS` steps (0 =
     profile default: standard 8, reasoning 2; negative = unlimited). It starts on the round's first
@@ -106,6 +121,12 @@ Optional: `plan_summary` (required for `ASK_USER`), `user_comment`, `plan_id`.
   halt - in chat mode `APPROVED` = approve the draft as it stands, `REVISE` = continue (with
   `user_comment` as a direction), `REJECTED` = cancel. With the card on the page a model-sent
   decision is `APPROVAL_PENDING`, as in D20.
+- **Choices (2.0.0).** With a page, the human picks on the page and the page is the only channel:
+  `choices` is not even advertised, and one the model sends is ignored with a note (refused
+  outright while the request is open - D20). In chat mode (no page) `APPROVED` may carry
+  `choices: {"2": "B"}` - letters, A = the recommendation; a bare number is refused by
+  leniency because it could mean A or B. Anything missing or invalid keeps the
+  recommendation.
 - **`APPROVED`/`REJECTED`/`REVISE`**: report what the human actually said. A `REVISE` the model
   reports itself is always a whole-plan revision; only the approval page can express a per-task
   one, because only there can the human point at a specific task.
@@ -133,6 +154,13 @@ Optional: `result_log`, `plan_id`.
   ignores the instruction. Since 1.16.0, if a human has the approval request open, the call
   waits on them first (and returns their decision if they make one) rather than bouncing back as
   fast as the model can retry. A halted plan refuses every call with `LOOP_HALTED`.
+- **What was picked is what runs (2.0.0).** At approval the chosen option becomes the task's
+  `title`. `next_task` carries `chosen_by_user` (`recommended` / `alternative`) and the choice's
+  `choice_reason`, and when the task picked was an alternative, every hint that hands the task
+  over says so (`choice_note`, like `_rework_suffix`). **No response to the model ever contains
+  an option that was not picked** - `Task.brief()` has no options, only `page_brief()` (the
+  page's view) does. An alternative the model can still see is one it may still do: the D19
+  lesson, applied before the fact. `TestTheUnchosenStayUnseen` scans a whole lifecycle for it.
 - `IN_PROGRESS` before the work, `DONE`/`FAILED` after. With `auto_advance` on (default) the
   server puts the next task into `IN_PROGRESS` as part of accepting a `DONE`, so only the first
   task needs an explicit start: a 5-task plan costs 1 + 5 calls instead of 5 + 5. The `DONE`

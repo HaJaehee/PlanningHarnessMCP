@@ -343,6 +343,43 @@ draft and three buttons; an approval card with the agent note), typing a directi
 the button, and the click released the agent's held call within a second with
 `The user said: "..."` leading its next hint.
 
+## Choosing between alternatives (2.0.0)
+
+```
+2.  다음 중 하나를 고르십시오
+    ◉ A. 엑셀 피벗으로 매출 집계  [권장] — 보고서 서식이 그대로 유지됨
+    ○ B. CSV로 내보낸 뒤 스크립트로 집계 — 빠르지만 서식이 사라짐
+    ○ C. 수작업으로 합계 계산 — 느리지만 도구가 필요 없음
+    ○    기타 (직접 입력)
+```
+
+- The recommendation (A) is pre-selected and marked 권장 with its reason; every alternative
+  shows its trade-off, so the human can pick without asking.
+- The approve button states its consequence before it is clicked, like the REVISE button:
+  `승인` / `승인 · 2번 B안` / `승인 · 선택 2건 반영`. **기타** opens that task's comment box and
+  disables approval (`승인 · 기타는 수정 요청으로`): something other than the options on offer
+  is a change to the task, which the per-task REVISE path already handles - so "what the human
+  approved is what runs" stays true.
+- Picks live in `localStorage` with the drafts (`…:ch<task_id>`): they survive a rebuild, a
+  reload, and are mirrored across tabs (D22).
+- `record_decision` refuses a pick the request did not show (`validate_page_choices`) - the
+  page only ever posts an index it rendered, so anything else is a stale tab or a forged
+  request - and the page then keeps its drafts and says the decision was not recorded,
+  instead of clearing them as if it had been.
+- The **halt card** shows the draft's choices the same way, without 기타 (a direction goes in
+  the halt card's own box): `이 초안으로 승인 · 3번 B안`.
+- The **completion report** marks each such task `B안 선택` / `권장안`, so the human can check
+  it was done the way they picked.
+- In chat mode the plan text lists the options (`A. … [권장] — 이유`) and asks for "2번 B안"
+  in the reply, which the model relays as `choices`.
+
+Verified in a real browser against a real `ApprovalServer`: defaults and badges, the label
+changing to `승인 · 2번 B안`, 기타 opening the comment box and disabling approval, picks
+surviving a reload, the click reaching the waiting agent (task 2 handed over as the
+alternative with its reason), the completion badges, and a halt-card draft approved with a
+pick. The same check found the radios named "0" / "1" in the accessibility tree; they now
+carry an `aria-label`.
+
 ## Config knobs
 
 `PLANNING_MCP_BLOCKING_APPROVAL` (default true), `_APPROVAL_PORT` (8765), `_APPROVAL_TIMEOUT`

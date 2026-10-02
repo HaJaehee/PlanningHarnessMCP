@@ -536,6 +536,11 @@ transition into that state - not only the one that was reported.
 
 Judging by the pattern (bugs cluster in untested seams and failure paths), the thinner-covered
 areas still are:
+- **Choices meeting other features (2.0.0)**: a choice on a task the human then sends back for
+  rework from the completion report, a targeted revision of a task that offered a choice under
+  the page's per-task review, and choices on a plan whose approval expires (TTL) and is
+  re-asked. Each path is designed and partly tested; none has been driven end to end in a
+  browser.
 - `models.py` serialization round-trips at the boundaries (unusual `from_dict` inputs, huge task
   counts, retention pruning interacting with multi-plan).
 - `config.py` env-var parsing (already partly covered, but not every coercion path).

@@ -1,13 +1,13 @@
 # 07 · Testing
 
-**443 unit tests + 6 end-to-end smoke tests, all passing** (as of 1.16.0). Standard-library
+**519 unit tests + 6 end-to-end smoke tests, all passing** (as of 2.0.0). Standard-library
 `unittest` only. This project's defect history proves the rule: *test the seam before you
 trust it.* See [09-defects-and-lessons.md](09-defects-and-lessons.md).
 
 ## Running
 
 ```bash
-python -m unittest discover -s tests     # unit suite (~62 s)
+python -m unittest discover -s tests     # unit suite (~70 s)
 python tests/smoke_stdio.py              # stdio end-to-end
 python tests/smoke_blocking_approval.py  # blocking approval, real subprocess
 python tests/smoke_shared_approval.py    # one page across 2 processes
@@ -66,6 +66,22 @@ Measured with the scripted policies (no page, defaults): a standard-profile mode
 asks for one more step reaches a human in at most 12 calls, a reasoning-profile one in 6; one that
 keeps re-planning a finalized plan in 5; one that keeps re-planning a completed goal is stopped
 on the 4th call.
+
+## Alternatives suite (`tests/test_alternatives.py`, 2.0.0)
+
+76 tests. The guarantees: *what was picked is what runs, only the human picks while a page is
+open, after approval the model never sees an option that was not picked, and a plan with no
+choices behaves - and fingerprints - exactly as in 1.16.*
+
+| Class | Covers |
+|---|---|
+| `TestLeniency`, `TestBuildOptions`, `TestChoiceValidation` | input shapes; validation against the task list; strict page / lenient chat validation; a bare number is never read as a pick |
+| `TestProposing` | options attached at finalize, never in the model's view, 1.16 fingerprint unchanged, options bound into it, off switch, rewrite drops a choice, DONE work offers none |
+| `TestChatModePicking`, `TestPagePicking` | the pick runs (chat relay, page, late decision), D20 for choices, the hint and `next_task` restate an alternative, the completion report shows it |
+| `TestTheUnchosenStayUnseen` | scans every response of a full lifecycle for an option that was not picked. Verified to fail when `Task.brief()` leaks options |
+| `TestStoreRecordsOnlyWhatWasShown` | the store refuses picks that were not on screen; picks count only on a plan / halt approval |
+| `TestDraftAlternatives`, `TestHaltCardChoices` | alternatives kept with the draft, replaced with it, submitted with it; the halt card's choice UI and its fingerprint |
+| `TestSchema`, `TestPageTemplate`, `TestPersistence`, `TestConfig` | advertised fields per profile / mode, the page template, round-trips, env |
 
 ## Smoke tests (real subprocesses, real HTTP)
 

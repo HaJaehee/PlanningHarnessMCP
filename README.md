@@ -1,6 +1,6 @@
 # planning-mcp (PlanningHarnessMCP)
 
-**버전: 1.16.0** · MCP 서버 이름: `planning-mcp` · 버전 단일 출처: `planning/config.py`의 `SERVER_VERSION` (MCP `initialize` 응답의 `serverInfo.version`으로 보고됩니다)
+**버전: 2.0.0** · MCP 서버 이름: `planning-mcp` · 버전 단일 출처: `planning/config.py`의 `SERVER_VERSION` (MCP `initialize` 응답의 `serverInfo.version`으로 보고됩니다)
 
 AnythingLLM Agent Mode용 경량 **계획·작업 관리 MCP 서버입니다**. 폐쇄망 환경에서 성능이 제한적인 사내 LLM이 기억에만 의존하여 즉각 답변하는 대신, `계획 → 사람 승인 → 실행 → 보고`의 생애주기를 준수하도록 하네스(Harness)를 제공합니다.
 
@@ -115,8 +115,8 @@ plan -> user approval -> execution -> user check of the results.
 
 | 도구 | 역할 |
 |---|---|
-| `plan_and_think` | 새 요청의 진입점입니다. 1회 호출당 1단계의 추론을 수행하며, 마지막 호출에서 `task_list`를 제출합니다(`reasoning` 프로필에서는 한 번의 호출로 기록). 특정 작업 수정 요청 시에는 `task_updates`를 전달하고, 사용자가 목표 자체를 수정한 경우에는 `revised_goal`을 사용합니다. 사고 단계에는 상한이 있으며, 상한에 도달하면 서버가 마지막 초안을 사용자에게 제출합니다. 확정된 계획은 사용자의 수정 요청 없이는 다시 열리지 않습니다. |
-| `request_user_approval` | HITL(Human-In-The-Loop) 승인 게이트입니다. `ASK_USER` 요청 후 대기하며, 이후 `APPROVED` / `REJECTED` / `REVISE` 결과를 반영합니다. |
+| `plan_and_think` | 새 요청의 진입점입니다. 1회 호출당 1단계의 추론을 수행하며, 마지막 호출에서 `task_list`를 제출합니다(`reasoning` 프로필에서는 한 번의 호출로 기록). 특정 작업 수정 요청 시에는 `task_updates`를 전달하고, 사용자가 목표 자체를 수정한 경우에는 `revised_goal`을 사용합니다. 사고 단계에는 상한이 있으며, 상한에 도달하면 서버가 마지막 초안을 사용자에게 제출합니다. 확정된 계획은 사용자의 수정 요청 없이는 다시 열리지 않습니다. 사용자의 선호에 따라 방법이 갈리는 태스크는 `alternatives`로 대안을 함께 제시할 수 있으며, `task_list` 쪽이 권장안입니다(2.0.0). |
+| `request_user_approval` | HITL(Human-In-The-Loop) 승인 게이트입니다. `ASK_USER` 요청 후 대기하며, 이후 `APPROVED` / `REJECTED` / `REVISE` 결과를 반영합니다. 대안이 있는 태스크는 사용자가 승인 페이지에서 고른 안이 그대로 태스크가 됩니다(채팅 모드에서는 모델이 `choices`로 전달). |
 | `update_task_progress` | 작업 진행 상태를 갱신합니다. 최초 작업만 `IN_PROGRESS`로 설정하고, 이후 작업은 작업당 `DONE` 또는 `FAILED`를 1회씩 보고합니다 (다음 작업은 서버가 자동으로 시작합니다). 사용자 미승인 상태에서는 호출이 거부됩니다. |
 | `get_current_plan` | 컨텍스트가 단절되었을 때 계획 상태를 복구합니다. 언제든 안전하게 호출할 수 있으며, 현재 세션의 `plan_id`를 전달하면 해당 계획 정보를 안정적으로 조회할 수 있습니다. |
 
@@ -141,6 +141,7 @@ planning/
   protocol.py             경량 MCP / JSON-RPC 2.0 프로토콜 처리
   transport.py            stdio(기본) 및 SSE(선택, 루프백 전용) 전송 계층
   loopguard.py            서킷 브레이커 카운터 (1.16.0)
+  choices.py              태스크별 대안 검증 (2.0.0)
 state/                    런타임 데이터: plan_state.json, audit.jsonl (.gitignore 대상)
 tests/                    단위 테스트 스위트 및 stdio 종단 간 스모크 테스트
 tools/                    패키징·설치 검증 도구, loop_report.py (감사 로그 루프 분석)
@@ -181,6 +182,9 @@ docs/                     Phase 1~4 문서: 스키마, 아키텍처, 에이전�
 | `PLANNING_MCP_BREAKER_ERROR_STREAK` | `4` | 같은 오류 코드(또는 거절된 재계획)가 연속으로 허용되는 횟수입니다. |
 | `PLANNING_MCP_BREAKER_RESPAWN` | `3` | 목표 문장만 바꿔 다시 시작한 계획이 이 개수에 이르면 정지합니다. |
 | `PLANNING_MCP_REPLAN_COOLDOWN` | `600` | 방금 완료된 목표를 이 시간(초) 안에 다시 계획하려 하면, 새 계획을 만들지 않고 완료 결과로 답하도록 안내합니다. `0`이면 끕니다. |
+| `PLANNING_MCP_ALTERNATIVES` | `true` | 2.0.0. 모델이 태스크별 대안(`alternatives`)과 권장 이유(`recommended_reasons`)를 제시하고, 사용자가 승인 페이지에서 고를 수 있게 합니다. `false`(또는 `off`)이면 필드를 광고하지 않고, 보내 와도 무시합니다. |
+| `PLANNING_MCP_MAX_ALTERNATIVES` | `3` | 태스크당 허용되는 대안 수입니다(권장안 포함 선택지 2~4개). |
+| `PLANNING_MCP_MAX_CHOICE_POINTS` | `3` | 계획당 선택지를 둘 수 있는 태스크 수입니다. |
 | `PLANNING_MCP_AUTOAPPROVE` | `false` | **테스트 전용 옵션**입니다. HITL 승인 게이트를 건너뜁니다. 호출 시마다 경고 로그가 기록됩니다. |
 
 CLI 옵션 지원: `--transport stdio|sse`, `--host`, `--port`, `--state-dir`, `--log-level`
@@ -224,7 +228,7 @@ approval_requested → approved → task_started → task_done → task_failed
 | Phase 4 | [테스트 및 트러블슈팅 매트릭스](docs/phase4-testing-matrix.md) |
 | 가이드 | [폐쇄망 반입 및 배포 매뉴얼](docs/deployment-airgap-manual.md) |
 | 가이드 | [CoT(thinking) 모델 + Zed / Goose 운용 가이드](docs/thinking-model-hosts.md) |
-| 계획 | [2.0 계획: 태스크별 대안 선택](docs/plan-2.0-task-alternatives.md) (미구현) |
+| 계획 | [2.0 계획: 태스크별 대안 선택](docs/plan-2.0-task-alternatives.md) (구현 완료) |
 
 ---
 

@@ -9,7 +9,7 @@ it forces a `PLAN → HUMAN APPROVAL → EXECUTE → REPORT` lifecycle and physi
 agent loop until a human approves. **Zero third-party dependencies** — Python 3.9+ standard
 library only, because the deployment target has no package index.
 
-Current version: **1.16.0** · 443 unit tests + 6 end-to-end smoke tests, all passing.
+Current version: **2.0.0** · 519 unit tests + 6 end-to-end smoke tests, all passing.
 
 ---
 
@@ -27,6 +27,7 @@ Current version: **1.16.0** · 443 unit tests + 6 end-to-end smoke tests, all pa
 | How tests are organised and run | [07-testing.md](07-testing.md) |
 | What changed in each version and why | [08-changelog.md](08-changelog.md) + [data/versions.json](data/versions.json) |
 | **Known failure modes and their root causes** | [09-defects-and-lessons.md](09-defects-and-lessons.md) |
+| **Per-task alternatives: the model proposes, the human picks (2.0)** | [03-tool-contract.md](03-tool-contract.md) + [06-human-in-the-loop.md#choosing-between-alternatives-200](06-human-in-the-loop.md#choosing-between-alternatives-200) + [../docs/plan-2.0-task-alternatives.md](../docs/plan-2.0-task-alternatives.md) |
 | **Thinking (CoT) models looping in planning; the circuit breaker** | [04-state-machine.md#loop-convergence-1160](04-state-machine.md#loop-convergence-1160) + [../docs/thinking-model-hosts.md](../docs/thinking-model-hosts.md) |
 | Packaging and air-gapped transfer | [10-deployment.md](10-deployment.md) |
 | **Current status and what to do next** | [11-status-and-next-steps.md](11-status-and-next-steps.md) |
@@ -96,3 +97,5 @@ manual and the original phase design records.
    `instructions`, or the agent prompt. A thinking model treats an unresolved contradiction as a
    task (D25). `agents.md` is the canonical prompt; README and the Phase 3 manual embed it
    verbatim, and `TestPromptHygiene` fails if they drift.
+8. **The model never sees an option the human did not pick** (2.0). Options go to the page
+   (`page_brief`), never into a model-facing response (`brief`).

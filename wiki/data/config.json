@@ -156,6 +156,24 @@
       "env": "PLANNING_MCP_REPLAN_COOLDOWN",
       "default": 600,
       "purpose": "A goal COMPLETED less than this many seconds ago is answered from its results (ANSWER_USER) instead of re-planned. 0 = off."
+    },
+    {
+      "field": "alternatives",
+      "env": "PLANNING_MCP_ALTERNATIVES",
+      "default": true,
+      "purpose": "2.0.0. Per-task alternatives: plan_and_think advertises alternatives / recommended_reasons, the approval page lets the human pick. off = not advertised, ignored with a note if sent."
+    },
+    {
+      "field": "max_alternatives",
+      "env": "PLANNING_MCP_MAX_ALTERNATIVES",
+      "default": 3,
+      "purpose": "Alternatives per task (so 2-4 options with the recommendation). Extra ones are dropped with a note."
+    },
+    {
+      "field": "max_choice_points",
+      "env": "PLANNING_MCP_MAX_CHOICE_POINTS",
+      "default": 3,
+      "purpose": "Tasks per plan that may offer a choice. Too many and the plan becomes a questionnaire; also the last line against a model handing the user facts it could check itself."
     }
   ],
   "cli": {

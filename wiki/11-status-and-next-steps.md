@@ -1,6 +1,17 @@
 # 11 · Status and Next Steps
 
-## Current state (as of version 1.16.0, 2026-10-02)
+## Current state (as of version 2.0.0, 2026-10-02)
+
+- **2.0.0 - per-task alternatives**: the model proposes (`task_list` = recommendation,
+  `alternatives`, `recommended_reasons`), the human picks on the approval page (radios, 권장,
+  기타 → revision), the pick becomes the task, and the model never sees the unchosen options
+  again. Also on the halt card and in the draft; chat-mode relay; off switch and limits.
+  Plan and decisions: [`docs/plan-2.0-task-alternatives.md`](../docs/plan-2.0-task-alternatives.md).
+- **Tests:** 519 unit + 6 smoke, all passing (`tests/test_alternatives.py` is new).
+- **Not packaged or pushed.** `MANIFEST.txt` is still the 1.15.1 one, so `verify_install.py`
+  reports NO-GO on integrity until `make_package.py` is rerun.
+
+### 1.16.0 (previous)
 
 - **1.16.0 - planning loops converge** ([D25](09-defects-and-lessons.md#d25),
   [D26](09-defects-and-lessons.md#d26)): thinking budget + draft submission, a finalized plan is
@@ -11,10 +22,17 @@
   thinking models: `docs/thinking-model-hosts.md`. Committed on `develop` in three commits
   (prompt, code, docs); not packaged or pushed yet - `MANIFEST.txt` is still the 1.15.1 one, so
   `verify_install.py` reports NO-GO on integrity until `make_package.py` is rerun.
-- **Tests:** 443 unit + 6 smoke, all passing (`tests/test_loop_convergence.py` is new).
-- **Next, agreed:** 2.0 - per-task alternatives with a `권장` option, chosen by the human on the
-  approval page. The full plan is in [`docs/plan-2.0-task-alternatives.md`](../docs/plan-2.0-task-alternatives.md);
-  discuss with the user before starting.
+- **Tests (then):** 443 unit + 6 smoke (`tests/test_loop_convergence.py`).
+
+### 2.0.0 follow-up (field)
+
+1. Watch how often models offer choices, and on which tasks: `plan_finalized` audit lines carry
+   `choice_points`, `choices_applied` records what the human picked. If a weak model offers
+   choices for facts it could check, lower `PLANNING_MCP_MAX_CHOICE_POINTS` or set
+   `PLANNING_MCP_ALTERNATIVES=off` for that deployment.
+2. If humans mostly keep the recommendation, the choice UI is costing attention for little; if
+   they often pick 기타, the alternatives are not the right ones - both are visible in
+   `choices_applied` and `revision_requested`.
 
 ### 1.16.0 follow-up (field)
 

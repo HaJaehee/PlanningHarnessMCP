@@ -46,7 +46,8 @@
     <transition from="any, request open on the page" call="plan_and_think / update_task_progress" to="(waits on the human)" note="1.16.0: held like the approval call; returns the decision, or a refusal if undecided; the thought is attached as an agent note"/>
     <transition from="COMPLETED (younger than replan_cooldown)" call="plan_and_think(same goal)" to="(unchanged)" note="1.16.0: ANSWER_USER with the finished results"/>
     <transition from="any non-terminal"  call="(circuit breaker trips)"                  to="(same status)+halt" note="1.16.0: overlay, not a status; every tool refuses with LOOP_HALTED; halt card on the page"/>
-    <transition from="halted"            call="human: APPROVED (approve the draft)"     to="APPROVED" note="the draft becomes the task list"/>
+    <transition from="halted"            call="human: APPROVED (approve the draft)"     to="APPROVED" note="the draft becomes the task list, with the draft's alternatives and the human's picks applied (2.0.0)"/>
+    <transition from="AWAITING_APPROVAL" call="human: APPROVED with choices"            to="APPROVED" note="2.0.0: each task with options gets chosen; the picked option becomes its title; a pick not on screen records nothing"/>
     <transition from="halted"            call="human: REVISE (continue + direction)"    to="(same status)" note="guidance leads every hint until the next milestone; DRAFTING gets a fresh thinking budget"/>
     <transition from="halted"            call="human: REJECTED (cancel)"                to="CANCELLED"/>
     <transition from="any"               call="get_current_plan"                        to="(unchanged)" note="never fails; reports halted / draft_tasks / thinking_steps_left"/>

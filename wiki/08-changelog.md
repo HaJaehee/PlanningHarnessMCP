@@ -318,6 +318,35 @@ route (e.g. a re-plan after finalize is now redirected, so the list it would hav
 survives). 78 new tests in `tests/test_loop_convergence.py`, including scripted "thinking models"
 that must converge in a bounded number of calls.
 
+### 2.0.0 — the model proposes, the human picks
+The approval page used to offer approve / revise / reject for the plan as written. Now a task
+whose right way depends on the user's preference can offer a choice: the model's `task_list` is
+its recommendation, `alternatives` the other ways, `recommended_reasons` why it prefers its
+own; the page shows them as radios with the recommendation pre-selected and marked 권장, and
+whatever the human picks becomes the task. Plan and decisions:
+`docs/plan-2.0-task-alternatives.md`.
+
+- **Also a 1.16 follow-up.** The self-verification loop of D25 is mostly a model oscillating
+  between two ways of doing one task. The reasoning profile is now told: if torn, do not
+  reconsider - put the other way in `alternatives`, the user picks.
+- **Only the human picks while a page is open.** `choices` is advertised only in chat mode;
+  the store refuses an index the request did not show; the model's relay is honoured only with
+  no page.
+- **The unchosen never reach the model again** (D19 before the fact): `Task.brief()` carries the
+  pick (`chosen_by_user`, `choice_reason`) but never the options; only `page_brief()` does.
+- **Nothing changes for a plan without choices** - not its responses, not its fingerprint (so
+  requests on the page survive a rolling upgrade).
+- Kept with the draft and submitted with it (decision §8-3); the halt card offers the choice
+  too, without 기타 (§8-2); a reason for the recommendation (§8-4); both profiles, with
+  `PLANNING_MCP_ALTERNATIVES=off` (§8-1); limits `PLANNING_MCP_MAX_ALTERNATIVES` /
+  `PLANNING_MCP_MAX_CHOICE_POINTS` (3 / 3).
+- The page keeps its drafts and says so when a decision is not recorded (it used to clear
+  them after any POST).
+- Major version: the plan model (`options`, `chosen`, `draft_alternatives`) and the approval
+  protocol (`choices`) changed. State files from 1.16 load unchanged.
+
+76 new tests in `tests/test_alternatives.py`; no existing test changed expectation.
+
 ---
 
 ## Git commit ↔ version map

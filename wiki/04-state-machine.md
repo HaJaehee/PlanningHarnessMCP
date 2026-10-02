@@ -66,9 +66,10 @@ finished work — see below.
 | `COMPLETED` < cooldown | `plan_and_think` with the same goal | *(no change)*, `ANSWER_USER` + results (1.16) | — |
 | any non-terminal | circuit breaker trips | same status + **`halt` overlay** | — |
 | halted | any tool | *(no change)* | `LOOP_HALTED` (or waits, if the halt card is open) |
-| halted | human: 이 초안으로 승인 | `APPROVED` - the draft becomes the task list | — |
+| halted | human: 이 초안으로 승인 | `APPROVED` - the draft becomes the task list, with the draft's choices applied (2.0) | — |
 | halted | human: 계속 진행 (+ direction) | same status, `guidance` set; DRAFTING gets a fresh budget | — |
 | halted | human: 취소 | `CANCELLED` | — |
+| `AWAITING_APPROVAL` | human approves with **choices** (2.0) | `APPROVED`; each task with options gets `chosen`, and the picked option becomes its `title` | a pick not on screen → nothing recorded (page) / recommendation kept (chat) |
 | any | `get_current_plan` | *(no change)* | never fails |
 
 ## Deliberate leniencies (rejecting these would strand a weak model)
@@ -181,6 +182,17 @@ plain `LOOP_HALTED` + `STOP_AND_WAIT_FOR_USER` with a `display_to_user`.
 
 What the breaker does not see: a loop inside one generation. See
 `docs/thinking-model-hosts.md` for the host-side half.
+
+## Choices are decided at approval (2.0.0)
+
+A task's options are part of the plan the human approves. The fingerprint includes them -
+only for tasks that have them, so a plan with no choices keeps exactly its 1.16 fingerprint
+and a request left on the page across a rolling upgrade still matches. Approval applies the
+pick in the same transaction (`_apply_choices`, audit `choices_applied`): every task that
+offered a choice gets a `chosen` (keeping the recommendation is a decision too), and the
+picked option becomes the task. From then on the task is an ordinary task - ordering,
+evidence and rework guards are untouched. A completion report takes no choices; a rework
+redoes the option that was chosen.
 
 ## Two time-based / version-based guards (added after real bugs)
 

@@ -39,6 +39,7 @@ SSE transport.
 | `filelock.py` | OS-level advisory locking (`msvcrt` / `fcntl`), non-blocking with a retry loop. Shared by both stores. |
 | `protocol.py` | Minimal MCP / JSON-RPC 2.0. `initialize`, `tools/list`, `tools/call`, `ping`, batch. |
 | `transport.py` | `serve_stdio` (threaded) and `serve_sse`, plus notifiers for progress heartbeats. |
+| `choices.py` | (2.0.0) Per-task alternatives: validate the model's alternatives against its task list (`build_options`), the page's picks against what it showed (`validate_page_choices`, strict), the model's relayed picks (`validate_model_choices`, lenient). Pure, never raises. |
 | `loopguard.py` | (1.16.0) The circuit breaker's counters: calls since the last milestone, repeated calls, error streaks. In process memory by design - see [04](04-state-machine.md#loop-convergence-1160). |
 | `server.py` (root) | Entry point: arg parsing, config, builds protocol, claims the approval page, serves. |
 
