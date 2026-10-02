@@ -1,9 +1,9 @@
 {
-  "_comment": "Generated from planning/schemas.py. Regenerate; do not hand-edit.",
+  "_comment": "Generated from planning/schemas.py (build_tool_definitions). 'tools' is the default configuration (standard profile, chunked blocking approval, auto_advance). Since 1.16.0 the advertised text varies with the configuration; 'variants' holds the parts that differ.",
   "tools": [
     {
       "name": "plan_and_think",
-      "description": "STEP 1 - MANDATORY FIRST TOOL.\nYou MUST call this tool before answering ANY user request, even simple-looking ones.\nUse it to think one step at a time and to write down the task breakdown.\n\nHOW TO USE:\n- Call it once per thinking step. Start at step_number = 1.\n- Keep calling with need_more_thinking = true until your plan is complete.\n- On your FINAL thinking step, set need_more_thinking = false AND provide task_list.\n- To correct an earlier step, set revises_step to that step number.\n\nIF THE USER COMMENTED ON PARTICULAR TASKS:\nThe server will tell you so and name them. Then send task_updates instead of task_list,\nrewriting ONLY those tasks. Every other task was already accepted - leave it alone.\n\nDO NOT execute anything, DO NOT answer the user while using this tool.",
+      "description": "STEP 1 - PLAN BEFORE YOU ACT.\nCall this first for each NEW user request. When a response says next_action = ANSWER_USER, write the answer instead - that is not a new request.\n\nHOW TO USE:\n- One call per thinking step, starting at step_number = 1. Send the same goal each time.\n- When your task breakdown is ready, send need_more_thinking = false with task_list.\n  It does not need to be perfect: the user reviews it before anything runs.\n- Each response says how many thinking steps are left. When none are left, the server\n  sends your latest task_list to the user as it stands.\n\nIF THE USER COMMENTED ON PARTICULAR TASKS:\nThe server names them. Send task_updates instead of task_list, rewriting only those\ntasks. Every other task was already accepted - leave it alone.\n\nDo not execute anything or answer the user while planning.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -17,7 +17,7 @@
           },
           "thought": {
             "type": "string",
-            "description": "Your reasoning for THIS step only. One idea per call. Example: 'Step 2: I must first locate the Q3 report file before I can summarize it.'"
+            "description": "Your reasoning for this step, in one or two sentences. Example: 'I must first locate the Q3 report file before I can summarize it.'"
           },
           "step_number": {
             "type": "integer",
@@ -27,11 +27,11 @@
           "total_steps": {
             "type": "integer",
             "minimum": 1,
-            "description": "Your current estimate of how many thinking steps are needed. You may raise this number later. Example: 4"
+            "description": "How many thinking steps you expect to need in total. Example: 3"
           },
           "need_more_thinking": {
             "type": "boolean",
-            "description": "true = you will call plan_and_think again. false = this is your LAST thinking step and task_list is now final. Example: true"
+            "description": "false = task_list is ready (it does not need to be perfect - the user reviews it). true = you need another thinking step. Example: false"
           },
           "task_list": {
             "type": "array",
@@ -65,7 +65,7 @@
           "revises_step": {
             "type": "integer",
             "minimum": 1,
-            "description": "OPTIONAL. Only set this when you are CORRECTING an earlier thinking step. Set it to the step_number you are replacing. Example: 2"
+            "description": "OPTIONAL - normally left out. The step_number of an earlier step that this step replaces. Example: 2"
           },
           "plan_id": {
             "type": "string",
@@ -83,7 +83,7 @@
     },
     {
       "name": "request_user_approval",
-      "description": "STEP 2 - MANDATORY HUMAN APPROVAL GATE.\nThe plan is LOCKED until the user approves it. You cannot skip this tool.\n\nUSE IN TWO PHASES:\nPhase A - ASK: call with decision = \"ASK_USER\" and a plan_summary.\n          Then STOP. Print the plan to the user and wait. Say nothing else.\nPhase B - REPORT: after the user replies in chat, call this tool AGAIN with\n          decision = \"APPROVED\"  (user said yes / ok / proceed / 승인)\n          decision = \"REJECTED\"  (user said no / cancel / stop / 취소)\n          decision = \"REVISE\"    (user asked for changes) + put the requested\n                                 change into user_comment.\n\nNEVER guess the user's answer. NEVER call APPROVED unless the user actually said so.",
+      "description": "STEP 2 - USER APPROVAL.\nCall with decision = \"ASK_USER\" and a short plan_summary. The plan appears on the\nuser's approval page and this call waits while they decide.\n- error_code APPROVAL_PENDING means the user is still deciding: call again at once,\n  the same way, and write nothing in between.\n- When the user decides, plan_status and next_action in the response tell you the\n  result. Follow them.\n- If the response contains display_to_user, show it to the user and end your turn.\nUse the same call after the last task is DONE, so the user can check the results.\nOnly the user decides. Never send APPROVED, REJECTED or REVISE yourself.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -95,7 +95,7 @@
               "REJECTED",
               "REVISE"
             ],
-            "description": "ASK_USER = ask the human, and the ONLY value you may choose yourself. APPROVED / REJECTED / REVISE report what the human ACTUALLY replied - never what you expect or would prefer; the server refuses them while their question is still open. If a call comes back with error_code APPROVAL_PENDING the human has not answered yet: call again immediately with ASK_USER and the same plan_summary, and write nothing in between. Example: \"ASK_USER\""
+            "description": "Send ASK_USER. The user answers on the approval page, and the server refuses APPROVED / REJECTED / REVISE from you while their question is open. Example: \"ASK_USER\""
           },
           "plan_summary": {
             "type": "string",
@@ -168,5 +168,143 @@
         ]
       }
     }
-  ]
+  ],
+  "variants": {
+    "model_profile=reasoning": {
+      "plan_and_think": {
+        "name": "plan_and_think",
+        "description": "STEP 1 - RECORD YOUR PLAN.\nCall this first for each NEW user request. When a response says next_action = ANSWER_USER, write the answer instead - that is not a new request.\n\nYou have already reasoned about the request. Record the result in ONE call:\ngoal + task_list, with need_more_thinking = false.\n\nDo not re-check the plan here. The user reviews it on the approval page before\nanything runs - that review is the verification step.\n\nIf the user commented on particular tasks, the server names them: send task_updates\ninstead of task_list, rewriting only those tasks.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "string",
+              "description": "One sentence restating what the user ultimately wants. Repeat the SAME goal text on every step. Example: 'Summarize the Q3 sales report and email it to the team lead.' If the user CORRECTS the goal, keep sending the old text here and put the corrected one in revised_goal."
+            },
+            "revised_goal": {
+              "type": "string",
+              "description": "OPTIONAL. Use ONLY when the user says the goal itself was wrong or has changed - for example 'no, I meant the Q4 report, not Q3'. Put the corrected goal here and leave 'goal' as the text you have been sending, so the server can find the plan and record the change. Do NOT use it to reword or paraphrase the same goal. Example: 'Summarize the Q4 sales report and email it to the team lead.'"
+            },
+            "task_list": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "REQUIRED when need_more_thinking is false. A flat list of plain-text action items, in execution order. Plain strings only - do NOT send objects, do NOT add numbering, do NOT add status. The server assigns task_id automatically. Example: [\"Locate the Q3 sales report file\", \"Extract the revenue table\", \"Write a 5-line summary\", \"Send the summary by email\"]"
+            },
+            "need_more_thinking": {
+              "type": "boolean",
+              "description": "Send false. Use true only if you genuinely cannot list the tasks yet: you get one more call, and after it your latest task_list goes to the user as it stands. Example: false"
+            },
+            "thought": {
+              "type": "string",
+              "description": "OPTIONAL. One sentence on why this plan. Example: 'The report has to be found before it can be summarized.'"
+            },
+            "task_updates": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The task the user commented on. Example: 3"
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "The rewritten task, answering the user's comment. Example: 'Copy the revenue table into the summary unchanged'"
+                  }
+                },
+                "required": [
+                  "task_id",
+                  "title"
+                ]
+              },
+              "description": "ONLY use this when the server told you the user commented on specific tasks. Rewrite JUST those tasks; every task you do not list stays exactly as it is. Do NOT send task_list at the same time, and do NOT use this to add, delete or reorder tasks - that requires a full task_list. Example: [{\"task_id\": 3, \"title\": \"Copy the revenue table in unchanged\"}]"
+            },
+            "plan_id": {
+              "type": "string",
+              "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+            }
+          },
+          "required": [
+            "goal",
+            "need_more_thinking"
+          ]
+        }
+      }
+    },
+    "approval_mode=return": {
+      "request_user_approval": {
+        "name": "request_user_approval",
+        "description": "STEP 2 - USER APPROVAL.\nCall with decision = \"ASK_USER\" and a short plan_summary. The plan appears on the\nuser's approval page. Show display_to_user to the user and end your turn.\nWhen the user writes to you again, call this tool again with decision = \"ASK_USER\":\nthat collects their decision. Then follow next_action.\nUse the same call after the last task is DONE, so the user can check the results.\nOnly the user decides. Never send APPROVED, REJECTED or REVISE yourself.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "enum": [
+                "ASK_USER",
+                "APPROVED",
+                "REJECTED",
+                "REVISE"
+              ],
+              "description": "Send ASK_USER. The user answers on the approval page, and the server refuses APPROVED / REJECTED / REVISE from you while their question is open. Example: \"ASK_USER\""
+            },
+            "plan_summary": {
+              "type": "string",
+              "description": "REQUIRED when decision is ASK_USER. A short human-readable summary of the plan you want approval for, written for a non-technical reader. Example: 'I will (1) find the Q3 report, (2) extract the revenue table, (3) write a 5-line summary, (4) email it to the team lead.'"
+            },
+            "user_comment": {
+              "type": "string",
+              "description": "OPTIONAL. Copy the user's exact words here when decision is REVISE or REJECTED. Example: 'Do not send the email, just show me the summary.'"
+            },
+            "plan_id": {
+              "type": "string",
+              "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        }
+      }
+    },
+    "blocking=false (chat)": {
+      "request_user_approval": {
+        "name": "request_user_approval",
+        "description": "STEP 2 - USER APPROVAL.\nAsk: call with decision = \"ASK_USER\" and a short plan_summary. Show display_to_user to\nthe user and end your turn.\nReport: when the user replies, call this tool again with\n  decision = \"APPROVED\" (they said yes / 승인),\n  decision = \"REJECTED\" (they said no / 취소), or\n  decision = \"REVISE\"   (they asked for changes - put their words in user_comment).\nUse the same call after the last task is DONE, so the user can check the results.\nReport only what the user actually said.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "enum": [
+                "ASK_USER",
+                "APPROVED",
+                "REJECTED",
+                "REVISE"
+              ],
+              "description": "ASK_USER = ask the user. APPROVED / REJECTED / REVISE = report what the user replied in chat - never what you expect. Example: \"ASK_USER\""
+            },
+            "plan_summary": {
+              "type": "string",
+              "description": "REQUIRED when decision is ASK_USER. A short human-readable summary of the plan you want approval for, written for a non-technical reader. Example: 'I will (1) find the Q3 report, (2) extract the revenue table, (3) write a 5-line summary, (4) email it to the team lead.'"
+            },
+            "user_comment": {
+              "type": "string",
+              "description": "OPTIONAL. Copy the user's exact words here when decision is REVISE or REJECTED. Example: 'Do not send the email, just show me the summary.'"
+            },
+            "plan_id": {
+              "type": "string",
+              "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        }
+      }
+    }
+  }
 }

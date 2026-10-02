@@ -1,6 +1,6 @@
 # planning-mcp (PlanningHarnessMCP)
 
-**버전: 1.15.1** · MCP 서버 이름: `planning-mcp` · 버전 단일 출처: `planning/config.py`의 `SERVER_VERSION` (MCP `initialize` 응답의 `serverInfo.version`으로 보고됩니다)
+**버전: 1.16.0** · MCP 서버 이름: `planning-mcp` · 버전 단일 출처: `planning/config.py`의 `SERVER_VERSION` (MCP `initialize` 응답의 `serverInfo.version`으로 보고됩니다)
 
 AnythingLLM Agent Mode용 경량 **계획·작업 관리 MCP 서버입니다**. 폐쇄망 환경에서 성능이 제한적인 사내 LLM이 기억에만 의존하여 즉각 답변하는 대신, `계획 → 사람 승인 → 실행 → 보고`의 생애주기를 준수하도록 하네스(Harness)를 제공합니다.
 
@@ -114,7 +114,7 @@ plan -> user approval -> execution -> user check of the results.
 
 | 도구 | 역할 |
 |---|---|
-| `plan_and_think` | 필수 진입점입니다. 1회 호출당 1단계의 추론을 수행하며, 마지막 호출에서 `task_list`를 제출합니다. 특정 작업 수정 요청 시에는 `task_updates`를 전달하고, 사용자가 목표 자체를 수정한 경우에는 `revised_goal`을 사용합니다. |
+| `plan_and_think` | 새 요청의 진입점입니다. 1회 호출당 1단계의 추론을 수행하며, 마지막 호출에서 `task_list`를 제출합니다(`reasoning` 프로필에서는 한 번의 호출로 기록). 특정 작업 수정 요청 시에는 `task_updates`를 전달하고, 사용자가 목표 자체를 수정한 경우에는 `revised_goal`을 사용합니다. 사고 단계에는 상한이 있으며, 상한에 도달하면 서버가 마지막 초안을 사용자에게 제출합니다. 확정된 계획은 사용자의 수정 요청 없이는 다시 열리지 않습니다. |
 | `request_user_approval` | HITL(Human-In-The-Loop) 승인 게이트입니다. `ASK_USER` 요청 후 대기하며, 이후 `APPROVED` / `REJECTED` / `REVISE` 결과를 반영합니다. |
 | `update_task_progress` | 작업 진행 상태를 갱신합니다. 최초 작업만 `IN_PROGRESS`로 설정하고, 이후 작업은 작업당 `DONE` 또는 `FAILED`를 1회씩 보고합니다 (다음 작업은 서버가 자동으로 시작합니다). 사용자 미승인 상태에서는 호출이 거부됩니다. |
 | `get_current_plan` | 컨텍스트가 단절되었을 때 계획 상태를 복구합니다. 언제든 안전하게 호출할 수 있으며, 현재 세션의 `plan_id`를 전달하면 해당 계획 정보를 안정적으로 조회할 수 있습니다. |
@@ -139,8 +139,11 @@ planning/
   responses.py            표준 응답 생성 빌더
   protocol.py             경량 MCP / JSON-RPC 2.0 프로토콜 처리
   transport.py            stdio(기본) 및 SSE(선택, 루프백 전용) 전송 계층
+  loopguard.py            서킷 브레이커 카운터 (1.16.0)
 state/                    런타임 데이터: plan_state.json, audit.jsonl (.gitignore 대상)
 tests/                    단위 테스트 스위트 및 stdio 종단 간 스모크 테스트
+tools/                    패키징·설치 검증 도구, loop_report.py (감사 로그 루프 분석)
+agents.md                 에이전트 시스템 프롬프트 원본 (README·Phase 3 문서와 동일)
 docs/                     Phase 1~4 문서: 스키마, 아키텍처, 에이전트 프롬프트, 테스트 매트릭스
 ```
 
@@ -165,10 +168,18 @@ docs/                     Phase 1~4 문서: 스키마, 아키텍처, 에이전�
 | `PLANNING_MCP_APPROVAL_MODE` | `chunked` | `chunked`: 45초 단위로 나누어 대기하며 모델에게 즉각 재호출을 지시합니다 (사용자 추가 채팅 입력 없이 대화가 매끄럽게 이어집니다).<br>`return`: 승인 요청만 등록하고 즉시 반환합니다 (승인 후 사용자가 채팅창에 메시지를 입력해야 후속 작업이 진행됩니다).<br>`trust_heartbeat`: v1.13 이전 방식으로 한 번에 길게 대기합니다 (progress 알림을 수신하여 클라이언트 타이머가 리셋되는 것이 입증된 환경에서만 권장합니다). |
 | `PLANNING_MCP_APPROVAL_OPEN_BROWSER` | `true` | 승인 요청 발생 시 승인 페이지 브라우저 탭을 자동으로 엽니다. |
 | `PLANNING_MCP_APPROVAL_TTL` | `1800` | 승인의 유효 유지 시간(초)입니다. 해당 시간 동안 방치된 계획은 승인이 만료되어 재승인 절차를 거쳐야 합니다. |
-| `PLANNING_MCP_MAX_ACTIVE_PLANS` | `5` | 동시에 활성화(진행)할 수 있는 계획의 최대 허용 수입니다. |
+| `PLANNING_MCP_MAX_ACTIVE_PLANS` | `20` | 동시에 활성화(진행)할 수 있는 계획의 최대 허용 수입니다 (1.16.0부터 20, 이전 5). |
 | `PLANNING_MCP_COMPLETION_APPROVAL` | `true` | 마지막 작업이 완료(DONE)되어도 즉시 종료되지 않고, 사용자가 각 작업별 수행 결과를 최종 확인해야 전체 계획을 완료(COMPLETED) 처리합니다. |
 | `PLANNING_MCP_MIN_RESULT_LOG` | `8` | 작업 완료(DONE) 보고 시 요구되는 최소 증빙 내용의 길이(공백 및 문장부호 제외)입니다. "완료", "done" 등 단순 상투어구는 길이와 관계없이 반려됩니다. |
 | `PLANNING_MCP_AUTO_ADVANCE` | `true` | 작업 완료(DONE) 보고 시 서버가 다음 작업을 `IN_PROGRESS` 상태로 자동 시작합니다. 이를 통해 5개 작업 기준 실행 단계의 호출 횟수를 10회에서 6회로 단축합니다. `false`로 설정하면 매 작업마다 모델이 `IN_PROGRESS`를 직접 호출해야 합니다. |
+| `PLANNING_MCP_MODEL_PROFILE` | `standard` | `reasoning`으로 설정하면 CoT(thinking) 모델용 도구 설명을 사용합니다. `plan_and_think`를 한 번의 호출로 계획을 기록하는 도구로 안내하고, 단계 번호 관련 필드를 노출하지 않습니다. [docs/thinking-model-hosts.md](docs/thinking-model-hosts.md) 참조. |
+| `PLANNING_MCP_MAX_THINKING_STEPS` | `0` | 한 계획 라운드의 사고 단계 상한입니다. `0`이면 프로필 기본값(standard 8, reasoning 2), 음수면 무제한입니다. 상한에 도달하면 서버가 마지막 초안을 사용자에게 제출합니다. |
+| `PLANNING_MCP_LOOP_BREAKER` | `true` | 서킷 브레이커입니다. 같은 단계가 반복되면 계획을 일시 정지하고 승인 페이지에 반복 감지 카드를 띄웁니다. |
+| `PLANNING_MCP_BREAKER_CALLS` | `12` | 진척(확정, 사람의 결정, 태스크 DONE/FAILED) 없이 허용되는 호출 수입니다. |
+| `PLANNING_MCP_BREAKER_REPEAT` | `3` | 같은 인자의 같은 호출이 연속으로 허용되는 횟수입니다. |
+| `PLANNING_MCP_BREAKER_ERROR_STREAK` | `4` | 같은 오류 코드(또는 거절된 재계획)가 연속으로 허용되는 횟수입니다. |
+| `PLANNING_MCP_BREAKER_RESPAWN` | `3` | 목표 문장만 바꿔 다시 시작한 계획이 이 개수에 이르면 정지합니다. |
+| `PLANNING_MCP_REPLAN_COOLDOWN` | `600` | 방금 완료된 목표를 이 시간(초) 안에 다시 계획하려 하면, 새 계획을 만들지 않고 완료 결과로 답하도록 안내합니다. `0`이면 끕니다. |
 | `PLANNING_MCP_AUTOAPPROVE` | `false` | **테스트 전용 옵션**입니다. HITL 승인 게이트를 건너뜁니다. 호출 시마다 경고 로그가 기록됩니다. |
 
 CLI 옵션 지원: `--transport stdio|sse`, `--host`, `--port`, `--state-dir`, `--log-level`
@@ -183,6 +194,8 @@ CLI 옵션 지원: `--transport stdio|sse`, `--host`, `--port`, `--state-dir`, `
 plan_created → thinking_step → execution_blocked → plan_finalized →
 approval_requested → approved → task_started → task_done → task_failed
 ```
+
+1.16.0부터는 `client_connected`(접속한 호스트), `thinking_step`의 `gap_sec`·`reconsider`, `loop_halted`·`halt_resolved`, `auto_finalized`, `replan_redirected` 이벤트도 기록됩니다. `python tools/loop_report.py`를 실행하면 계획별로 반복 징후를 요약해 줍니다.
 
 감사 로그의 `execution_blocked` 이벤트는 강제 게이트가 모델의 사전 무단 실행 시도를 차단했음을 의미합니다. 모델이 사용자 승인 없이 실행을 강행하려고 시도했는지 여부를 파악할 때 가장 먼저 확인해야 하는 항목입니다.
 
@@ -209,6 +222,8 @@ approval_requested → approved → task_started → task_done → task_failed
 | Phase 3 | [AnythingLLM 에이전트 시스템 프롬프트](docs/phase3-anythingllm-agent-prompt.md) |
 | Phase 4 | [테스트 및 트러블슈팅 매트릭스](docs/phase4-testing-matrix.md) |
 | 가이드 | [폐쇄망 반입 및 배포 매뉴얼](docs/deployment-airgap-manual.md) |
+| 가이드 | [CoT(thinking) 모델 + Zed / Goose 운용 가이드](docs/thinking-model-hosts.md) |
+| 계획 | [2.0 계획: 태스크별 대안 선택](docs/plan-2.0-task-alternatives.md) (미구현) |
 
 ---
 

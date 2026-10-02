@@ -1,6 +1,6 @@
 # 09 · Defects and Lessons
 
-The 24 real defects found while hardening the server, each with root cause, symptom, and fix.
+The 26 real defects found while hardening the server, each with root cause, symptom, and fix.
 **This is the highest-value page for predicting where the next bug is.** Every one lived in a
 place that had no test, and several were *silent* — the server reported success while losing
 data or disarming the safety gate. D16 and D17 were found in *use* rather than by testing, and
@@ -8,7 +8,10 @@ both were the same shape: a state the protocol could reach but had no instructio
 D19 came from *looking at the running system* — one by reading the page a human decides on,
 one by scripting a model that ignores every hint. D20–D22 came from *reading the other side's
 source and issue tracker*: an SDK default this code had documented backwards, and two guards
-whose names asserted an invariant the code never checked.
+whose names asserted an invariant the code never checked. D25 was a field report that could
+not be reproduced here at all (a corporate model, behind an air gap): it was located by scripting
+the calls a looping model makes and watching which of them the server simply accepted, and D26
+fell out of the same script.
 
 The meta-lesson, stated once: **a green test suite over untested seams means nothing.** The way
 these were found was to write a test asserting a *guarantee* (not the current output) for each
@@ -448,6 +451,84 @@ explaining why a known-wrong value is tolerable is a load-bearing assumption; wh
 was written against changes, that comment is where the next bug is. Tests would not have caught
 this either: every browser test used a single `ApprovalServer`, so the peer — the whole
 deployment topology — was never in the picture.
+
+<a id="d25"></a>
+## D25 — a thinking model could plan forever (1.16.0)
+
+**Symptom (field):** Zed and Goose driving a mid-sized CoT ("thinking") model. The model fell into
+its own self-verification - "wait, let me reconsider" - and never got out of planning. Observed in
+both places it can happen: inside a single thinking block (no tool call ever emitted) and as an
+endless run of `plan_and_think` calls. Not reproducible from the development machine.
+**Root cause - not one bug, five doors, each individually defensible:**
+1. **No exit was ever named.** Thinking steps were unbounded, and every step was answered with one
+   instruction: "call plan_and_think again with step_number=N+1". Forty `need_more_thinking=true`
+   calls were all accepted. For a model whose habit is one more check, one more step was always
+   the cheapest continuation - the D16 lesson (silence is read as content) in a new place.
+2. **Re-thinking pulled the plan out from under the human.** `plan_and_think` on a plan
+   `AWAITING_APPROVAL` - request open on the page - put it back to `DRAFTING` and withdrew the
+   request. A model reconsidering mid-approval ran finalize -> reconsider -> finalize laps.
+3. **Re-thinking after the last task deleted the evidence** - D26 below.
+4. **"Plan before answering ANY request" vs `ANSWER_USER`.** After the completion report the server
+   says "write the answer"; the tool description, the MCP `instructions`, and the deployed prompt
+   (Variant A: "No exceptions ... if you are about to type an answer, STOP and call
+   plan_and_think") said plan first. A weak model shrugs; a reasoning model resolves the conflict
+   in favour of the stricter rule and plans the same goal again - a new plan, a new approval, the
+   same place, forever.
+5. **Contradictions everywhere else.** One `request_user_approval` description for every mode:
+   "ASK_USER, then STOP" and "after the user replies in chat, report APPROVED", while the default
+   chunked mode's responses said "call again at once, write nothing" and refused any APPROVED the
+   model sent. Plus "think step-by-step", "one idea per call", "you may raise this number later",
+   `revises_step`, and about fifty MUST/NEVER/STOP directives - each a constraint to re-verify
+   compliance against on every decision.
+**Fix (1.16.0):** thinking budget per drafting round (standard 8, reasoning 2) with the exit named
+first in every hint; the model's latest `task_list` kept as a draft, and when the budget runs out
+the server **submits the draft to the human instead of refusing**; a finalized plan is not
+reopened by `plan_and_think` (redirected), and any call on a plan whose request is open **waits on
+the human** like the approval call does, with the model's thought shown on the card as an agent
+note; a goal completed in the last 10 minutes is answered from its results, not re-planned; a
+**circuit breaker** (no progress for 12 calls, the same call 3 times, the same error or a turned-away
+re-plan 4 times, a goal reworded and restarted 3 times, a budget spent with no draft) pauses the
+plan and puts a halt card on the approval page - approve the draft / continue with a direction /
+cancel; a `reasoning` profile whose `plan_and_think` records the plan in one call; descriptions
+generated per approval mode; the prompt cut to ~50 lines with every contradiction removed and the
+three copies (agents.md, README, Phase 3) pinned equal by a test; `clientInfo`, `gap_sec` and
+reconsider-word counts in the audit log, read by `tools/loop_report.py`.
+**What the server still cannot do:** stop a loop inside one generation. It removes the
+instructions that fed it and makes sure a cut-off generation resumes from a saved draft; bounding
+the generation itself is host configuration (sampling, max tokens) - see
+`docs/thinking-model-hosts.md`. Whether that is enough is a field question, and the audit log now
+records what is needed to answer it.
+**Lessons:**
+- **A reasoning model treats an unresolved contradiction as a task.** Every pair of instructions
+  that disagree - in the prompt, the tool description, the response - is a loop waiting for a
+  model diligent enough to try to satisfy both. Weak models were never diligent enough to expose
+  them.
+- **Verification already had an owner: the human.** Asking the model to verify as well gave it a
+  job with no definition of done. "It does not need to be perfect - the user reviews it" is not
+  politeness; it is the stopping rule.
+- **For a model that reconsiders, a refusal is not a stop** - it is one more thing to reconsider.
+  Where the server can, it hands over a fait accompli (the draft is submitted, the call waits on
+  the human) rather than an error to reason about.
+
+<a id="d26"></a>
+## D26 — re-thinking after the last task deleted every result_log (1.16.0)
+
+**Symptom:** none in the field; found while planning D25, by scripting what a looping model would
+send after its last DONE: `plan_and_think`, then a final `task_list` (planning "the final
+answer").
+**Root cause:** `plan_and_think` redirected only `APPROVED`/`IN_EXECUTION` plans. An
+`AWAITING_COMPLETION` plan fell through to the generic branch, which set `DRAFTING` - the state
+D17 called a sentence the protocol has no grammar for: drafting, with every task DONE. Finalizing
+then replaced `plan.tasks` with the new list, and since `rework_from_completion` is only set by a
+*human's* revision, `_carry_evidence` never ran: every `result_log` vanished into
+`superseded_tasks`, which no response carries. The plan went back to `AWAITING_APPROVAL` for a
+one-task list ("Write the final answer"), and the completion report the human should have seen
+never existed.
+**Fix:** `plan_and_think` on `AWAITING_COMPLETION` is redirected to the completion report and
+changes nothing (or, with the report open on the page, waits on the human).
+**Lesson:** D17 closed the *human's* door into "DRAFTING with every task DONE". The model's door
+was still open, one branch away. When you close a path into a bad state, enumerate every
+transition into that state - not only the one that was reported.
 
 [typescript-sdk#849]: https://github.com/modelcontextprotocol/typescript-sdk/pull/849
 

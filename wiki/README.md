@@ -9,7 +9,7 @@ it forces a `PLAN → HUMAN APPROVAL → EXECUTE → REPORT` lifecycle and physi
 agent loop until a human approves. **Zero third-party dependencies** — Python 3.9+ standard
 library only, because the deployment target has no package index.
 
-Current version: **1.15.1** · 363 unit tests + 6 end-to-end smoke tests, all passing.
+Current version: **1.16.0** · 443 unit tests + 6 end-to-end smoke tests, all passing.
 
 ---
 
@@ -27,6 +27,7 @@ Current version: **1.15.1** · 363 unit tests + 6 end-to-end smoke tests, all pa
 | How tests are organised and run | [07-testing.md](07-testing.md) |
 | What changed in each version and why | [08-changelog.md](08-changelog.md) + [data/versions.json](data/versions.json) |
 | **Known failure modes and their root causes** | [09-defects-and-lessons.md](09-defects-and-lessons.md) |
+| **Thinking (CoT) models looping in planning; the circuit breaker** | [04-state-machine.md#loop-convergence-1160](04-state-machine.md#loop-convergence-1160) + [../docs/thinking-model-hosts.md](../docs/thinking-model-hosts.md) |
 | Packaging and air-gapped transfer | [10-deployment.md](10-deployment.md) |
 | **Current status and what to do next** | [11-status-and-next-steps.md](11-status-and-next-steps.md) |
 
@@ -37,14 +38,16 @@ config, and version history as JSON/XML.
 
 ## The single most important thing to internalise
 
-**Every hard problem in this project came from a place nobody was looking at.** Twenty-four
+**Every hard problem in this project came from a place nobody was looking at.** Twenty-six
 defects are catalogued so far. Through 1.8.1, thirteen of them surfaced the moment a test was
 written for a previously-untested seam — threaded transport, SSE, file locking, store failure
 paths, leniency edge cases, concurrent sessions — and several were "silent": the server reported
 success while losing data or disarming the safety gate. The later ones needed the other three
 lenses: D16 and D17 were found *in use*, D18 and D19 by **looking at the running system**,
 D20–D22 by reading the other side's source and issue tracker, and D23–D24 in **live testing**,
-against a green suite that asserted only half of each guarantee.
+against a green suite that asserted only half of each guarantee. D25 came from the field and
+could not be reproduced at all; it was found by scripting the calls a looping model makes and
+asking which ones the server simply accepted.
 
 So the working rule for continuing this project is: **before changing behaviour, write the
 test that pins the current behaviour; before trusting a path, write the test that fuzzes it.**
@@ -89,3 +92,7 @@ manual and the original phase design records.
 5. **Approval binds to the exact plan version the human saw** (goal + task-title fingerprint).
 6. Keep the four advertised tool schemas generated from the enums in `planning/models.py`, so
    the schema and the runtime validator cannot drift.
+7. **No instruction may contradict another** - in a tool description, a hint, the MCP
+   `instructions`, or the agent prompt. A thinking model treats an unresolved contradiction as a
+   task (D25). `agents.md` is the canonical prompt; README and the Phase 3 manual embed it
+   verbatim, and `TestPromptHygiene` fails if they drift.

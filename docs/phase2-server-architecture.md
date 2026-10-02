@@ -341,7 +341,7 @@ that recoverable for a weak model: it only ever saw *its own* plan_id in previou
 responses, and while multiple plans are live every `next_action_hint` spells out the
 plan_id to include (`qualify=True`), so copying the hint is enough.
 
-`PLANNING_MCP_MAX_ACTIVE_PLANS` (default 5) caps how many can be in flight; beyond that
+`PLANNING_MCP_MAX_ACTIVE_PLANS` (default 5 in this design; 20 since 1.16.0) caps how many can be in flight; beyond that
 new plans are refused rather than silently piling up.
 
 Approval is a **queue**, not a slot: two sessions waiting at once both appear on the page,

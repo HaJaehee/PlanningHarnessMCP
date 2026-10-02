@@ -57,6 +57,14 @@ no fixed anchor, the drift is not even observable.
 `request_user_approval(decision='APPROVED')` and unlock execution with nobody having clicked
 anything. "Ask before you act" is not a rule while the model decides whether to ask.
 
+[D25](09-defects-and-lessons.md#d25) (1.16.0) is the same failure seen from the other side: not
+too little deliberation but too much. A thinking model told both "plan before answering anything"
+and "now write the answer" - and asked to verify a plan a human was about to verify anyway -
+reconsidered forever, inside its thinking block and across calls. A better reasoner made it
+worse, because the harness's own contradictions were the loop. The fix stayed in the same
+category: enforcement (a thinking budget, a circuit breaker, a human breakpoint), plus one rule
+for the words - no two instructions may disagree.
+
 ## Category, not degree
 
 | | what it improves | what it cannot do |

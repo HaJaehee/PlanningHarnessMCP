@@ -9,6 +9,22 @@ Design rules behind the schemas (all because the model is weak):
 server assigns ids); UPPERCASE enums; every tool has ≥1 required param; every response carries
 `next_action` + `next_action_hint`.
 
+**The advertised text depends on the running configuration (1.16.0).** `build_tool_definitions`
+takes `auto_advance`, `model_profile`, `approval_mode` and `blocking`, and every description says
+only what is true of the server that is running. One text for all modes was a contradiction a
+thinking model reasoned about on every call ([D25](09-defects-and-lessons.md#d25)):
+
+| varies with | tool | what changes |
+|---|---|---|
+| `model_profile` | `plan_and_think` | `standard`: one thinking step per call. `reasoning`: record the plan in **one** call; `step_number`, `total_steps`, `revises_step` are not advertised (still accepted), `thought` is optional, a `task_list` with no `need_more_thinking` means final. |
+| `approval_mode` / `blocking` | `request_user_approval` | chunked / heartbeat: "this call waits; APPROVAL_PENDING = call again". `return`: "show display_to_user, end your turn, call ASK_USER again when the user writes". No page: the two-phase ask / report text - the only mode that tells the model to send APPROVED. |
+| `auto_advance` | `update_task_progress` | as since 1.11.0 |
+
+None of them says "before answering ANY request" any more: that rule, against `ANSWER_USER`, is
+what sent a thinking model back into planning after the last task. They say "for each NEW
+request; ANSWER_USER means write the answer". `TestPromptHygiene` checks every combination for
+the removed phrases.
+
 ---
 
 ## 1. `plan_and_think` — the mandatory entry point
@@ -45,6 +61,26 @@ Optional: `task_list` (required when finalizing), `task_updates`, `revised_goal`
   silently widen the approval: the response says the human approved the *previous* goal and
   tells the model to re-plan and re-approve if the tasks no longer serve the corrected one.
 - On finalize → `plan_status: AWAITING_APPROVAL`, `next_action: CALL_REQUEST_USER_APPROVAL`.
+- **Convergence (1.16.0, [D25](09-defects-and-lessons.md#d25)).**
+  - *Thinking budget.* A drafting round may take `PLANNING_MCP_MAX_THINKING_STEPS` steps (0 =
+    profile default: standard 8, reasoning 2; negative = unlimited). It starts on the round's first
+    step and restarts whenever the plan re-enters DRAFTING (a human's 수정 요청, a failure, a lifted
+    halt). Responses carry `thinking_steps_left`; the hint names the exit first.
+  - *Draft.* A `task_list` sent with `need_more_thinking=true` is kept as `draft_tasks`
+    (`draft_saved` in the response). A final call with no list uses it. When the budget runs out
+    with a draft, the call is treated as final (`auto_finalized` audit) and - with a page - goes
+    straight to the human; with no draft, the circuit breaker halts the plan.
+  - *A finalized plan is not reopened by the model.* On `AWAITING_APPROVAL` (without
+    `revised_goal`) or `AWAITING_COMPLETION` the call changes nothing and says so
+    (`replan_redirected`). Before 1.16 it reset the plan to DRAFTING - after the last task that
+    deleted every `result_log` ([D26](09-defects-and-lessons.md#d26)).
+  - *An open request makes the call wait.* While a human has a request open for the plan, the
+    call waits on them like the approval call does and returns their decision; the `thought` is
+    attached to the card as an agent note. Undecided, it returns `APPROVAL_PENDING` /
+    `PLAN_NOT_APPROVED` / `COMPLETION_PENDING`, never `ok:true`.
+  - *No second lap.* A goal completed less than `PLANNING_MCP_REPLAN_COOLDOWN` (600 s) ago is
+    answered from its results (`ANSWER_USER` + tasks with evidence), not re-planned. Reword the goal
+    ("Redo: ...") to genuinely run it again.
 - **Targeted revision (1.9.x).** When the human commented on individual tasks on the approval
   page, the plan carries `pending_revision` and the model finalizes with `task_updates`
   (`[{"task_id": 3, "title": "..."}]`) instead of `task_list`. Only the flagged tasks are
@@ -65,6 +101,11 @@ Optional: `plan_summary` (required for `ASK_USER`), `user_comment`, `plan_id`.
   tool call open until a human decides** (see [06](06-human-in-the-loop.md)). Returns
   `next_action: STOP_AND_WAIT_FOR_USER` with a pre-rendered `display_to_user` and `approval_url`
   if the wait times out.
+- **On a halted plan (1.16.0)** `ASK_USER` puts the halt card in front of the human and waits
+  like an approval (no `plan_summary` needed). A decision is accepted only when no page holds the
+  halt - in chat mode `APPROVED` = approve the draft as it stands, `REVISE` = continue (with
+  `user_comment` as a direction), `REJECTED` = cancel. With the card on the page a model-sent
+  decision is `APPROVAL_PENDING`, as in D20.
 - **`APPROVED`/`REJECTED`/`REVISE`**: report what the human actually said. A `REVISE` the model
   reports itself is always a whole-plan revision; only the approval page can express a per-task
   one, because only there can the human point at a specific task.
@@ -89,7 +130,9 @@ Optional: `result_log`, `plan_id`.
 
 - **The enforcement half of the HITL gate.** Until `plan_status` is `APPROVED`/`IN_EXECUTION`,
   every call returns `ok:false` / `PLAN_NOT_APPROVED`. The model cannot execute early even if it
-  ignores the instruction.
+  ignores the instruction. Since 1.16.0, if a human has the approval request open, the call
+  waits on them first (and returns their decision if they make one) rather than bouncing back as
+  fast as the model can retry. A halted plan refuses every call with `LOOP_HALTED`.
 - `IN_PROGRESS` before the work, `DONE`/`FAILED` after. With `auto_advance` on (default) the
   server puts the next task into `IN_PROGRESS` as part of accepting a `DONE`, so only the first
   task needs an explicit start: a 5-task plan costs 1 + 5 calls instead of 5 + 5. The `DONE`
@@ -109,7 +152,10 @@ is exact — a session always gets **its own** plan back, including a plan alrea
 `CANCELLED`. The constant `"current"` is the fallback for a session that does not know its id
 yet, and it is a *guess*: it resolves only while exactly one plan is live. Never mutates, never
 errors. Returns goal, recent thinking steps (superseded ones summarized), tasks with their
-**full** `result_log`, progress, approval record, `next_action_hint` naming the exact next call.
+**full** `result_log`, progress, approval record, `next_action_hint` naming the exact next call -
+and since 1.16.0 `halted` (why the plan is paused), `draft_tasks`, and `thinking_steps_left`, so a
+model re-reading its plan after a cut-off generation resumes from the draft instead of
+re-deriving it.
 
 **Not-my-plan answers must not read as "no plan" (1.15.1).** Both `"current"` under concurrency
 and an unknown/stale `plan_id` return an `active_plans` directory rather than guessing. They stay
@@ -148,6 +194,7 @@ Every error maps to a `next_action` that tells the model how to recover. Full li
 | `TASK_NOT_FOUND` | bad `task_id` | `CALL_UPDATE_TASK_PROGRESS` (with valid ids listed) |
 | `MISSING_RESULT_LOG` | `DONE` with evidence that is empty, a bare claim, or the task title | `CALL_UPDATE_TASK_PROGRESS` |
 | `REWORK_NOT_DONE` | a reopened task reported `DONE` with the very outcome the user rejected | `CALL_UPDATE_TASK_PROGRESS` (quoting what they asked for) |
+| `LOOP_HALTED` | the circuit breaker paused this plan (or, with no plan, stopped a repeating call) | `CALL_REQUEST_USER_APPROVAL` (`ASK_USER`) before the human has been shown the halt; `STOP_AND_WAIT_FOR_USER` after |
 | `INTERNAL_ERROR` | something unexpected | `CALL_GET_CURRENT_PLAN` (resync) |
 
 ## Input leniency (invisible to the model)

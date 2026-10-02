@@ -39,7 +39,17 @@
     <transition from="AWAITING_APPROVAL"   call="request_user_approval(APPROVED, all tasks already DONE)" to="AWAITING_COMPLETION" note="1.13.0: never unlock a plan with nothing left to run - that would skip the completion gate"/>
     <transition from="IN_EXECUTION"      call="update_task_progress(FAILED)"           to="BLOCKED"/>
     <transition from="BLOCKED"           call="plan_and_think"                          to="DRAFTING" note="same plan id, revision"/>
-    <transition from="any"               call="get_current_plan"                        to="(unchanged)" note="never fails"/>
+    <transition from="DRAFTING"          call="plan_and_think(more, budget spent, draft kept)" to="AWAITING_APPROVAL" note="1.16.0: the draft is submitted (straight to the page when there is one)"/>
+    <transition from="DRAFTING"          call="plan_and_think(more, budget spent, no draft)"   to="DRAFTING+halt" note="1.16.0: circuit breaker, reason thinking_budget"/>
+    <transition from="AWAITING_APPROVAL" call="plan_and_think(no revised_goal)"         to="(unchanged)" note="1.16.0: redirected; only the human's REVISE reopens a plan"/>
+    <transition from="AWAITING_COMPLETION" call="plan_and_think"                        to="(unchanged)" note="1.16.0 (D26): redirected to the completion report; used to reach DRAFTING and delete every result_log"/>
+    <transition from="any, request open on the page" call="plan_and_think / update_task_progress" to="(waits on the human)" note="1.16.0: held like the approval call; returns the decision, or a refusal if undecided; the thought is attached as an agent note"/>
+    <transition from="COMPLETED (younger than replan_cooldown)" call="plan_and_think(same goal)" to="(unchanged)" note="1.16.0: ANSWER_USER with the finished results"/>
+    <transition from="any non-terminal"  call="(circuit breaker trips)"                  to="(same status)+halt" note="1.16.0: overlay, not a status; every tool refuses with LOOP_HALTED; halt card on the page"/>
+    <transition from="halted"            call="human: APPROVED (approve the draft)"     to="APPROVED" note="the draft becomes the task list"/>
+    <transition from="halted"            call="human: REVISE (continue + direction)"    to="(same status)" note="guidance leads every hint until the next milestone; DRAFTING gets a fresh thinking budget"/>
+    <transition from="halted"            call="human: REJECTED (cancel)"                to="CANCELLED"/>
+    <transition from="any"               call="get_current_plan"                        to="(unchanged)" note="never fails; reports halted / draft_tasks / thinking_steps_left"/>
   </transitions>
 
   <guards>
@@ -53,6 +63,8 @@
     <guard call="update_task_progress(DONE, an earlier task unfinished)" error="TASK_OUT_OF_ORDER"/>
     <guard call="update_task_progress(DONE, evidence-free result_log)" error="MISSING_RESULT_LOG" note="content check: bare success phrases and task-title echoes rejected regardless of length; floor PLANNING_MCP_MIN_RESULT_LOG=8 normalized chars"/>
     <guard call="update_task_progress(any)" whenState="AWAITING_COMPLETION" error="COMPLETION_PENDING"/>
+    <guard call="any except get_current_plan" whenState="halted" error="LOOP_HALTED" note="1.16.0; waits instead when the halt card is open on the page"/>
+    <guard call="request_user_approval(APPROVED/REJECTED/REVISE)" whenState="halted, card open on the page" error="APPROVAL_PENDING" note="D20 applied to halts: only the human lifts a halt"/>
   </guards>
 
   <leniencies note="rejecting these would strand a weak model">

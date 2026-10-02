@@ -300,6 +300,49 @@ auto-advance into a *second* reworked task, which is the only thing the model re
 moment. A request that appears once, three turns back, is a request a small model has already
 lost.
 
+## Held calls, agent notes, and the halt card (1.16.0)
+
+[D25](09-defects-and-lessons.md#d25) extended the physical pause from one tool to every tool.
+
+**Held calls.** While a human has a request open for a plan (approval, completion report, or
+halt), `plan_and_think` and `update_task_progress` on that plan go through `_hold_for_human`:
+they wait on the same request, with the same slicing and budget (`_wait_on`), and return the
+human's decision if one arrives (`_settle` is shared by all three entry points). A model that
+"reconsiders" mid-approval used to put the plan back to DRAFTING and withdraw the request out
+from under the person reading it; now it is paced at one call per slice and changes nothing. If
+the slice ends undecided the held call returns a refusal (`APPROVAL_PENDING`,
+`PLAN_NOT_APPROVED`, `COMPLETION_PENDING` or `LOOP_HALTED`) - never `ok:true`, which a weak model
+could read as "started".
+
+**Agent notes.** What a held `plan_and_think` wanted to reconsider is not thrown away: its
+`thought` is attached to the card (`set_agent_note`, latest only) and shown as
+**에이전트 추가 의견**. If the human agrees, they press 수정 요청; the model never gets to act on
+its own second thoughts unasked. The page signature includes the note's length so a new note
+re-renders the card - drafts survive, as since D22.
+
+**The halt card** (`PHASE_HALT`). When the circuit breaker trips, the plan is published as:
+
+```
+반복 감지 · plan_20261002_0001
+목표 ...
+에이전트가 멈춘 이유: 같은 호출이 2회 연속 반복되었습니다.
+                     에이전트의 마지막 생각: Wait, let me reconsider ...
+현재 초안 · 태스크 4개   (only when there is a draft to approve)
+[이 초안으로 승인]  [계속 진행 | 의견 전달 후 계속]  [취소]
+```
+
+The three buttons reuse the three existing decision values - APPROVED / REVISE / REJECTED - so a
+page served by an older process (rolling restart), which renders the entry with its fallback
+form, still produces a decision the new handler can read. The continue button relabels itself
+as soon as a direction is typed, the same consequence-first rule as the REVISE button. A halt
+decision carries no per-task scope (`record_decision` strips it). The request fingerprint
+includes the halt id and the draft, so a decision on one halt can never answer the next.
+
+Verified in a real browser against a real `ApprovalServer`: both cards rendered (halt card with
+draft and three buttons; an approval card with the agent note), typing a direction relabelled
+the button, and the click released the agent's held call within a second with
+`The user said: "..."` leading its next hint.
+
 ## Config knobs
 
 `PLANNING_MCP_BLOCKING_APPROVAL` (default true), `_APPROVAL_PORT` (8765), `_APPROVAL_TIMEOUT`

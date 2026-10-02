@@ -260,6 +260,64 @@ off when a launch never produces a poll. Defect
 [SEP-1391]: https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1391
 [SEP-1539]: https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1539
 
+### 1.15.0 — one task id, in one field
+`update_task_progress` stopped re-sending the whole task list on every response, and every
+literal `task_id=N` left the hints: the only place an id is published is `next_task`. Five tasks
+used to leave six copies of the list in the conversation, five of them wrong - and each carried
+an instruction ("call update_task_progress with task_id=3"), not just data.
+
+### 1.15.1 — get_current_plan returns your own plan
+The tool description told the model to send `"current"`, which only resolves while exactly one
+plan is live; with two, the answer fell through to "there is no active plan, start one" and the
+model forked a duplicate. The description now asks for the session's own `plan_id`, and the
+not-my-plan answers carry `PLAN_AMBIGUOUS` so `next_action` says `CALL_GET_CURRENT_PLAN`.
+
+### 1.16.0 — planning loops converge ([D25](09-defects-and-lessons.md#d25), [D26](09-defects-and-lessons.md#d26))
+Field report: Zed / Goose with a mid-sized thinking model looped in its own self-verification
+("wait, let me reconsider"), both inside one thinking block and across `plan_and_think` calls.
+Not reproducible here, so the server side was located by scripting the calls a looping model
+makes - four were simply accepted - and closed with enforcement rather than wording:
+
+- **Thinking budget + draft.** A drafting round has `PLANNING_MCP_MAX_THINKING_STEPS` steps
+  (standard 8, reasoning 2). Every hint names the exit first ("it does not need to be perfect -
+  the user reviews it") and counts down. The latest `task_list` sent while thinking is kept as
+  `draft_tasks`; when the budget runs out the server **submits the draft** (straight to the
+  approval page when there is one) instead of refusing. A final call with no list uses the draft.
+- **A finalized plan is not reopened by the model.** `plan_and_think` on `AWAITING_APPROVAL` or
+  `AWAITING_COMPLETION` is redirected (D26 closed: re-thinking after the last task used to delete
+  every `result_log`). Only the human's 수정 요청 reopens a plan; `revised_goal` stays the one
+  exception before approval.
+- **Calls wait on an open request.** While a human has a request open for a plan, `plan_and_think`
+  and `update_task_progress` on it wait on the human exactly like the approval call - paced at one
+  call per slice instead of spinning - and the model's thought is shown on the card as
+  **에이전트 추가 의견**. Undecided, they return a refusal, never `ok:true`.
+- **No second lap after completion.** The same goal, completed under `PLANNING_MCP_REPLAN_COOLDOWN`
+  (600 s) ago, is answered from its results (`ANSWER_USER`) instead of re-planned.
+- **Circuit breaker** (`planning/loopguard.py`). Per plan, in process memory: no progress for 12
+  calls, the same call 3 times, the same error - or a turned-away re-plan - 4 times; from shared
+  state: a goal reworded and restarted 3 times; plus a budget spent with no draft. The plan gets a
+  `halt` overlay, every tool refuses it (`LOOP_HALTED`), and a **halt card** goes on the approval
+  page: 이 초안으로 승인 / 계속 진행 (with an optional direction, which then leads every hint) /
+  취소. The tripping call waits on it. Waited-out slices and calls made while a human is looking
+  never count. Without a page, the human answers in chat.
+- **`reasoning` profile** (`PLANNING_MCP_MODEL_PROFILE`): `plan_and_think` records the plan in one
+  call; `step_number` / `total_steps` / `revises_step` are not advertised (still accepted).
+- **Prompt hygiene.** `request_user_approval`'s description is generated per approval mode;
+  "before answering ANY request" became "for each NEW request; ANSWER_USER means answer"
+  everywhere (descriptions, MCP `instructions`, prompt). `agents.md` was rewritten from ~110 dense
+  lines to ~45 without a single contradiction, the old Variant A (~270 lines) replaced, and the
+  three copies pinned equal by `TestPromptHygiene`. The README's "temperature ≤ 0.3" now excludes
+  thinking models, whose model cards warn that greedy decoding causes endless repetition.
+- **Field telemetry.** `client_connected` (from `clientInfo`), `gap_sec`, `reconsider` and
+  `thought_chars` on every thinking step, `loop_halted` / `halt_resolved` / `auto_finalized` /
+  `replan_redirected` / `call_held_for_human`; `tools/loop_report.py` summarizes them offline.
+- `PLANNING_MCP_MAX_ACTIVE_PLANS` default 5 → **20** (requested).
+
+Seven existing tests changed expectation; each kept its safety assertion and changed only the
+route (e.g. a re-plan after finalize is now redirected, so the list it would have replaced
+survives). 78 new tests in `tests/test_loop_convergence.py`, including scripted "thinking models"
+that must converge in a bounded number of calls.
+
 ---
 
 ## Git commit ↔ version map

@@ -39,11 +39,12 @@ SSE transport.
 | `filelock.py` | OS-level advisory locking (`msvcrt` / `fcntl`), non-blocking with a retry loop. Shared by both stores. |
 | `protocol.py` | Minimal MCP / JSON-RPC 2.0. `initialize`, `tools/list`, `tools/call`, `ping`, batch. |
 | `transport.py` | `serve_stdio` (threaded) and `serve_sse`, plus notifiers for progress heartbeats. |
+| `loopguard.py` | (1.16.0) The circuit breaker's counters: calls since the last milestone, repeated calls, error streaks. In process memory by design - see [04](04-state-machine.md#loop-convergence-1160). |
 | `server.py` (root) | Entry point: arg parsing, config, builds protocol, claims the approval page, serves. |
 
 ## The request pipeline
 
-Every tool call goes through the same six stages. Stages 2–6 run **inside** one guarded,
+Every tool call goes through the same seven stages. Stages 2–7 run **inside** one guarded,
 transactional block in `handlers.dispatch`:
 
 ```
@@ -53,6 +54,7 @@ transactional block in `handlers.dispatch`:
 4. ROUTE      resolve which plan this call means (explicit id / by goal / the only active one)
 5. MUTATE     handler applies the change, store.save() atomically, audit.jsonl append
 6. RESPOND    responses.build() — the ONLY place a response is constructed
+7. LOOP CHECK _after_call() — count the call against its plan; trip the circuit breaker (1.16)
 ```
 
 Key invariants enforced by this shape:
@@ -64,6 +66,9 @@ Key invariants enforced by this shape:
   human wait via `store.paused()`. Serialized against other threads *and* other processes.
 - **`next_action` has exactly one producer** (`state_machine.resolve_next_action`). A weak
   model can never receive two different instructions for the same state.
+- **Every wait goes through `_wait_on` and every end of a wait through `_settle`** (1.16.0) -
+  the approval call, the halt card, and calls held because a human has a request open. A
+  decision means the same thing whichever call happened to be waiting when it arrived.
 
 ## The response contract
 

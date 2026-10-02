@@ -1,13 +1,42 @@
 # 11 · Status and Next Steps
 
-## Current state (as of version 1.13.2)
+## Current state (as of version 1.16.0, 2026-10-02)
+
+- **1.16.0 - planning loops converge** ([D25](09-defects-and-lessons.md#d25),
+  [D26](09-defects-and-lessons.md#d26)): thinking budget + draft submission, a finalized plan is
+  not reopened by the model, calls wait on an open request, no second lap after completion, the
+  circuit breaker with a halt card on the approval page, a `reasoning` model profile, per-mode
+  tool descriptions, a rewritten conflict-free prompt (agents.md == README == Phase 3 Variant A),
+  field telemetry + `tools/loop_report.py`, `max_active_plans` default 20. Host-side guide for
+  thinking models: `docs/thinking-model-hosts.md`. Committed on `develop` in three commits
+  (prompt, code, docs); not packaged or pushed yet - `MANIFEST.txt` is still the 1.15.1 one, so
+  `verify_install.py` reports NO-GO on integrity until `make_package.py` is rerun.
+- **Tests:** 443 unit + 6 smoke, all passing (`tests/test_loop_convergence.py` is new).
+- **Next, agreed:** 2.0 - per-task alternatives with a `권장` option, chosen by the human on the
+  approval page. The full plan is in [`docs/plan-2.0-task-alternatives.md`](../docs/plan-2.0-task-alternatives.md);
+  discuss with the user before starting.
+
+### 1.16.0 follow-up (field)
+
+The loop could not be reproduced here, so whether 1.16 fixes it is a field question:
+1. Deploy with `PLANNING_MCP_MODEL_PROFILE=reasoning` for the thinking model, paste the new
+   prompt, and apply the host settings in `docs/thinking-model-hosts.md` (sampling at the model
+   card's values - **not** the README's ≤ 0.3, which is for non-thinking models - and a max-token
+   cap).
+2. After a few sessions run `python tools/loop_report.py`. Few calls with long `gap_sec` = the
+   loop is still inside the thinking block (host settings); halts / auto-submits = across calls,
+   now bounded by the server. Tune the `PLANNING_MCP_BREAKER_*` defaults from what it shows.
+3. Breaker defaults (12 / 3 / 4 / 3) were set without field data and are deliberately
+   conservative; a false trip costs one click on the halt card.
+
+## Earlier state notes (1.13.2, kept for the packaging history)
 
 - **Code:** feature-complete for the design. All four tools, blocking approval, multi-plan,
   shared approval surface, cross-process locking, failure-path hardening, leniency fuzzing,
   per-task plan review (1.10.0), auto-advance (1.11.0), goal revision (1.12.0), an explicit
   next-step message on every DONE including the last (1.12.1), and rework — a completion
   report can be sent back task by task without re-planning or losing evidence (1.13.0).
-- **Tests:** 282 unit + 5 smoke, all passing. `verify_install.py` runs everything.
+- **Tests (then):** 282 unit + 5 smoke, all passing. `verify_install.py` runs everything.
   Note: `TestApprovalPageSurface` / `TestPerTaskPageSurface` / `TestBlockingApproval` bind
   hardcoded ports 8788-8799. On a machine where something else already holds them, those
   tests fail on `srv.start()` returning False — a test-isolation weakness, not a server

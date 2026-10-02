@@ -1,13 +1,13 @@
 # 07 · Testing
 
-**363 unit tests + 6 end-to-end smoke tests, all passing** (as of 1.15.1). Standard-library
+**443 unit tests + 6 end-to-end smoke tests, all passing** (as of 1.16.0). Standard-library
 `unittest` only. This project's defect history proves the rule: *test the seam before you
 trust it.* See [09-defects-and-lessons.md](09-defects-and-lessons.md).
 
 ## Running
 
 ```bash
-python -m unittest discover -s tests     # unit suite (~48 s)
+python -m unittest discover -s tests     # unit suite (~62 s)
 python tests/smoke_stdio.py              # stdio end-to-end
 python tests/smoke_blocking_approval.py  # blocking approval, real subprocess
 python tests/smoke_shared_approval.py    # one page across 2 processes
@@ -43,6 +43,29 @@ tests drive the two-phase path). Test classes, roughly:
 | `TestApprovalPageSurface` | the page HTML/JS/endpoints (browser-verified separately) |
 | `TestLeniencyDispatchEdges` | dispatch survives every hostile input with the contract |
 | `TestPlanStateEdges`, `TestFileLockEdges`, `TestProtocol` | misc edges, locking, JSON-RPC |
+
+## Loop convergence suite (`tests/test_loop_convergence.py`, 1.16.0)
+
+78 tests for [D25](09-defects-and-lessons.md#d25)/[D26](09-defects-and-lessons.md#d26). The field
+model cannot be run here, so the guarantee is pinned with scripted models instead: *from any
+state, whatever a model sends, the planning calls it can make without a human in between are
+bounded, nothing it produced is lost, and every path ends in front of a human or in an answer.*
+
+| Class | Covers |
+|---|---|
+| `TestLoopRegressions` | the four doors found while planning 1.16 (A–D), pinned |
+| `TestThinkingBudget`, `TestReasoningProfile` | budget, countdown hint, draft kept / submitted / used, fresh round after a revision, one-call profile |
+| `TestLoopGuardUnit`, `TestLoopBreaker` | counters; each trip reason; halted plans refuse work; chat / page / late resolution; waiting is never a loop; unrelated plans never add up |
+| `TestAdversarialThinkingModels` | scripted "thinking models" (always one more step, always revising, re-planning instead of asking / reporting / answering, spamming execution) must converge |
+| `TestPromptHygiene` | every profile × approval mode × auto_advance: no removed phrase, no "report APPROVED" in blocking modes, a calm reasoning profile, one tool per drafting hint, and **agents.md == README block == Phase 3 Variant A** |
+| `TestTelemetry`, `TestLoopReport` | `clientInfo` → audit, `gap_sec` / `reconsider`, the offline report |
+| `TestHaltPageTemplate`, `TestHaltAtTheStore` | the halt card and agent note in the page template (no socket); HALT entries at the store |
+| `TestConfigDefaults` | new env vars, `max_active_plans` = 20, pre-1.16 state files load |
+
+Measured with the scripted policies (no page, defaults): a standard-profile model that always
+asks for one more step reaches a human in at most 12 calls, a reasoning-profile one in 6; one that
+keeps re-planning a finalized plan in 5; one that keeps re-planning a completed goal is stopped
+on the 4th call.
 
 ## Smoke tests (real subprocesses, real HTTP)
 

@@ -58,6 +58,17 @@ finished work — see below.
 | `IN_EXECUTION` | `update_task_progress` FAILED | `BLOCKED` | — |
 | `BLOCKED` | `plan_and_think` | `DRAFTING` (same plan_id) | — |
 | `BLOCKED` | `update_task_progress` on another task | *(no change)* | `PLAN_BLOCKED` |
+| `DRAFTING` | `plan_and_think` (more, **budget spent, draft kept**) | `AWAITING_APPROVAL` - draft submitted, straight to the page (1.16) | — |
+| `DRAFTING` | `plan_and_think` (more, **budget spent, no draft**) | `DRAFTING` + `halt` | — |
+| `AWAITING_APPROVAL` (no request open) | `plan_and_think` without `revised_goal` | *(no change)* - redirected to approval (1.16) | — |
+| `AWAITING_COMPLETION` (no request open) | `plan_and_think` | *(no change)* - redirected to the completion report (1.16, D26) | — |
+| any, **request open on the page** | `plan_and_think` / `update_task_progress` on that plan | *(waits on the human; returns their decision)* (1.16) | undecided → `APPROVAL_PENDING` / `PLAN_NOT_APPROVED` / `COMPLETION_PENDING` / `LOOP_HALTED` |
+| `COMPLETED` < cooldown | `plan_and_think` with the same goal | *(no change)*, `ANSWER_USER` + results (1.16) | — |
+| any non-terminal | circuit breaker trips | same status + **`halt` overlay** | — |
+| halted | any tool | *(no change)* | `LOOP_HALTED` (or waits, if the halt card is open) |
+| halted | human: 이 초안으로 승인 | `APPROVED` - the draft becomes the task list | — |
+| halted | human: 계속 진행 (+ direction) | same status, `guidance` set; DRAFTING gets a fresh budget | — |
+| halted | human: 취소 | `CANCELLED` | — |
 | any | `get_current_plan` | *(no change)* | never fails |
 
 ## Deliberate leniencies (rejecting these would strand a weak model)
@@ -131,6 +142,45 @@ with every task `DONE`, the generic re-plan hint, and — because finalizing rep
 — every `result_log` deleted. The whole-plan checkbox still exists for add/delete/reorder, which
 genuinely needs a new plan and a new approval, but it now carries evidence across the redraft for
 tasks whose title survives (`_carry_evidence`, matched with `title_key`).
+
+## Loop convergence (1.16.0)
+
+Every guard above answers "is this call legal?". A thinking model caught in its own
+self-verification ([D25](09-defects-and-lessons.md#d25)) makes calls that are each perfectly
+legal - one more thinking step, one more re-plan - so 1.16 adds the question "is this the twelfth
+call in a row that changed nothing?", and answers it with enforcement rather than wording.
+
+**The thinking budget** bounds a drafting round (`step_budget_end`, set on the round's first
+step; 0 = not started). The hint counts down and names the exit first. When it runs out the
+server does what the model would not: with a draft it submits the draft; without one it halts.
+Refusing would only have been one more thing for the model to reconsider.
+
+**The circuit breaker** (`planning/loopguard.py`) counts per plan, since the last *milestone* -
+a finalize, a human decision, a task DONE or FAILED, an approval request asked:
+
+| trips on | default | env |
+|---|---|---|
+| calls with no milestone | 12 | `PLANNING_MCP_BREAKER_CALLS` |
+| the same call (same normalized arguments) in a row | 3 | `PLANNING_MCP_BREAKER_REPEAT` |
+| the same `error_code` in a row - a turned-away re-plan counts as one | 4 | `PLANNING_MCP_BREAKER_ERROR_STREAK` |
+| DRAFTING plans from the last 10 min whose goals are rewordings of one another (bigram Jaccard ≥ 0.5) | 3 | `PLANNING_MCP_BREAKER_RESPAWN` |
+| thinking budget spent with no draft | - | `PLANNING_MCP_MAX_THINKING_STEPS` |
+
+Never counted: a call that waited on a human (a chunked slice repeats the very same call on
+purpose) and any call made while a human has a request open for that plan. The counters live in
+process memory on purpose: they measure one agent's consecutive calls, and one agent talks to
+one process; the respawn count, which spans plans, is read from the shared state so unrelated
+conversations in one process never add up. The **halt** itself is written to the plan.
+
+A halt is an **overlay**, not a status: it can land in DRAFTING, AWAITING_APPROVAL, IN_EXECUTION
+or AWAITING_COMPLETION, and lifting it must return the plan to where it was. While it is set,
+`_halt_action` is the only producer of `next_action`: `CALL_REQUEST_USER_APPROVAL` (ASK_USER)
+until the human has been shown it, then `STOP_AND_WAIT_FOR_USER`. A loop that has no live plan
+(a routing error over and over, or re-planning a COMPLETED goal) cannot be paused, so it ends in a
+plain `LOOP_HALTED` + `STOP_AND_WAIT_FOR_USER` with a `display_to_user`.
+
+What the breaker does not see: a loop inside one generation. See
+`docs/thinking-model-hosts.md` for the host-side half.
 
 ## Two time-based / version-based guards (added after real bugs)
 

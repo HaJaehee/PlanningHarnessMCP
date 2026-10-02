@@ -82,8 +82,8 @@
     {
       "field": "max_active_plans",
       "env": "PLANNING_MCP_MAX_ACTIVE_PLANS",
-      "default": 5,
-      "purpose": "Cap on concurrently active (non-terminal) plans; beyond it new plans are refused with PLAN_AMBIGUOUS."
+      "default": 20,
+      "purpose": "Cap on concurrently active (non-terminal) plans; beyond it new plans are refused with PLAN_AMBIGUOUS. Default 20 since 1.16.0 (was 5); a respawning model is bounded by the circuit breaker instead."
     },
     {
       "field": "completion_approval",
@@ -108,6 +108,54 @@
       "env": "PLANNING_MCP_SSE_PORT",
       "default": 8931,
       "purpose": "SSE transport port. CLI --port wins; there is deliberately no argparse default so the flag's absence cannot override the env var."
+    },
+    {
+      "field": "model_profile",
+      "env": "PLANNING_MCP_MODEL_PROFILE",
+      "default": "standard",
+      "purpose": "standard | reasoning. reasoning: plan_and_think records the plan in one call (step fields not advertised, thought optional, a task_list with no need_more_thinking is final), thinking budget 2. For CoT/'thinking' models (D25). A typo falls back to standard with a warning."
+    },
+    {
+      "field": "max_thinking_steps",
+      "env": "PLANNING_MCP_MAX_THINKING_STEPS",
+      "default": 0,
+      "purpose": "Thinking steps per drafting round. 0 = profile default (standard 8, reasoning 2); negative = unlimited. When spent, the latest draft task_list is submitted to the human; with no draft the plan is halted."
+    },
+    {
+      "field": "loop_breaker",
+      "env": "PLANNING_MCP_LOOP_BREAKER",
+      "default": true,
+      "purpose": "Circuit breaker on/off. On trip the plan gets a halt overlay, every tool refuses it (LOOP_HALTED), and a halt card goes on the approval page."
+    },
+    {
+      "field": "breaker_calls",
+      "env": "PLANNING_MCP_BREAKER_CALLS",
+      "default": 12,
+      "purpose": "Calls on one plan with no milestone (finalize, human decision, approval asked, task DONE/FAILED). Waited-out slices and calls made while a human has a request open are never counted."
+    },
+    {
+      "field": "breaker_repeat",
+      "env": "PLANNING_MCP_BREAKER_REPEAT",
+      "default": 3,
+      "purpose": "The same call (same tool + normalized arguments) in a row."
+    },
+    {
+      "field": "breaker_error_streak",
+      "env": "PLANNING_MCP_BREAKER_ERROR_STREAK",
+      "default": 4,
+      "purpose": "The same error_code in a row. A re-plan the server turned away (REPLAN_REDIRECTED, internal) counts as one."
+    },
+    {
+      "field": "breaker_respawn",
+      "env": "PLANNING_MCP_BREAKER_RESPAWN",
+      "default": 3,
+      "purpose": "DRAFTING plans from the last 10 minutes whose goals are rewordings of each other (char-bigram Jaccard >= 0.5). Judged from shared state, so unrelated sessions never add up."
+    },
+    {
+      "field": "replan_cooldown",
+      "env": "PLANNING_MCP_REPLAN_COOLDOWN",
+      "default": 600,
+      "purpose": "A goal COMPLETED less than this many seconds ago is answered from its results (ANSWER_USER) instead of re-planned. 0 = off."
     }
   ],
   "cli": {

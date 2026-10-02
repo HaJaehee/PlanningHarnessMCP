@@ -26,7 +26,11 @@ Now plans coexist, and a call is routed three ways, in priority order:
 If several plans are active and no `plan_id` is given → `PLAN_AMBIGUOUS` with an `active_plans`
 directory. A weak model recovers because (a) it only ever saw *its own* plan_id in prior
 responses, and (b) while multiple plans are live, every `next_action_hint` names the plan_id to
-include (`qualify=True`). `PLANNING_MCP_MAX_ACTIVE_PLANS` (default 5) caps how many can coexist.
+include (`qualify=True`). `PLANNING_MCP_MAX_ACTIVE_PLANS` (default 20 since 1.16.0, was 5) caps how many can coexist.
+Raising it removed the implicit bound a respawning model used to hit; the 1.16 circuit
+breaker bounds that loop directly instead (a goal reworded and restarted 3 times halts -
+judged from the shared state, so unrelated sessions never add up; see
+[04](04-state-machine.md#loop-convergence-1160)).
 
 **Watch-outs baked in as fixes:** after a blocking wait, re-read *your own* plan by id (not
 "the active plan", which could be a sibling); the late-decision collector iterates *all* active
