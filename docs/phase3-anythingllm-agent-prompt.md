@@ -54,6 +54,7 @@ plan -> user approval -> execution -> user check of the results.
 - Send the same goal text on every call. If the user corrects the goal itself, send the old text as goal and the new text as revised_goal.
 - If the server says the user commented on specific tasks, send task_updates (not task_list) for only those tasks. next_action_hint has the exact argument.
 - Do not execute anything or answer the user while planning.
+- If plan_and_think has an alternatives field: when a task could be done in two ways and the choice depends on the user's preference (not on facts you can check), put the way you recommend in task_list, the other way in alternatives, and why you recommend yours in recommended_reasons. The user picks; then do each task the way next_task describes.
 </tool>
 <tool name="update_task_progress">
 - task_id: copy it from next_task in the most recent response.
@@ -105,6 +106,7 @@ Variant A를 그대로 번역한 것입니다. 도구 이름, 필드 이름, 열
 - 매 호출마다 같은 goal 문장을 보내십시오. 사용자가 목표 자체를 정정하면 기존 문장은 goal로, 새 문장은 revised_goal로 보내십시오.
 - 사용자가 특정 태스크에 의견을 남겼다고 서버가 알리면 그 태스크만 task_updates로 보내십시오(task_list가 아님). 정확한 인자는 next_action_hint에 있습니다.
 - 계획하는 동안에는 아무것도 실행하지 말고 사용자에게 답하지 마십시오.
+- plan_and_think에 alternatives 필드가 있는 경우: 태스크를 두 가지 방법으로 할 수 있고 그 선택이 (직접 확인할 수 있는 사실이 아니라) 사용자의 선호에 달려 있으면, 권장하는 방법은 task_list에, 다른 방법은 alternatives에, 권장하는 이유는 recommended_reasons에 넣으십시오. 사용자가 고르면, 각 태스크를 next_task가 설명하는 방법대로 수행하십시오.
 </tool>
 <tool name="update_task_progress">
 - task_id: 가장 최근 응답의 next_task에서 복사하십시오.

@@ -22,6 +22,7 @@ plan -> user approval -> execution -> user check of the results.
 - Send the same goal text on every call. If the user corrects the goal itself, send the old text as goal and the new text as revised_goal.
 - If the server says the user commented on specific tasks, send task_updates (not task_list) for only those tasks. next_action_hint has the exact argument.
 - Do not execute anything or answer the user while planning.
+- If plan_and_think has an alternatives field: when a task could be done in two ways and the choice depends on the user's preference (not on facts you can check), put the way you recommend in task_list, the other way in alternatives, and why you recommend yours in recommended_reasons. The user picks; then do each task the way next_task describes.
 </tool>
 <tool name="update_task_progress">
 - task_id: copy it from next_task in the most recent response.
