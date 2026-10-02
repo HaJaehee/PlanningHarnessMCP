@@ -21,6 +21,12 @@ log = logging.getLogger("planning-mcp.protocol")
 
 PROTOCOL_VERSION = "2024-11-05"
 
+INSTRUCTIONS = (
+    "Planning harness. Start each new user request with plan_and_think, get the user's "
+    "approval with request_user_approval, then track execution with update_task_progress. "
+    "Follow the next_action field in every response; ANSWER_USER means write the answer."
+)
+
 METHOD_NOT_FOUND = -32601
 INVALID_REQUEST = -32600
 PARSE_ERROR = -32700
@@ -111,15 +117,23 @@ class McpProtocol:
     # ---- method routing -------------------------------------------------
     def _route(self, method: str | None, params: dict[str, Any], msg_id: Any = None) -> Any:
         if method == "initialize":
+            # Which host connected. Field loops cannot be reproduced from here, so the
+            # audit log has to be able to say which agent produced each line.
+            note_client = getattr(self.handlers, "note_client", None)
+            if callable(note_client):
+                try:
+                    note_client(params.get("clientInfo"))
+                except Exception:  # noqa: BLE001 - telemetry must never fail a handshake
+                    log.debug("Could not record clientInfo")
             return {
                 "protocolVersion": params.get("protocolVersion") or PROTOCOL_VERSION,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": self.name, "version": self.version},
-                "instructions": (
-                    "Planning harness. Call plan_and_think before answering anything, get the "
-                    "user's approval with request_user_approval, then track execution with "
-                    "update_task_progress. Always obey the next_action field in every response."
-                ),
+                # Hosts show this to the model as a system instruction. "Call
+                # plan_and_think before answering anything" used to be here - the same
+                # rule that sent a thinking model back into planning when the server
+                # asked it to answer (D25).
+                "instructions": INSTRUCTIONS,
             }
         if method == "notifications/cancelled":
             self._cancel(params.get("requestId"))

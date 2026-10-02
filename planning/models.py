@@ -97,7 +97,18 @@ class ErrorCode(str, Enum):
     INVALID_STATUS = "INVALID_STATUS"
     INVALID_DECISION = "INVALID_DECISION"
     INVALID_STEP = "INVALID_STEP"
+    # The circuit breaker paused this plan: the same step kept repeating with no human
+    # in between. Only the human can lift it (see handlers._trip / D25).
+    LOOP_HALTED = "LOOP_HALTED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
+def _safe_int(value: Any, default: int) -> int:
+    """An int from a state file that may have been hand-edited. Never raises."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 TERMINAL_PLAN_STATUSES = (PlanStatus.COMPLETED, PlanStatus.CANCELLED)
@@ -282,6 +293,23 @@ class Plan:
     # A revision asked for before execution has no evidence to keep, and an ordinary
     # re-plan after a failure SHOULD drop it - hence a flag rather than always-on.
     rework_from_completion: bool = False
+    # The latest task_list the model sent while still thinking. Kept so that a model
+    # which never calls its own plan final - the self-verification loop of D25 - still
+    # has something the server can put in front of the human when its thinking budget
+    # runs out. Cleared whenever a task list is finalized.
+    draft_tasks: list[str] = field(default_factory=list)
+    # The step number at which this drafting round's thinking budget is spent. 0 means
+    # "not started": the next thinking step opens a fresh round. Reset to 0 whenever the
+    # plan re-enters DRAFTING (a human asked for changes, a task failed, a halt was lifted).
+    step_budget_end: int = 0
+    # Set by the circuit breaker. While present, no tool may move this plan; the human
+    # decides on the approval page (or, without a page, in chat). Keys: id, reason,
+    # detail, at, asked, channel ("page" | "chat").
+    halt: dict[str, Any] | None = None
+    # What the human said when they lifted a halt. Leads every hint until the next
+    # milestone, for the same reason `_rework_suffix` exists: a sentence the model saw
+    # once, three turns back, is a sentence it no longer has.
+    guidance: str | None = None
 
     # ---- serialization -------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
@@ -300,6 +328,10 @@ class Plan:
             "rework_from_completion": self.rework_from_completion,
             "original_goal": self.original_goal or self.goal,
             "goal_history": self.goal_history,
+            "draft_tasks": self.draft_tasks,
+            "step_budget_end": self.step_budget_end,
+            "halt": self.halt,
+            "guidance": self.guidance,
         }
 
     @classmethod
@@ -321,6 +353,12 @@ class Plan:
             # goal has never changed, so it *is* the original.
             original_goal=str(raw.get("original_goal") or raw.get("goal", "")),
             goal_history=[h for h in (raw.get("goal_history") or []) if isinstance(h, dict)],
+            # Fields added in 1.16.0. A file written earlier has none of them, which reads
+            # as "no draft, no budget round started, not halted" - exactly right.
+            draft_tasks=[str(t) for t in (raw.get("draft_tasks") or []) if isinstance(t, str)],
+            step_budget_end=_safe_int(raw.get("step_budget_end"), 0),
+            halt=raw.get("halt") if isinstance(raw.get("halt"), dict) else None,
+            guidance=str(raw["guidance"]) if raw.get("guidance") else None,
         )
 
     # ---- queries -------------------------------------------------------
@@ -392,6 +430,29 @@ class Plan:
 
     def last_step_number(self) -> int:
         return max((s.step_number for s in self.thinking_steps), default=0)
+
+    def last_thought(self) -> str:
+        """The most recent thinking step's text - what the model was last weighing."""
+        return self.thinking_steps[-1].thought if self.thinking_steps else ""
+
+    def thinking_steps_left(self) -> int | None:
+        """Steps left in this drafting round, or None when no budget applies."""
+        if self.step_budget_end <= 0:
+            return None
+        return max(0, self.step_budget_end - self.last_step_number())
+
+    def halt_draft(self) -> list[str]:
+        """The task list a human could approve straight from a halt card, if any.
+
+        While drafting that is the model's latest draft; once a list has been finalized
+        but not yet shown, it is that list. Anywhere else there is nothing to approve -
+        lifting the halt simply lets the plan continue.
+        """
+        if self.status is PlanStatus.DRAFTING:
+            return list(self.draft_tasks)
+        if self.status is PlanStatus.AWAITING_APPROVAL:
+            return [t.title for t in self.tasks]
+        return []
 
     def current_task(self) -> Task | None:
         """The task the model should be working on: an in-flight one, else the first pending one."""

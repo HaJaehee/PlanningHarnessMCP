@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SERVER_NAME = "planning-mcp"
-SERVER_VERSION = "1.15.1"
+SERVER_VERSION = "1.16.0"
 
 # The state dir is resolved from this file, NOT from the working directory.
 # AnythingLLM spawns the server with its own CWD, which is why plans "disappear"
@@ -96,6 +96,22 @@ APPROVAL_MODE_RETURN = "return"
 APPROVAL_MODE_TRUST_HEARTBEAT = "trust_heartbeat"
 APPROVAL_MODES = (APPROVAL_MODE_CHUNKED, APPROVAL_MODE_RETURN, APPROVAL_MODE_TRUST_HEARTBEAT)
 
+# Which kind of model the tool descriptions are written for.
+#   standard  - the original audience: a weak model that plans better when it is walked
+#               through one thinking step per call.
+#   reasoning - a model that already thinks inside its own reasoning block (CoT /
+#               "thinking" models). Asking it to think a second time, out loud, one step
+#               per call is what fed its self-verification loop ("wait, let me
+#               reconsider") - see D25. It records its plan in one call instead.
+MODEL_PROFILE_STANDARD = "standard"
+MODEL_PROFILE_REASONING = "reasoning"
+MODEL_PROFILES = (MODEL_PROFILE_STANDARD, MODEL_PROFILE_REASONING)
+
+# Thinking steps one drafting round may take before the server stops waiting for the
+# model to call its own plan final. Generous for the standard profile, whose weak models
+# rarely need more than four; two for a reasoning model (record, refine once).
+DEFAULT_THINKING_STEPS = {MODEL_PROFILE_STANDARD: 8, MODEL_PROFILE_REASONING: 2}
+
 
 @dataclass
 class Config:
@@ -113,7 +129,7 @@ class Config:
     approval_timeout: int = 900
     approval_open_browser: bool = True
     approval_ttl: int = 1800
-    max_active_plans: int = 5
+    max_active_plans: int = 20
     completion_approval: bool = True
     min_result_log: int = 8
     # Put the next task straight into IN_PROGRESS when one is reported DONE. Halves the
@@ -123,6 +139,36 @@ class Config:
     # sets `env` more naturally than it sets `args`.
     sse_host: str = "127.0.0.1"
     sse_port: int = 8931
+    # --- loop convergence (1.16.0, D25) ------------------------------------
+    model_profile: str = MODEL_PROFILE_STANDARD
+    # 0 = the profile's default (DEFAULT_THINKING_STEPS). Negative = unlimited.
+    max_thinking_steps: int = 0
+    # Circuit breaker. Counted per plan, in this process, since the last milestone
+    # (finalize, human decision, task DONE/FAILED). Calls that actually waited on a
+    # human, or that arrive while the human has a request open, are never counted.
+    loop_breaker: bool = True
+    breaker_calls: int = 12
+    breaker_repeat: int = 3
+    breaker_error_streak: int = 4
+    # Recent DRAFTING plans whose goals are rewordings of one another (a model
+    # restarting the same plan at step 1) before the newest is halted.
+    breaker_respawn: int = 3
+    # A goal completed less than this many seconds ago is not planned again; the model
+    # is told to answer with the finished results instead. 0 = off.
+    replan_cooldown: int = 600
+
+    @property
+    def thinking_budget(self) -> int:
+        """Thinking steps per drafting round; 0 means unlimited."""
+        if self.max_thinking_steps < 0:
+            return 0
+        if self.max_thinking_steps > 0:
+            return self.max_thinking_steps
+        return DEFAULT_THINKING_STEPS.get(self.model_profile, 8)
+
+    @property
+    def reasoning_profile(self) -> bool:
+        return self.model_profile == MODEL_PROFILE_REASONING
 
     @classmethod
     def from_env(cls, state_dir_override: str | None = None) -> "Config":
@@ -144,12 +190,22 @@ class Config:
             approval_timeout=_env_int("PLANNING_MCP_APPROVAL_TIMEOUT", 900),
             approval_open_browser=_env_bool("PLANNING_MCP_APPROVAL_OPEN_BROWSER", True),
             approval_ttl=_env_int("PLANNING_MCP_APPROVAL_TTL", 1800),
-            max_active_plans=_env_int("PLANNING_MCP_MAX_ACTIVE_PLANS", 5),
+            max_active_plans=_env_int("PLANNING_MCP_MAX_ACTIVE_PLANS", 20),
             completion_approval=_env_bool("PLANNING_MCP_COMPLETION_APPROVAL", True),
             min_result_log=_env_int("PLANNING_MCP_MIN_RESULT_LOG", 8),
             auto_advance=_env_bool("PLANNING_MCP_AUTO_ADVANCE", True),
             sse_host=os.environ.get("PLANNING_MCP_SSE_HOST", "127.0.0.1"),
             sse_port=_env_int("PLANNING_MCP_SSE_PORT", 8931),
+            model_profile=_env_choice(
+                "PLANNING_MCP_MODEL_PROFILE", MODEL_PROFILES, MODEL_PROFILE_STANDARD
+            ),
+            max_thinking_steps=_env_int("PLANNING_MCP_MAX_THINKING_STEPS", 0),
+            loop_breaker=_env_bool("PLANNING_MCP_LOOP_BREAKER", True),
+            breaker_calls=_env_int("PLANNING_MCP_BREAKER_CALLS", 12),
+            breaker_repeat=_env_int("PLANNING_MCP_BREAKER_REPEAT", 3),
+            breaker_error_streak=_env_int("PLANNING_MCP_BREAKER_ERROR_STREAK", 4),
+            breaker_respawn=_env_int("PLANNING_MCP_BREAKER_RESPAWN", 3),
+            replan_cooldown=_env_int("PLANNING_MCP_REPLAN_COOLDOWN", 600),
         )
 
 

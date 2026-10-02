@@ -50,7 +50,12 @@ def build_protocol(config: Config, log=None) -> McpProtocol:
             )
     return McpProtocol(
         handlers,
-        build_tool_definitions(auto_advance=config.auto_advance),
+        build_tool_definitions(
+            auto_advance=config.auto_advance,
+            model_profile=config.model_profile,
+            approval_mode=config.approval_mode,
+            blocking=config.blocking_approval,
+        ),
         SERVER_NAME,
         SERVER_VERSION,
     )
@@ -96,6 +101,13 @@ def main(argv: list[str] | None = None) -> int:
             "PLANNING_MCP_BLOCKING_APPROVAL=false - the agent is only *asked* to stop and "
             "wait. A weak model may ignore that and keep executing."
         )
+
+    log.info(
+        "Model profile: %s (thinking budget %s steps, loop breaker %s)",
+        config.model_profile,
+        config.thinking_budget or "unlimited",
+        "on" if config.loop_breaker else "OFF",
+    )
 
     protocol = build_protocol(config, log=log)
 

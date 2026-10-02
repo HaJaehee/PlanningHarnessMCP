@@ -103,6 +103,34 @@ def render_completion_report(plan: Plan, plan_summary: str | None = None) -> str
     return "\n".join(lines)
 
 
+def render_halt_for_user(plan: Plan, reason: str, draft: list[str], on_page: bool) -> str:
+    """What the human reads when the circuit breaker has stopped an agent.
+
+    Says why it stopped, what the agent was last weighing, and what is on the table -
+    so the person can decide in one read whether the draft is good enough, whether the
+    agent needs a direction, or whether to stop.
+    """
+    lines = ["에이전트 반복 감지 - 이 계획을 일시 정지했습니다."]
+    if plan.goal:
+        lines.append(f"목표: {plan.goal}")
+    lines.append(f"멈춘 이유: {reason}")
+    thought = plan.last_thought().strip()
+    if thought:
+        lines.append(f"에이전트의 마지막 생각: {thought}")
+    if draft:
+        lines.append("")
+        lines.append("현재 초안:")
+        lines.extend(f"{i}. {title}" for i, title in enumerate(draft, start=1))
+    lines.append("")
+    if on_page:
+        choices = "[이 초안으로 승인] / [계속 진행] / [취소]" if draft else "[계속 진행] / [취소]"
+        lines.append(f"승인 페이지에서 {choices} 중 하나를 선택해 주십시오.")
+    else:
+        choices = "승인(이 초안 사용) / 계속 / 취소" if draft else "계속 / 취소"
+        lines.append(f"어떻게 진행할까요? ({choices}) 계속하실 경우 방향을 함께 알려 주셔도 됩니다.")
+    return "\n".join(lines)
+
+
 def render_plan_for_user(plan: Plan, plan_summary: str | None = None) -> str:
     """Pre-rendered approval block. The model only has to echo this string, which is the
     single most reliable operation a weak model can perform.

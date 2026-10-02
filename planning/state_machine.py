@@ -15,7 +15,51 @@ from .models import ErrorCode, NextAction, Plan, PlanStatus, TaskStatus
 # ---------------------------------------------------------------------------
 
 
+def _halt_action(plan: Plan) -> tuple[str, str]:
+    """What a model does while the circuit breaker holds its plan.
+
+    One instruction, no options, nothing to reconsider - the whole point of the halt is
+    that the next decision is not the model's. Which instruction depends only on whether
+    the human has been shown the halt yet, and on which channel they will answer in.
+    """
+    halt = plan.halt or {}
+    if not halt.get("asked"):
+        return (
+            NextAction.CALL_REQUEST_USER_APPROVAL.value,
+            "The server paused this plan because the same step kept repeating. Do not "
+            "retry the call you just made. Call request_user_approval with "
+            "decision='ASK_USER' - the user decides how to continue. Write nothing else.",
+        )
+    if halt.get("channel") == "chat":
+        return (
+            NextAction.STOP_AND_WAIT_FOR_USER.value,
+            "This plan is paused because a step kept repeating. Show display_to_user to "
+            "the user and end your turn. When they reply, report their choice with "
+            "request_user_approval: APPROVED (use the draft as it is), REVISE (continue - "
+            "put their words in user_comment) or REJECTED (cancel).",
+        )
+    return (
+        NextAction.STOP_AND_WAIT_FOR_USER.value,
+        "This plan is paused because a step kept repeating, and the user decides on the "
+        "approval page how it continues. Show display_to_user to the user and end your "
+        "turn. When the user writes to you again, call request_user_approval with "
+        "decision='ASK_USER' to pick up their decision.",
+    )
+
+
 def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
+    if code is ErrorCode.LOOP_HALTED:
+        if plan is not None and plan.halt:
+            return _halt_action(plan)
+        # A loop that never resolved to a plan (the same routing error over and over)
+        # has no plan to pause. The only safe instruction left is to hand back to the
+        # user rather than make the same call a fifth time.
+        return (
+            NextAction.STOP_AND_WAIT_FOR_USER.value,
+            "The server stopped this sequence because the same call kept failing. Do not "
+            "repeat it. Show display_to_user to the user and end your turn - the user "
+            "will tell you how to continue.",
+        )
     if code is ErrorCode.PLAN_NOT_APPROVED:
         return (
             NextAction.CALL_REQUEST_USER_APPROVAL.value,
@@ -23,6 +67,16 @@ def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
             "Call request_user_approval with decision='ASK_USER'.",
         )
     if code is ErrorCode.APPROVAL_PENDING:
+        if plan is not None and plan.halt:
+            # Waiting on a halt card. There is no plan_summary to repeat here, and
+            # telling a thinking model to send "the same plan_summary as before" when it
+            # never sent one is one more thing for it to puzzle over.
+            return (
+                NextAction.CALL_REQUEST_USER_APPROVAL.value,
+                "The user has not decided yet how this paused plan continues. Call "
+                "request_user_approval again at once with decision='ASK_USER'. Do nothing "
+                "else and write nothing meanwhile.",
+            )
         # Two callers share this code, and the instruction is the same for both: a wait
         # chunk that ended with the request still on screen, and a model that tried to
         # decide on the user's behalf while it was. Saying "no approval has been given"
@@ -208,11 +262,56 @@ def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
 
 
 def _status_action(plan: Plan | None) -> tuple[str, str]:
+    action, hint = _status_action_inner(plan)
+    # What the human said when they lifted a halt leads every hint until the plan next
+    # moves on. Only for the states where the model is doing the work - in a waiting
+    # state the human is the one acting.
+    if (
+        plan is not None
+        and plan.guidance
+        and not plan.halt
+        and plan.status in (PlanStatus.DRAFTING, PlanStatus.APPROVED, PlanStatus.IN_EXECUTION)
+    ):
+        hint = f'The user said: "{plan.guidance}". {hint}'
+    return action, hint
+
+
+def _drafting_hint(plan: Plan) -> str:
+    """Continue-or-finalize, with finalizing put first.
+
+    The old hint was a single instruction - "call plan_and_think again with
+    step_number=N" - on every thinking step, with no word that stopping was allowed. For
+    a model whose habit is to verify once more (D25), that made one more step the
+    cheapest continuation forever. The exit is now named first, the bar for using it is
+    stated ("it does not need to be perfect - the user reviews it"), and the remaining
+    budget is counted down.
+    """
+    nxt = plan.last_step_number() + 1
+    left = plan.thinking_steps_left()
+    if left is not None and left <= 1:
+        return (
+            "You have one thinking step left. Make it your final one: call plan_and_think "
+            "with need_more_thinking=false and your task_list. The plan does not need to "
+            "be perfect - the user reviews it before anything runs."
+        )
+    budget = f" ({left} thinking steps left)" if left is not None else ""
+    return (
+        "If your task breakdown is ready, call plan_and_think now with "
+        "need_more_thinking=false and task_list - it does not need to be perfect, the "
+        "user reviews it before anything runs. Otherwise call plan_and_think with "
+        f"step_number={nxt} and the same goal{budget}."
+    )
+
+
+def _status_action_inner(plan: Plan | None) -> tuple[str, str]:
     if plan is None or plan.status is PlanStatus.NONE:
         return (
             NextAction.CALL_PLAN_AND_THINK.value,
             "There is no active plan. Start one by calling plan_and_think with step_number=1.",
         )
+
+    if plan.halt:
+        return _halt_action(plan)
 
     status = plan.status
 
@@ -243,12 +342,7 @@ def _status_action(plan: Plan | None) -> tuple[str, str]:
                 "with need_more_thinking=false and "
                 f"task_updates=[{example}] - do NOT send task_list.{untouched}",
             )
-        nxt = plan.last_step_number() + 1
-        return (
-            NextAction.CALL_PLAN_AND_THINK.value,
-            f"Call plan_and_think again with step_number={nxt} and the same goal. When your "
-            "breakdown is complete, set need_more_thinking=false and send task_list.",
-        )
+        return NextAction.CALL_PLAN_AND_THINK.value, _drafting_hint(plan)
 
     if status is PlanStatus.AWAITING_APPROVAL:
         if plan.approval.requested_at and not plan.approval.decision:
@@ -399,6 +493,8 @@ def execution_guard(plan: Plan | None, autoapprove: bool = False) -> ErrorCode |
     """
     if plan is None:
         return ErrorCode.NO_ACTIVE_PLAN
+    if plan.halt:
+        return ErrorCode.LOOP_HALTED
     status = plan.status
     if status in (PlanStatus.APPROVED, PlanStatus.IN_EXECUTION):
         return None

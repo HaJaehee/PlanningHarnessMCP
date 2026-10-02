@@ -20,7 +20,13 @@ from typing import Any
 
 from .filelock import exclusive
 
-from .models import Plan, PlanStatus, TERMINAL_PLAN_STATUSES, now_iso  # noqa: F401
+from .models import (  # noqa: F401
+    Plan,
+    PlanStatus,
+    TERMINAL_PLAN_STATUSES,
+    now_iso,
+    seconds_since,
+)
 
 log = logging.getLogger("planning-mcp.store")
 
@@ -50,6 +56,23 @@ def title_key(title: str) -> str:
     is already stripped upstream by `leniency._clean_title`, so it never reaches here.
     """
     return _TITLE_COLLAPSE.sub(" ", (title or "").strip().strip(_GOAL_TRIM)).strip()
+
+
+# Character-bigram Jaccard at or above which two goals count as rewordings of one
+# another. Bigrams rather than words because Korean attaches particles to words
+# ("보고서를" / "보고서"), so whole-word overlap understates how alike two goals are.
+GOAL_FAMILY_SIMILARITY = 0.5
+
+
+def _goal_shingles(goal: str) -> set[str]:
+    text = re.sub(r"[\s" + re.escape(_GOAL_TRIM) + r"]+", "", (goal or "").lower())
+    return {text[i:i + 2] for i in range(len(text) - 1)} if len(text) > 1 else set()
+
+
+def _similarity(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
 
 
 STATE_FILENAME = "plan_state.json"
@@ -115,6 +138,45 @@ class State:
                 return plan
         return None
 
+    def recently_completed(self, goal: str, within_seconds: int) -> Plan | None:
+        """A plan with this goal that a human closed as COMPLETED moments ago.
+
+        The model that has just been told "write the final answer" and instead calls
+        plan_and_think with the same goal is not starting new work - it is following a
+        "plan before answering anything" rule into a second lap of the same plan (D25).
+        """
+        key = goal_key(goal)
+        if not key or within_seconds <= 0:
+            return None
+        recent = [
+            p for p in self.plans.values()
+            if p.status is PlanStatus.COMPLETED
+            and goal_key(p.goal) == key
+            and p.idle_seconds() < within_seconds
+        ]
+        return max(recent, key=lambda p: p.updated_at) if recent else None
+
+    def drafting_family(self, plan: Plan, within_seconds: int = 600) -> int:
+        """How many recent, still-drafting plans (this one included) share this goal.
+
+        "Share" means a rewording, not an exact match - an exact match would have routed
+        to the existing plan instead of creating one. A thinking model that reconsiders
+        its goal and restarts at step 1 produces exactly these: several DRAFTING plans
+        minutes apart, none ever finalized, whose goals differ by a few words.
+        """
+        mine = _goal_shingles(plan.goal)
+        if not mine:
+            return 1
+        family = 1
+        for other in self.plans.values():
+            if other.plan_id == plan.plan_id or other.status is not PlanStatus.DRAFTING:
+                continue
+            if seconds_since(other.created_at) >= within_seconds:
+                continue
+            if _similarity(mine, _goal_shingles(other.goal)) >= GOAL_FAMILY_SIMILARITY:
+                family += 1
+        return family
+
     def plan_for_former_goal(self, goal: str) -> Plan | None:
         """Route by a goal this plan has since revised away from.
 
@@ -160,6 +222,10 @@ class Store:
         # walked straight into the critical section - which silently disabled the
         # serialization that exists to stop concurrent writers losing a plan.
         self._local = threading.local()
+        # Merged into every audit record - today just the connected client (zed, goose,
+        # anythingllm, ...). Reproduction on the corporate model is impossible from
+        # here, so the audit log is the only place a field loop can be attributed.
+        self.audit_defaults: dict[str, Any] = {}
         self._ensure_dir()
         self._write_lock_file()
 
@@ -321,7 +387,7 @@ class Store:
     def audit(self, event: str, **fields: Any) -> None:
         """Append-only evidence log. Written after the state file: a duplicate line is
         harmless, a lost state write is not."""
-        record = {"ts": now_iso(), "event": event, **fields}
+        record = {"ts": now_iso(), "event": event, **self.audit_defaults, **fields}
         try:
             with open(self.audit_path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")

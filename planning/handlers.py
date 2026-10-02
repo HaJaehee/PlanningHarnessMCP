@@ -10,14 +10,17 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import re
 import threading
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 import time
 
 from .approval import (
     PHASE_COMPLETION,
+    PHASE_HALT,
     PHASE_PLAN,
     SCOPE_PLAN,
     SCOPE_TASKS,
@@ -33,6 +36,16 @@ from .config import (
     Config,
 )
 from .leniency import UNMATCHED_TITLES_KEY, normalize
+from .loopguard import (
+    NO_PLAN,
+    REASON_ERROR_STREAK,
+    REASON_NO_PROGRESS,
+    REASON_REPEATED_CALL,
+    REASON_RESPAWN,
+    REASON_THINKING_BUDGET,
+    LoopGuard,
+    call_signature,
+)
 from .models import (
     Approval,
     Decision,
@@ -45,7 +58,13 @@ from .models import (
     ThinkingStep,
     now_iso,
 )
-from .responses import build, error, render_completion_report, render_plan_for_user
+from .responses import (
+    build,
+    error,
+    render_completion_report,
+    render_halt_for_user,
+    render_plan_for_user,
+)
 from .state_machine import can_start_task, execution_guard
 from .store import State, Store, goal_key, title_key
 
@@ -68,7 +87,7 @@ AGENT_HEARTBEAT_SEC = 10.0
 
 @dataclass
 class WaitOutcome:
-    """Why `_wait_for_human` returned, and how much of the human's budget is left.
+    """Why `_wait_on` returned, and how much of the human's budget is left.
 
     A dataclass rather than a tuple for the same reason `Verdict` is one: this grew from
     a bare `Verdict | None`, and the next field added to a tuple would be silently
@@ -79,6 +98,65 @@ class WaitOutcome:
     reason: str = WAIT_GAVE_UP
     waited: float = 0.0
     remaining: float = 0.0
+
+
+@dataclass
+class _CallCtx:
+    """Per-call facts the circuit breaker needs, kept off every handler's signature.
+
+    Thread-local because the stdio transport runs calls on worker threads: two calls in
+    flight must not see each other's "this call waited on a human".
+    """
+
+    progress_token: Any = None
+    notifier: Any = None
+    cancel_event: Any = None
+    # The call spent real time waiting on a human (or collected their decision). Such a
+    # call is the harness working as designed, never a loop.
+    waited: bool = False
+    # Plans that moved during this call - a finalize, a decision, a finished task.
+    milestones: set = field(default_factory=set)
+    # A trip decided inside a handler (a respawn, a thinking budget spent with no draft)
+    # that _after_call carries out once the handler has returned: (plan_id, reason, n).
+    trip: tuple | None = None
+
+
+# Words a model uses when it goes back over what it already decided. Counted into the
+# audit log only - never acted on, because "actually" is also how people write. Their
+# trend per client is the only field evidence there is for a loop inside one thinking
+# block, which the server cannot see directly (D25).
+_RECONSIDER = re.compile(
+    r"\b(?:wait|reconsider\w*|re-?check\w*|double[- ]check\w*|actually|hmm+|let me re\w*|"
+    r"on second thought)\b|다시 생각|재검토|잠깐|다시 확인|다시 보",
+    re.IGNORECASE,
+)
+
+
+def reconsider_markers(text: str) -> int:
+    return len(_RECONSIDER.findall(text or ""))
+
+
+# A private key on a response, read and removed by _after_call: "this re-plan was turned
+# away". Never reaches the model.
+_LOOP_SIGNAL = "_loop_signal"
+REPLAN_REDIRECTED = "REPLAN_REDIRECTED"
+
+
+# Why the breaker stopped an agent, worded for the human who has to decide what next.
+def _halt_reason_text(reason: str, count: int, detail: str = "") -> str:
+    if reason == REASON_REPEATED_CALL:
+        return f"같은 호출이 {count}회 연속 반복되었습니다."
+    if reason == REASON_ERROR_STREAK and detail == REPLAN_REDIRECTED:
+        return f"이미 정해진 계획을 다시 세우려는 호출이 {count}회 연속 이어졌습니다."
+    if reason == REASON_ERROR_STREAK:
+        return f"같은 오류({detail})가 {count}회 연속 발생했습니다."
+    if reason == REASON_NO_PROGRESS:
+        return f"진척 없이 도구 호출이 {count}회 이어졌습니다."
+    if reason == REASON_RESPAWN:
+        return f"같은 목표를 표현만 바꾼 새 계획이 {count}개째 만들어졌습니다."
+    if reason == REASON_THINKING_BUDGET:
+        return f"생각 단계 {count}단계를 모두 썼지만 확정할 태스크 목록을 보내지 않았습니다."
+    return "같은 단계가 반복되었습니다."
 
 
 # Phrases that assert completion without evidencing it. Length alone cannot separate
@@ -132,10 +210,51 @@ class PlanningHandlers:
             )
         else:
             self.approval_ui = None
+        self.loop = LoopGuard(
+            calls=config.breaker_calls,
+            repeat=config.breaker_repeat,
+            error_streak=config.breaker_error_streak,
+            respawn=config.breaker_respawn,
+            enabled=config.loop_breaker,
+        )
+        self._tls = threading.local()
+        # When each plan last answered a call, for the gap_sec telemetry: the time the
+        # model spent between our response and its next call is the closest the server
+        # can get to measuring a thinking block it cannot see.
+        self._last_answered: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Entry point
     # ------------------------------------------------------------------
+    def _ctx(self) -> _CallCtx:
+        ctx = getattr(self._tls, "ctx", None)
+        if ctx is None:
+            ctx = _CallCtx()
+            self._tls.ctx = ctx
+        return ctx
+
+    def note_client(self, client_info: Any, profile_note: bool = True) -> None:
+        """Record which host connected (zed, goose, anythingllm, ...).
+
+        Reproducing a field loop on the corporate model is impossible from here, so the
+        audit log is the only evidence there will ever be - and it is useless unless each
+        line says which agent host produced it.
+        """
+        info = client_info if isinstance(client_info, dict) else {}
+        name = str(info.get("name") or "unknown")[:80]
+        version = str(info.get("version") or "")[:40]
+        self.store.audit_defaults["client"] = f"{name} {version}".strip()
+        if profile_note:
+            self.store.audit(
+                "client_connected",
+                client_name=name,
+                client_version=version,
+                model_profile=self.config.model_profile,
+                thinking_budget=self.config.thinking_budget,
+                loop_breaker=self.config.loop_breaker,
+                approval_mode=self.config.approval_mode,
+            )
+
     def dispatch(
         self,
         tool_name: str,
@@ -145,6 +264,7 @@ class PlanningHandlers:
         cancel_event: Any = None,
     ) -> dict[str, Any]:
         notes: list[str] = []
+        self._tls.ctx = _CallCtx(progress_token, notifier, cancel_event)
         try:
             # normalize() lives inside the guard on purpose: were it to raise on some
             # unforeseen input it would otherwise escape as a raw JSON-RPC error, when a
@@ -152,26 +272,15 @@ class PlanningHandlers:
             clean, notes = normalize(tool_name, raw_args)
             # Serialized against other threads AND other server processes on the same
             # state directory. The blocking approval wait explicitly gives this up
-            # (see _wait_for_human) so one pending approval cannot freeze every other
+            # (see _wait_on) so one pending approval cannot freeze every other
             # session for the length of the wait.
             with self.store.transaction():
                 # A human may have clicked approve after the previous call timed out.
                 # Collect that first so every handler below sees the true state.
                 self._apply_late_decision()
-                if tool_name == "plan_and_think":
-                    return self._plan_and_think(clean, notes)
-                if tool_name == "request_user_approval":
-                    return self._request_user_approval(
-                        clean,
-                        notes,
-                        progress_token=progress_token,
-                        notifier=notifier,
-                        cancel_event=cancel_event,
-                    )
-                if tool_name == "update_task_progress":
-                    return self._update_task_progress(clean, notes)
-                if tool_name == "get_current_plan":
-                    return self._get_current_plan(clean, notes)
+                response = self._route(tool_name, clean, notes)
+                if response is not None:
+                    return self._after_call(tool_name, clean, response, notes)
         except Exception as exc:  # noqa: BLE001 - nothing may escape to the model
             log.exception("Handler %s failed", tool_name)
             self.store.audit("internal_error", tool=tool_name, error=type(exc).__name__)
@@ -187,6 +296,290 @@ class PlanningHandlers:
             ErrorCode.INTERNAL_ERROR,
             f"Unknown tool '{tool_name}'.",
             notes=notes,
+        )
+
+    def _route(self, tool_name: str, clean: dict[str, Any], notes: list[str]) -> Any:
+        if tool_name == "plan_and_think":
+            return self._plan_and_think(clean, notes)
+        if tool_name == "request_user_approval":
+            ctx = self._ctx()
+            return self._request_user_approval(
+                clean,
+                notes,
+                progress_token=ctx.progress_token,
+                notifier=ctx.notifier,
+                cancel_event=ctx.cancel_event,
+            )
+        if tool_name == "update_task_progress":
+            return self._update_task_progress(clean, notes)
+        if tool_name == "get_current_plan":
+            return self._get_current_plan(clean, notes)
+        return None
+
+    # ------------------------------------------------------------------
+    # Circuit breaker (1.16.0, D25)
+    # ------------------------------------------------------------------
+    def _milestone(self, plan: Plan | None) -> None:
+        """This plan just moved. Its loop counters start over.
+
+        The human's guidance from a lifted halt has done its job once the plan moves on,
+        so it is retired here too - the next hint should not keep quoting it.
+        """
+        if plan is None:
+            return
+        self._ctx().milestones.add(plan.plan_id)
+        self.loop.milestone(plan.plan_id)
+        plan.guidance = None
+
+    def _request_fingerprint(self, plan: Plan) -> str:
+        """The fingerprint of whatever request this plan has on the page right now.
+
+        For a halt that is not just the plan: two halts of an unchanged plan are two
+        different questions, and a decision on the first must not answer the second.
+        """
+        base = self._fingerprint(plan)
+        if not plan.halt:
+            return base
+        payload = "\x00".join(
+            [base, str(plan.halt.get("id", ""))] + plan.halt_draft()
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+    def _live_request(self, plan: Plan | None) -> dict[str, Any] | None:
+        """The undecided request a human is looking at for this exact plan version."""
+        if plan is None or self.approval_ui is None or self.config.autoapprove:
+            return None
+        try:
+            return self.approval_ui.pending_request(
+                plan.plan_id, self._request_fingerprint(plan)
+            )
+        except Exception:  # noqa: BLE001 - an unreadable queue must not fail a call
+            log.exception("Could not read the approval queue")
+            return None
+
+    @staticmethod
+    def _redirected(response: dict[str, Any]) -> dict[str, Any]:
+        """Mark a re-plan the server turned away ("your plan is recorded", "already
+        running", "already completed").
+
+        Such a reply is ok:true - it is not the model's fault the first time - but each
+        one after the server has said "do not plan again" is a loop in plain sight. The
+        breaker counts the signal like an error code, so a run of them trips at the
+        error-streak limit rather than at the much higher no-progress limit. Removed in
+        _after_call before the model sees the response.
+        """
+        response[_LOOP_SIGNAL] = REPLAN_REDIRECTED
+        return response
+
+    def _after_call(
+        self, tool: str, args: dict[str, Any], response: dict[str, Any], notes: list[str]
+    ) -> dict[str, Any]:
+        """Count this call against its plan and stop the plan if it is going in circles."""
+        ctx = self._ctx()
+        signal = response.pop(_LOOP_SIGNAL, None)
+        pid = response.get("plan_id")
+        if pid:
+            self._last_answered[pid] = time.monotonic()
+        if ctx.trip is not None:
+            trip_pid, reason, count = ctx.trip
+            ctx.trip = None
+            halted = self._trip(trip_pid, reason, count, "", notes)
+            if halted is not None:
+                return halted
+        if not self.config.loop_breaker:
+            return response
+
+        signature = call_signature(tool, args)
+        code = response.get("error_code") or signal
+        if not pid:
+            # A loop that never reaches a plan - the same routing error over and over -
+            # has nothing to pause. It still has to end.
+            tripped = self.loop.observe(NO_PLAN, signature, code, counted=not ctx.waited)
+            return response if tripped is None else self._stop_without_halt(
+                NO_PLAN, tool, code, tripped, notes
+            )
+
+        state = self.store.load()
+        plan = state.plans.get(pid)
+        if plan is None or plan.halt:
+            return response
+        if plan.status in TERMINAL_PLAN_STATUSES:
+            # A finished plan cannot be paused, but a model re-planning it over and over
+            # (after ANSWER_USER) is still a loop and still has to end.
+            tripped = self.loop.observe(pid, signature, code, counted=not ctx.waited)
+            return response if tripped is None else self._stop_without_halt(
+                pid, tool, code, tripped, notes
+            )
+        # Never counted: a call that waited on a human, one that moved the plan, and one
+        # made while a human has a request for this plan open in front of them.
+        counted = not (
+            ctx.waited or pid in ctx.milestones or self._live_request(plan) is not None
+        )
+        tripped = self.loop.observe(pid, signature, code, counted=counted)
+        if tripped is None:
+            return response
+        reason, count = tripped
+        halted = self._trip(pid, reason, count, code or "", notes)
+        return halted if halted is not None else response
+
+    def _stop_without_halt(
+        self, key: str, tool: str, code: str | None, tripped: tuple[str, int],
+        notes: list[str],
+    ) -> dict[str, Any]:
+        """End a loop that has no live plan to pause: hand back to the user in chat."""
+        self.loop.forget(key)
+        reason, count = tripped
+        self.store.audit(
+            "loop_stopped_without_plan", plan_id=key or None, reason=reason,
+            count=count, error_code=code, tool=tool,
+        )
+        return build(
+            None,
+            ok=False,
+            error_code=ErrorCode.LOOP_HALTED,
+            message="The same call kept repeating, so the server stopped this sequence.",
+            notes=notes,
+            display_to_user=(
+                "에이전트가 같은 호출을 반복해 진행을 멈췄습니다. "
+                f"({_halt_reason_text(reason, count, code or '')}) "
+                "어떻게 진행할지 알려 주십시오."
+            ),
+        )
+
+    def _trip(
+        self, plan_id: str, reason: str, count: int, detail: str, notes: list[str]
+    ) -> dict[str, Any] | None:
+        """Stop a plan and hand the decision to a human. None = nothing to stop."""
+        state = self.store.load()
+        plan = state.plans.get(plan_id)
+        if plan is None or plan.status in TERMINAL_PLAN_STATUSES:
+            return None
+        self.loop.forget(plan_id)
+        plan.halt = {
+            "id": uuid.uuid4().hex[:12],
+            "reason": reason,
+            "count": count,
+            "detail": detail,
+            "text": _halt_reason_text(reason, count, detail),
+            "at": now_iso(),
+            "asked": False,
+            "channel": "page" if self.approval_ui is not None else "chat",
+        }
+        plan.touch()
+        self.store.save(state)
+        self.store.audit(
+            "loop_halted",
+            plan_id=plan.plan_id,
+            reason=reason,
+            count=count,
+            detail=detail or None,
+            plan_status=plan.plan_status,
+            last_thought=plan.last_thought() or None,
+        )
+        log.warning("Loop breaker paused %s: %s (%s)", plan.plan_id, reason, count)
+        return self._ask_halt(state, plan, notes)
+
+    def _ask_halt(self, state: State, plan: Plan, notes: list[str]) -> dict[str, Any]:
+        """Put a halted plan in front of the human, and wait like an approval does."""
+        halt = plan.halt or {}
+        draft = plan.halt_draft()
+        on_page = self.approval_ui is not None
+        display = render_halt_for_user(plan, halt.get("text", ""), draft, on_page)
+        approval_url = self.approval_ui.url if on_page else None
+        if approval_url:
+            display = f"{display}\n\n현재 페이지: {approval_url.rstrip('/')}"
+        if not halt.get("asked"):
+            halt["asked"] = True
+            plan.halt = halt
+            plan.touch()
+            self.store.save(state)
+        if not on_page:
+            return build(
+                plan,
+                ok=False,
+                error_code=ErrorCode.LOOP_HALTED,
+                message="This plan is paused. The user decides how it continues.",
+                notes=notes,
+                display_to_user=display,
+            )
+        summary = halt.get("text", "")
+        thought = plan.last_thought().strip()
+        if thought:
+            summary = f"{summary}\n에이전트의 마지막 생각: {thought}"
+        tasks = (
+            [{"task_id": i, "title": t, "status": TaskStatus.PENDING.value}
+             for i, t in enumerate(draft, start=1)]
+            if plan.status is PlanStatus.DRAFTING
+            else plan.tasks_brief()
+        )
+        fingerprint = self._request_fingerprint(plan)
+        request_id = self.approval_ui.open_request(
+            plan.plan_id, plan.goal, display, tasks, fingerprint, PHASE_HALT, summary,
+            draft=bool(draft),
+        )
+        if request_id is None:
+            return self._wait_unavailable(plan, notes, display)
+        outcome = self._wait_on(request_id, plan, notes)
+        return self._settle(
+            plan.plan_id, fingerprint, outcome, notes, approval_url, display,
+            refusal=ErrorCode.LOOP_HALTED,
+        )
+
+    def _mutate_halt(self, plan: Plan, decision: str, comment: str | None) -> str:
+        """Apply the human's answer to a halt. Returns what happened, for the audit."""
+        draft = plan.halt_draft()
+        plan.halt = None
+        self.loop.forget(plan.plan_id)
+        self._ctx().milestones.add(plan.plan_id)
+        if decision == Decision.REJECTED.value:
+            self._mutate_rejected(plan, comment)
+            return "cancelled"
+        if decision == Decision.APPROVED.value and draft:
+            # The human read this draft on the halt card and approved it as it stands.
+            if plan.status is PlanStatus.DRAFTING:
+                if plan.tasks:
+                    plan.superseded_tasks.append([t.to_dict() for t in plan.tasks])
+                plan.tasks = [
+                    Task(task_id=i, title=title) for i, title in enumerate(draft, start=1)
+                ]
+                plan.draft_tasks = []
+                plan.pending_revision = None
+                plan.set_status(PlanStatus.AWAITING_APPROVAL)
+            plan.approval.requested_at = now_iso()
+            self._mutate_approved(plan, comment)
+            return "draft_approved"
+        # Continue - with a direction, if the human gave one.
+        plan.guidance = (comment or "").strip() or None
+        if plan.status is PlanStatus.DRAFTING:
+            plan.step_budget_end = 0  # a fresh thinking budget
+        plan.touch()
+        self._withdraw_approval_request(plan)
+        return "resumed"
+
+    def _resolve_halt(
+        self, state: State, plan: Plan, decision: str, comment: str | None,
+        notes: list[str],
+    ) -> dict[str, Any]:
+        action = self._mutate_halt(plan, decision, comment)
+        guidance = plan.guidance
+        self.store.save(state)
+        self.store.audit(
+            "halt_resolved", plan_id=plan.plan_id, action=action, comment=comment or None
+        )
+        if action == "cancelled":
+            message = "The user cancelled this plan. Nothing more will run."
+        elif action == "draft_approved":
+            message = "The user approved your draft plan as it stands. Execution is unlocked."
+        else:
+            message = "The user let you continue." + (
+                f' They said: "{guidance}". Follow that.' if guidance else ""
+            )
+        return build(
+            plan,
+            message=message,
+            notes=notes,
+            qualify=len(state.active_plans()) > 1,
+            progress=plan.progress() if plan.tasks else None,
         )
 
     # ---- decision application (shared by the blocking and late paths) -------
@@ -217,7 +610,9 @@ class PlanningHandlers:
         if self.config.autoapprove:
             return False  # testing escape hatch only; server.py logs a loud warning
         try:
-            return self.approval_ui.has_pending(plan.plan_id, self._fingerprint(plan))
+            return self.approval_ui.has_pending(
+                plan.plan_id, self._request_fingerprint(plan)
+            )
         except Exception:  # noqa: BLE001 - an unreadable queue must not block a decision
             log.exception("Could not read the approval queue; allowing the decision")
             return False
@@ -241,6 +636,8 @@ class PlanningHandlers:
         plan.clear_revision_marks()
         plan.pending_revision = None
         plan.rework_from_completion = False
+        plan.draft_tasks = []
+        self._milestone(plan)
         # Approving a completion report closes the plan; approving a draft unlocks it -
         # unless the draft is already finished work carried through a redraft, in which
         # case unlocking it would let the model answer without the completion check ever
@@ -257,6 +654,8 @@ class PlanningHandlers:
         plan.approval.decision = Decision.REJECTED.value
         plan.approval.decided_at = now_iso()
         plan.approval.user_comment = comment or ""
+        plan.halt = None
+        self._milestone(plan)
         plan.set_status(PlanStatus.CANCELLED)
         self._withdraw_approval_request(plan)
 
@@ -318,6 +717,7 @@ class PlanningHandlers:
         """
         plan.approval.revision_count += 1
         plan.approval.user_comment = comment or ""
+        self._milestone(plan)
         # The completion report is withdrawn rather than answered: once the rework lands,
         # a fresh one has to be asked for and verified.
         plan.approval.reset_request()
@@ -362,6 +762,11 @@ class PlanningHandlers:
         plan.approval.revision_count += 1
         plan.approval.user_comment = comment or ""
         plan.approval.reset_request()
+        self._milestone(plan)
+        # A new drafting round: a fresh thinking budget, and no stale draft from the round
+        # the human just sent back.
+        plan.step_budget_end = 0
+        plan.draft_tasks = []
         # Markers from a previous round would otherwise read as complaints about this one.
         plan.clear_revision_marks()
         targets = (
@@ -387,7 +792,7 @@ class PlanningHandlers:
         # their own, so checking only "the active plan" would strand the others.
         for candidate in state.active_plans():
             taken = self.approval_ui.take_decision(
-                candidate.plan_id, self._fingerprint(candidate)
+                candidate.plan_id, self._request_fingerprint(candidate)
             )
             if taken is not None:
                 plan = candidate
@@ -395,6 +800,15 @@ class PlanningHandlers:
         else:
             return
         verdict: Verdict = taken
+        if plan.halt:
+            # The fingerprint matched the halt card, so this answers the halt.
+            action = self._mutate_halt(plan, verdict.decision, verdict.comment)
+            self.store.save(state)
+            self.store.audit(
+                "late_decision_applied", plan_id=plan.plan_id, decision=verdict.decision,
+                comment=verdict.comment, halt_action=action,
+            )
+            return
         if verdict.decision == Decision.APPROVED.value:
             self._mutate_approved(plan, verdict.comment)
         elif verdict.decision == Decision.REJECTED.value:
@@ -546,6 +960,31 @@ class PlanningHandlers:
         if plan is not None and plan.status in TERMINAL_PLAN_STATUSES:
             plan = None  # a finished plan is never resurrected; this starts a new one
 
+        # The same goal a human closed as COMPLETED moments ago. A model told "write the
+        # final answer" that plans instead is not starting new work: it is obeying a
+        # "plan before answering anything" rule into a second lap of the same plan, and
+        # each lap ends in exactly the same place (D25). Hand it the finished results.
+        if plan is None and goal and not revised_goal:
+            finished = state.recently_completed(goal, self.config.replan_cooldown)
+            if finished is not None:
+                self.store.audit(
+                    "replan_after_completion_suppressed",
+                    plan_id=finished.plan_id, goal=goal,
+                    seconds_since=int(finished.idle_seconds()),
+                )
+                return self._redirected(build(
+                    finished,
+                    message=(
+                        "This exact goal was completed a moment ago and the user "
+                        "confirmed it. Do not plan it again: answer the user now with the "
+                        "results below. If the user really asked for it to be done again, "
+                        "start a new plan whose goal says so."
+                    ),
+                    notes=notes,
+                    tasks=finished.tasks_brief(),
+                    progress=finished.progress(),
+                ))
+
         # The requested feature: no exact goal match, but the model believes it is
         # continuing. Rather than silently create a second plan (goal drift = fork),
         # return the active goals and let the model pick the exact one.
@@ -558,6 +997,21 @@ class PlanningHandlers:
                 notes=notes,
                 active_plans=self._plan_directory(state),
             )
+
+        if plan is not None and plan.halt:
+            return self._halted(state, plan, notes, agent_note=thought)
+
+        # A human is looking at this plan right now - approving it, checking its
+        # completion report, or deciding a halt. Before 1.16 a call here quietly put the
+        # plan back to DRAFTING and withdrew the request (D25): a thinking model that
+        # "reconsidered" while waiting pulled the plan out from under the human, then
+        # re-submitted it, round after round. Now the call simply waits on the human
+        # like the approval call does, and what the model wanted to reconsider is shown
+        # on the card instead of acted on.
+        if plan is not None:
+            held = self._hold_for_human(state, plan, notes, agent_note=thought)
+            if held is not None:
+                return held
 
         if self._expire_stale_approval(state, plan):
             notes.append(
@@ -605,7 +1059,7 @@ class PlanningHandlers:
                     "the remaining tasks still serve the corrected goal - if they do "
                     "not, re-plan and call request_user_approval again."
                 )
-            return build(
+            return self._redirected(build(
                 plan,
                 message=(
                     "This plan is already approved and running. Continue it instead of "
@@ -617,7 +1071,56 @@ class PlanningHandlers:
                 tasks=plan.tasks_brief(),
                 progress=plan.progress(),
                 next_task=plan.next_task_brief(),
+            ))
+
+        # A finished task list is not reopened by the model's own second thoughts. Only
+        # the human's "request changes" sends a plan back to DRAFTING; a user correcting
+        # the goal itself (revised_goal) is the one exception, since that changes what
+        # the tasks are for. Before 1.16 these calls reset the plan to DRAFTING - the
+        # finalize -> reconsider -> finalize lap a thinking model could run forever, and,
+        # after the last task, the lap that deleted every result_log (D25/D26).
+        if (
+            plan is not None
+            and plan.status is PlanStatus.AWAITING_APPROVAL
+            and not goal_was_revised
+        ):
+            asked = bool(plan.approval.requested_at and not plan.approval.decision)
+            self.store.audit(
+                "replan_redirected", plan_id=plan.plan_id, plan_status=plan.plan_status,
+                asked=asked, reconsider=reconsider_markers(thought) or None,
             )
+            return self._redirected(build(
+                plan,
+                message=(
+                    "The user has already been shown this plan and has not answered yet. "
+                    "Do not plan again - wait for their reply."
+                    if asked
+                    else "Your plan is recorded and complete. It does not need more "
+                    "checking: the user reviews it before anything runs."
+                ),
+                notes=notes,
+                qualify=len(state.active_plans()) > 1,
+                tasks=plan.tasks_brief(),
+            ))
+        if plan is not None and plan.status is PlanStatus.AWAITING_COMPLETION:
+            asked = bool(plan.approval.requested_at and not plan.approval.decision)
+            self.store.audit(
+                "replan_redirected", plan_id=plan.plan_id, plan_status=plan.plan_status,
+                asked=asked, reconsider=reconsider_markers(thought) or None,
+            )
+            return self._redirected(build(
+                plan,
+                message=(
+                    "Every task in this plan is already DONE and the user has been shown "
+                    "the completion report. Do not plan again - wait for their reply."
+                    if asked
+                    else "Every task in this plan is already DONE. Do not plan again: "
+                    "report completion so the user can check the results."
+                ),
+                notes=notes,
+                qualify=len(state.active_plans()) > 1,
+                progress=plan.progress(),
+            ))
 
         if plan is None and len(state.active_plans()) >= self.config.max_active_plans:
             return error(
@@ -650,7 +1153,13 @@ class PlanningHandlers:
             notes.append("No goal was sent; derived one from your thought. Send 'goal' next time.")
         if not thought:
             thought = "(no thought text provided)"
-            notes.append("No thought text was sent. Send one short reasoning sentence per step.")
+            # The reasoning profile makes `thought` optional on purpose: that model has
+            # already reasoned, and nagging it to write its reasoning out again is the
+            # double thinking the profile exists to remove.
+            if not self.config.reasoning_profile:
+                notes.append(
+                    "No thought text was sent. Send one short reasoning sentence per step."
+                )
 
         # Start or reuse the plan.
         if plan is None:
@@ -659,9 +1168,20 @@ class PlanningHandlers:
             state.plans[plan_id] = plan
             state.active_plan_id = plan_id
             self.store.audit("plan_created", plan_id=plan_id, goal=goal)
+            # A model that reconsiders its goal and starts over at step 1 with new
+            # wording forks a fresh plan each time - a loop spread across plan_ids, where
+            # no per-plan counter can see it. Judged from the shared state, not from this
+            # process, so separate conversations with unrelated goals never add up.
+            family = state.drafting_family(plan, within_seconds=600)
+            if self.loop.respawn_tripped(family):
+                self._ctx().trip = (plan_id, REASON_RESPAWN, family)
         else:
             if plan.status is PlanStatus.BLOCKED:
                 self.store.audit("replan_after_failure", plan_id=plan.plan_id)
+            if plan.status is not PlanStatus.DRAFTING:
+                # Re-entering DRAFTING opens a new round with a fresh thinking budget.
+                plan.step_budget_end = 0
+                plan.draft_tasks = []
             plan.set_status(PlanStatus.DRAFTING)
             plan.approval.reset_request()
             state.active_plan_id = plan.plan_id
@@ -698,18 +1218,63 @@ class PlanningHandlers:
         plan.thinking_steps.append(
             ThinkingStep(step_number=step_number, thought=thought, revises_step=revises_step)
         )
+        last = self._last_answered.get(plan.plan_id)
         self.store.audit(
             "thinking_step",
             plan_id=plan.plan_id,
             step_number=step_number,
             revises_step=revises_step,
             thought=thought,
+            # Field evidence for D25, which cannot be reproduced from here: how long the
+            # model was away (a proxy for a thinking block the server cannot see) and how
+            # often it talks itself back into reconsidering.
+            gap_sec=round(time.monotonic() - last, 1) if last is not None else None,
+            reconsider=reconsider_markers(thought),
+            thought_chars=len(thought),
+            profile=self.config.model_profile,
         )
 
         need_more = args.get("need_more_thinking")
         if need_more is None:
-            need_more = True
-            notes.append("need_more_thinking was missing; assumed true (still planning).")
+            if self.config.reasoning_profile and (
+                args.get("task_list") or args.get("task_updates")
+            ):
+                # The reasoning profile records a plan in one call. A task list with no
+                # verdict on need_more_thinking is that one call.
+                need_more = False
+            else:
+                need_more = True
+                notes.append("need_more_thinking was missing; assumed true (still planning).")
+
+        # --- thinking budget --------------------------------------------------
+        # The round's budget is fixed on its first step. A model whose habit is one
+        # more check (D25) is not refused when it runs out - a refusal is one more thing
+        # for it to reconsider. The server instead does what the model would not: it
+        # takes the latest task list as final and hands it to the human, whose review
+        # is the verification the model kept trying to do on its own.
+        budget = self.config.thinking_budget
+        if budget > 0 and plan.step_budget_end <= 0:
+            plan.step_budget_end = (step_number - 1) + budget
+        if need_more and args.get("task_list"):
+            plan.draft_tasks = list(args["task_list"])[: self.config.max_tasks]
+        auto_submitted = False
+        if need_more and budget > 0 and step_number >= plan.step_budget_end:
+            if plan.draft_tasks:
+                need_more = False
+                auto_submitted = True
+                notes.append(
+                    f"You have used all {budget} thinking steps, so your latest task_list "
+                    "is now the plan. It does not need more checking - the user reviews "
+                    "it before anything runs."
+                )
+                self.store.audit(
+                    "auto_finalized", plan_id=plan.plan_id, steps=step_number,
+                    budget=budget, tasks=len(plan.draft_tasks),
+                )
+            else:
+                # Nothing to submit. Record the step, and let the breaker hand this to
+                # a human (see _after_call).
+                self._ctx().trip = (plan.plan_id, REASON_THINKING_BUDGET, budget)
 
         # --- still thinking --------------------------------------------------
         if need_more:
@@ -719,7 +1284,9 @@ class PlanningHandlers:
                 plan,
                 recorded_step=step_number,
                 total_steps=plan.total_steps,
-                tasks=plan.tasks_brief(),
+                thinking_steps_left=plan.thinking_steps_left(),
+                draft_saved=len(plan.draft_tasks) or None,
+                tasks=plan.tasks_brief() or None,
                 notes=notes,
                 qualify=len(state.active_plans()) > 1,
                 goal=plan.goal if goal_was_revised else None,
@@ -730,6 +1297,15 @@ class PlanningHandlers:
         task_list = args.get("task_list") or []
         task_updates = args.get("task_updates") or []
         targets = plan.revision_targets()
+        if not task_list and not task_updates and plan.draft_tasks:
+            # Called final without the list but with one already on record: that list
+            # is the answer. Refusing (MISSING_TASK_LIST) would send a model that has
+            # finally stopped back into the loop it just left.
+            task_list = list(plan.draft_tasks)
+            if not auto_submitted:
+                notes.append(
+                    "No task_list was sent, so your latest draft task_list was used."
+                )
 
         # A model told to rewrite one flagged task frequently sends only the new wording -
         # task_updates=["the rewritten task"] - because that is what it was asked for.
@@ -845,10 +1421,26 @@ class PlanningHandlers:
                 )
         plan.set_status(PlanStatus.AWAITING_APPROVAL)
         plan.approval.reset_request()
+        plan.draft_tasks = []
+        self._milestone(plan)
         self.store.save(state)
         self.store.audit(
-            "plan_finalized", plan_id=plan.plan_id, tasks=[t.title for t in plan.tasks]
+            "plan_finalized", plan_id=plan.plan_id, tasks=[t.title for t in plan.tasks],
+            auto=auto_submitted or None,
         )
+
+        if auto_submitted and self.approval_ui is not None:
+            # Straight to the human. The model was not going to call this plan final on
+            # its own, so it cannot be trusted to ask for approval either - and the page
+            # is where the verification it kept attempting actually happens.
+            budget_note = (
+                f"에이전트가 생각 단계 {budget}단계를 모두 써서, 서버가 마지막 초안을 그대로 "
+                "제출했습니다."
+            )
+            last_thought = plan.last_thought().strip()
+            if last_thought:
+                budget_note += f"\n에이전트의 마지막 생각: {last_thought}"
+            return self._ask_user(state, plan, {"plan_summary": budget_note}, notes)
 
         return build(
             plan,
@@ -859,8 +1451,9 @@ class PlanningHandlers:
             qualify=len(state.active_plans()) > 1,
             goal=plan.goal if goal_was_revised else None,
             message=(
-                f"Plan created with {len(plan.tasks)} tasks. "
-                "Execution is locked until the user approves."
+                f"Plan created with {len(plan.tasks)} tasks. It does not need more "
+                "checking - the user reviews it next. Execution is locked until they "
+                "approve."
             ),
         )
 
@@ -980,8 +1573,10 @@ class PlanningHandlers:
             )
 
         plan.pending_revision = None
+        plan.draft_tasks = []
         plan.set_status(PlanStatus.AWAITING_APPROVAL)
         plan.approval.reset_request()
+        self._milestone(plan)
         self.store.save(state)
         self.store.audit(
             "tasks_revised",
@@ -1039,6 +1634,29 @@ class PlanningHandlers:
 
         if plan is None:
             return error(plan, ErrorCode.NO_ACTIVE_PLAN, "No plan exists yet.", notes=notes)
+
+        if plan.halt:
+            # The circuit breaker holds this plan. Asking puts the halt in front of the
+            # human (and waits, like any approval); a decision is only accepted when no
+            # page holds the question - otherwise it did not come from the human (D20).
+            if decision is Decision.ASK_USER:
+                return self._ask_halt(state, plan, notes)
+            if self._decision_is_the_models_own(plan):
+                self.store.audit(
+                    "self_approval_refused", plan_id=plan.plan_id, decision=decision.value,
+                    halted=True,
+                )
+                return error(
+                    plan,
+                    ErrorCode.APPROVAL_PENDING,
+                    f"'{decision.value}' did not come from the user - the pause is still "
+                    "open on the approval page.",
+                    notes=notes,
+                    approval_url=self.approval_ui.url if self.approval_ui else None,
+                )
+            return self._resolve_halt(
+                state, plan, decision.value, args.get("user_comment"), notes
+            )
 
         if decision is Decision.ASK_USER:
             return self._ask_user(
@@ -1151,69 +1769,22 @@ class PlanningHandlers:
         if approval_url:
             display = f"{display}\n\n현재 페이지: {approval_url.rstrip('/')}"
 
+        # Asking a human is progress, whatever they then answer: the plan has left the
+        # model's hands.
+        self._milestone(plan)
+
         if self.approval_ui is not None:
             fingerprint = self._fingerprint(plan)
-            waited_plan_id = plan.plan_id
             phase = PHASE_COMPLETION if completion_phase else PHASE_PLAN
-            outcome = self._wait_for_human(
-                plan, display, progress_token, notifier, notes, phase, plan_summary,
-                cancel_event=cancel_event,
+            request_id = self.approval_ui.open_request(
+                plan.plan_id, plan.goal, display, plan.tasks_brief(),
+                fingerprint, phase, plan_summary,
             )
-            decided = outcome.verdict
-            if decided is not None:
-                # The transaction was released while waiting, so another session may
-                # have moved things on. Re-read THIS plan by id - resolving "the active
-                # plan" would pick up a concurrent session's plan instead - and verify
-                # it is still what the human saw.
-                state = self.store.load()
-                plan = state.plans.get(waited_plan_id)
-                if plan is None or self._fingerprint(plan) != fingerprint:
-                    self.store.audit(
-                        "approval_discarded_plan_changed",
-                        plan_id=plan.plan_id if plan else None,
-                        decision=decided.decision,
-                    )
-                    notes.append(
-                        "The plan changed while the user was deciding, so that decision "
-                        "was discarded. Show the current plan and ask again."
-                    )
-                    return build(
-                        plan,
-                        notes=notes,
-                        tasks=plan.tasks_brief() if plan else None,
-                        approval_url=approval_url,
-                    )
-                # Reuse the already-tested transitions so the blocking path and the
-                # two-phase path can never diverge.
-                forwarded = {"user_comment": decided.comment} if decided.comment else {}
-                if decided.decision == Decision.APPROVED.value:
-                    return self._approve(state, plan, forwarded, notes)
-                if decided.decision == Decision.REJECTED.value:
-                    return self._reject(state, plan, forwarded, notes)
-                if decided.decision == Decision.REVISE.value:
-                    return self._revise(state, plan, forwarded, notes, verdict=decided)
-
-            if outcome.reason == WAIT_PENDING:
-                # The slice ended, not the question. Everything the model might mistake
-                # for a verdict is deliberately withheld: no tasks, no display_to_user,
-                # no message. A weak model that reads an ok:true payload full of plan
-                # detail as "approved, proceed" is the failure this whole gate exists to
-                # prevent, so the only thing on offer here is an instruction to wait.
-                return error(
-                    plan,
-                    ErrorCode.APPROVAL_PENDING,
-                    "Still waiting for the user to decide on the approval page.",
-                    notes=notes,
-                    approval_url=approval_url,
-                    waited_seconds=int(outcome.waited),
-                    remaining_seconds=int(outcome.remaining),
-                )
-
-            notes.append(
-                "No human decision arrived before the wait expired. The plan is still "
-                "LOCKED. Show the plan to the user and stop; do not execute anything. "
-                "The request is still open on the approval page - if the user decides "
-                "later, it will be applied on the next tool call."
+            if request_id is None:
+                return self._wait_unavailable(plan, notes, display)
+            outcome = self._wait_on(request_id, plan, notes)
+            return self._settle(
+                plan.plan_id, fingerprint, outcome, notes, approval_url, display
             )
 
         return build(
@@ -1224,17 +1795,186 @@ class PlanningHandlers:
             approval_url=approval_url,
         )
 
-    def _wait_for_human(
+    def _wait_unavailable(
+        self, plan: Plan, notes: list[str], display: str
+    ) -> dict[str, Any]:
+        """The request could not be published, so nothing is holding the agent."""
+        # Degrading quietly would remove the hard pause without anyone noticing - the
+        # worst possible failure for a safety gate. Make it audible instead.
+        log.error(
+            "APPROVAL UI UNAVAILABLE - the hard pause is OFF for this call. "
+            "The model is only *asked* to stop."
+        )
+        self.store.audit("approval_ui_unavailable", plan_id=plan.plan_id)
+        notes.append(
+            "WARNING: the approval UI could not start, so this plan was NOT hard-paused. "
+            "Do not execute anything. Show the plan to the user and stop."
+        )
+        return build(
+            plan,
+            tasks=plan.tasks_brief(),
+            notes=notes,
+            display_to_user=display,
+        )
+
+    def _hold_for_human(
+        self, state: State, plan: Plan, notes: list[str], agent_note: str = ""
+    ) -> dict[str, Any] | None:
+        """If a human is deciding about this plan right now, wait on them. Else None.
+
+        One rule for every tool: while the human has a request open for a plan, any call
+        about that plan waits on the human, exactly as the approval call itself does. It
+        is the physical pause applied to the stray call - the model that "reconsiders"
+        mid-approval, or reaches for update_task_progress before anyone said yes - and it
+        paces such a model at one call per wait slice instead of letting it spin.
+        """
+        entry = self._live_request(plan)
+        if entry is None:
+            return None
+        note = (agent_note or "").strip()
+        if note and note != "(no thought text provided)":
+            try:
+                self.approval_ui.set_agent_note(str(entry.get("id")), note)
+            except Exception:  # noqa: BLE001 - a lost note must never fail the call
+                log.debug("Could not attach the agent note to %s", plan.plan_id)
+        self.store.audit(
+            "call_held_for_human",
+            plan_id=plan.plan_id,
+            plan_status=plan.plan_status,
+            phase=entry.get("phase"),
+            agent_note=bool(note) or None,
+            reconsider=reconsider_markers(note) or None,
+        )
+        fingerprint = self._request_fingerprint(plan)
+        # If the wait ends with nobody having decided, the stray call still did nothing
+        # - and must say so with a refusal, not an ok:true a weak model could read as
+        # "started".
+        if plan.halt:
+            refusal = ErrorCode.LOOP_HALTED
+        elif plan.status is PlanStatus.AWAITING_COMPLETION:
+            refusal = ErrorCode.COMPLETION_PENDING
+        else:
+            refusal = ErrorCode.PLAN_NOT_APPROVED
+        outcome = self._wait_on(str(entry.get("id")), plan, notes)
+        return self._settle(
+            plan.plan_id,
+            fingerprint,
+            outcome,
+            notes,
+            self.approval_ui.url,
+            str(entry.get("display") or ""),
+            refusal=refusal,
+        )
+
+    def _halted(
+        self, state: State, plan: Plan, notes: list[str], agent_note: str = ""
+    ) -> dict[str, Any]:
+        """A call on a plan the circuit breaker holds. It waits if the halt is on the
+        page; otherwise it is refused - only the human can lift a halt."""
+        held = self._hold_for_human(state, plan, notes, agent_note=agent_note)
+        if held is not None:
+            return held
+        return error(
+            plan,
+            ErrorCode.LOOP_HALTED,
+            "This plan is paused because a step kept repeating. Only the user can "
+            "resume it.",
+            notes=notes,
+        )
+
+    def _settle(
         self,
-        plan: Plan,
-        display: str,
-        progress_token: Any,
-        notifier: Any,
+        plan_id: str,
+        fingerprint: str,
+        outcome: WaitOutcome,
         notes: list[str],
-        phase: str = PHASE_PLAN,
-        summary: str = "",
-        cancel_event: Any = None,
-    ) -> WaitOutcome:
+        approval_url: str | None,
+        display: str,
+        refusal: ErrorCode | None = None,
+    ) -> dict[str, Any]:
+        """Turn the end of a wait into the response, for every kind of request.
+
+        `refusal` is set for a call that was held rather than asked (see
+        _hold_for_human): when nobody decided, it reports that code instead of ok:true.
+        """
+        state = self.store.load()
+        plan = state.plans.get(plan_id)
+        decided = outcome.verdict
+        if decided is not None:
+            # The transaction was released while waiting, so another session may have
+            # moved things on. Re-read THIS plan by id - resolving "the active plan"
+            # would pick up a concurrent session's plan instead - and verify it is still
+            # what the human saw.
+            if plan is None or self._request_fingerprint(plan) != fingerprint:
+                self.store.audit(
+                    "approval_discarded_plan_changed",
+                    plan_id=plan.plan_id if plan else None,
+                    decision=decided.decision,
+                )
+                notes.append(
+                    "The plan changed while the user was deciding, so that decision "
+                    "was discarded. Show the current plan and ask again."
+                )
+                return build(
+                    plan,
+                    notes=notes,
+                    tasks=plan.tasks_brief() if plan else None,
+                    approval_url=approval_url,
+                )
+            if plan.halt:
+                return self._resolve_halt(
+                    state, plan, decided.decision, decided.comment, notes
+                )
+            # Reuse the already-tested transitions so the blocking path and the
+            # two-phase path can never diverge.
+            forwarded = {"user_comment": decided.comment} if decided.comment else {}
+            if decided.decision == Decision.APPROVED.value:
+                return self._approve(state, plan, forwarded, notes)
+            if decided.decision == Decision.REJECTED.value:
+                return self._reject(state, plan, forwarded, notes)
+            if decided.decision == Decision.REVISE.value:
+                return self._revise(state, plan, forwarded, notes, verdict=decided)
+
+        if outcome.reason == WAIT_PENDING:
+            # The slice ended, not the question. Everything the model might mistake for
+            # a verdict is deliberately withheld: no tasks, no display_to_user, no
+            # message. A weak model that reads an ok:true payload full of plan detail as
+            # "approved, proceed" is the failure this whole gate exists to prevent, so
+            # the only thing on offer here is an instruction to wait.
+            return error(
+                plan,
+                ErrorCode.APPROVAL_PENDING,
+                "Still waiting for the user to decide on the approval page.",
+                notes=notes,
+                approval_url=approval_url,
+                waited_seconds=int(outcome.waited),
+                remaining_seconds=int(outcome.remaining),
+            )
+
+        notes.append(
+            "No human decision arrived before the wait expired. The plan is still "
+            "LOCKED. Show the plan to the user and stop; do not execute anything. "
+            "The request is still open on the approval page - if the user decides "
+            "later, it will be applied on the next tool call."
+        )
+        if refusal is not None:
+            return error(
+                plan,
+                refusal,
+                "The user has not decided yet, so this call did nothing.",
+                notes=notes,
+                display_to_user=display or None,
+                approval_url=approval_url,
+            )
+        return build(
+            plan,
+            tasks=plan.tasks_brief() if plan else None,
+            notes=notes,
+            display_to_user=display,
+            approval_url=approval_url,
+        )
+
+    def _wait_on(self, request_id: str, plan: Plan, notes: list[str]) -> WaitOutcome:
         """Hold this tool call while a human decides.
 
         This is what actually stops the agent: the client's loop waits synchronously for
@@ -1247,25 +1987,11 @@ class PlanningHandlers:
         listening, and the model is told to come straight back. The request itself stays
         on the page throughout: it belongs to the human, not to any one tool call.
         """
-        can_heartbeat = progress_token is not None and notifier is not None
-
-        request_id = self.approval_ui.open_request(
-            plan.plan_id, plan.goal, display, plan.tasks_brief(),
-            self._fingerprint(plan), phase, summary,
+        ctx = self._ctx()
+        progress_token, notifier, cancel_event = (
+            ctx.progress_token, ctx.notifier, ctx.cancel_event
         )
-        if request_id is None:
-            # Degrading quietly would remove the hard pause without anyone noticing -
-            # the worst possible failure for a safety gate. Make it audible instead.
-            log.error(
-                "APPROVAL UI UNAVAILABLE - the hard pause is OFF for this call. "
-                "The model is only *asked* to stop."
-            )
-            self.store.audit("approval_ui_unavailable", plan_id=plan.plan_id)
-            notes.append(
-                "WARNING: the approval UI could not start, so this plan was NOT hard-paused. "
-                "Do not execute anything. Show the plan to the user and stop."
-            )
-            return WaitOutcome(reason=WAIT_UNAVAILABLE)
+        can_heartbeat = progress_token is not None and notifier is not None
 
         # Measured from when the request first appeared, not from now: a chunked wait is
         # many calls (and, after a restart, many processes) against one budget.
@@ -1331,6 +2057,11 @@ class PlanningHandlers:
         waited = time.monotonic() - started
         total_waited = already_waited + waited
         remaining = max(0.0, self.config.approval_timeout - total_waited)
+        # A call that genuinely waited on a person, or brought back their decision, is
+        # the harness working as designed. The circuit breaker must never count it -
+        # a chunked wait repeats the very same call twenty times on purpose.
+        if decided is not None or waited >= 1.0:
+            ctx.waited = True
 
         if decided is not None:
             self.store.audit(
@@ -1629,6 +2360,14 @@ class PlanningHandlers:
         plan = self._resolve_plan(state, args.get("plan_id"))
         if plan is self._AMBIGUOUS:
             return self._ambiguous(state, notes)
+        if plan is not None and plan.halt:
+            return self._halted(state, plan, notes)
+        if plan is not None:
+            # Reaching for execution while the human is still deciding: wait on them
+            # instead of bouncing off PLAN_NOT_APPROVED as fast as the model can retry.
+            held = self._hold_for_human(state, plan, notes)
+            if held is not None:
+                return held
         if self._expire_stale_approval(state, plan):
             self.store.audit("execution_blocked", plan_id=plan.plan_id, reason="APPROVAL_EXPIRED")
             return error(
@@ -1818,6 +2557,7 @@ class PlanningHandlers:
         task.status = TaskStatus.DONE.value
         task.finished_at = now_iso()
         task.result_log = evidence
+        self._milestone(plan)
 
         if plan.all_done():
             if self.config.completion_approval:
@@ -1931,6 +2671,7 @@ class PlanningHandlers:
         task.status = TaskStatus.FAILED.value
         task.finished_at = now_iso()
         task.result_log = args.get("result_log") or task.result_log
+        self._milestone(plan)
         plan.set_status(PlanStatus.BLOCKED)
         self.store.save(state)
         self.store.audit(
@@ -2043,6 +2784,17 @@ class PlanningHandlers:
                 "revision_count": plan.approval.revision_count,
                 "user_comment": plan.approval.user_comment,
             },
+            # Recovery must explain a pause, or a model re-reading its plan sees nothing
+            # wrong and retries the very call that was stopped.
+            halted=(
+                {"reason": plan.halt.get("text"), "since": plan.halt.get("at")}
+                if plan.halt
+                else None
+            ),
+            draft_tasks=plan.draft_tasks or None,
+            thinking_steps_left=plan.thinking_steps_left()
+            if plan.status is PlanStatus.DRAFTING
+            else None,
             notes=notes,
         )
 

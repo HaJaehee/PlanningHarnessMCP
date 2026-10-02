@@ -12,35 +12,89 @@ from typing import Any
 
 from .models import Decision, TaskStatus
 
-PLAN_AND_THINK_DESCRIPTION = """STEP 1 - MANDATORY FIRST TOOL.
-You MUST call this tool before answering ANY user request, even simple-looking ones.
-Use it to think one step at a time and to write down the task breakdown.
+# The first line every profile shares. "Plan before answering ANY request" used to sit
+# here, and it is the rule a thinking model obeyed into a loop (D25): after the last
+# task the server says ANSWER_USER, the rule says plan first, and the model resolves the
+# conflict by planning the same goal again. A new request starts a plan; an answer the
+# server asks for is not a new request.
+_WHEN_TO_PLAN = (
+    "Call this first for each NEW user request. When a response says next_action = "
+    "ANSWER_USER, write the answer instead - that is not a new request."
+)
+
+PLAN_AND_THINK_DESCRIPTION = f"""STEP 1 - PLAN BEFORE YOU ACT.
+{_WHEN_TO_PLAN}
 
 HOW TO USE:
-- Call it once per thinking step. Start at step_number = 1.
-- Keep calling with need_more_thinking = true until your plan is complete.
-- On your FINAL thinking step, set need_more_thinking = false AND provide task_list.
-- To correct an earlier step, set revises_step to that step number.
+- One call per thinking step, starting at step_number = 1. Send the same goal each time.
+- When your task breakdown is ready, send need_more_thinking = false with task_list.
+  It does not need to be perfect: the user reviews it before anything runs.
+- Each response says how many thinking steps are left. When none are left, the server
+  sends your latest task_list to the user as it stands.
 
 IF THE USER COMMENTED ON PARTICULAR TASKS:
-The server will tell you so and name them. Then send task_updates instead of task_list,
-rewriting ONLY those tasks. Every other task was already accepted - leave it alone.
+The server names them. Send task_updates instead of task_list, rewriting only those
+tasks. Every other task was already accepted - leave it alone.
 
-DO NOT execute anything, DO NOT answer the user while using this tool."""
+Do not execute anything or answer the user while planning."""
 
-REQUEST_USER_APPROVAL_DESCRIPTION = """STEP 2 - MANDATORY HUMAN APPROVAL GATE.
-The plan is LOCKED until the user approves it. You cannot skip this tool.
+# For a model that already reasons inside its own thinking block. Asking it to think a
+# second time, out loud, one step per call - and inviting it to revise steps and raise
+# its step count - is what turned its habit of checking once more into an endless loop.
+# It records the result of the thinking it has already done, once, and the human's
+# review takes the place of the verification it would otherwise keep repeating.
+PLAN_AND_THINK_DESCRIPTION_REASONING = f"""STEP 1 - RECORD YOUR PLAN.
+{_WHEN_TO_PLAN}
 
-USE IN TWO PHASES:
-Phase A - ASK: call with decision = "ASK_USER" and a plan_summary.
-          Then STOP. Print the plan to the user and wait. Say nothing else.
-Phase B - REPORT: after the user replies in chat, call this tool AGAIN with
-          decision = "APPROVED"  (user said yes / ok / proceed / 승인)
-          decision = "REJECTED"  (user said no / cancel / stop / 취소)
-          decision = "REVISE"    (user asked for changes) + put the requested
-                                 change into user_comment.
+You have already reasoned about the request. Record the result in ONE call:
+goal + task_list, with need_more_thinking = false.
 
-NEVER guess the user's answer. NEVER call APPROVED unless the user actually said so."""
+Do not re-check the plan here. The user reviews it on the approval page before
+anything runs - that review is the verification step.
+
+If the user commented on particular tasks, the server names them: send task_updates
+instead of task_list, rewriting only those tasks."""
+
+# request_user_approval reads differently in each approval mode, and a description that
+# describes the wrong one is a contradiction the model has to reason its way out of.
+# Before 1.16 there was one text for all of them: "ASK_USER, then STOP" and "after the
+# user replies in chat, report APPROVED", while the default chunked mode's responses
+# said "call again at once, write nothing" and refused any APPROVED the model sent. A
+# thinking model weighs the two against each other on every call.
+_APPROVAL_COMMON = (
+    "Use the same call after the last task is DONE, so the user can check the results."
+)
+
+REQUEST_USER_APPROVAL_DESCRIPTION = f"""STEP 2 - USER APPROVAL.
+Call with decision = "ASK_USER" and a short plan_summary. The plan appears on the
+user's approval page and this call waits while they decide.
+- error_code APPROVAL_PENDING means the user is still deciding: call again at once,
+  the same way, and write nothing in between.
+- When the user decides, plan_status and next_action in the response tell you the
+  result. Follow them.
+- If the response contains display_to_user, show it to the user and end your turn.
+{_APPROVAL_COMMON}
+Only the user decides. Never send APPROVED, REJECTED or REVISE yourself."""
+
+REQUEST_USER_APPROVAL_DESCRIPTION_RETURN = f"""STEP 2 - USER APPROVAL.
+Call with decision = "ASK_USER" and a short plan_summary. The plan appears on the
+user's approval page. Show display_to_user to the user and end your turn.
+When the user writes to you again, call this tool again with decision = "ASK_USER":
+that collects their decision. Then follow next_action.
+{_APPROVAL_COMMON}
+Only the user decides. Never send APPROVED, REJECTED or REVISE yourself."""
+
+# No approval page at all (PLANNING_MCP_BLOCKING_APPROVAL=false): the user answers in
+# chat, so here - and only here - the model reports what they said.
+REQUEST_USER_APPROVAL_DESCRIPTION_CHAT = f"""STEP 2 - USER APPROVAL.
+Ask: call with decision = "ASK_USER" and a short plan_summary. Show display_to_user to
+the user and end your turn.
+Report: when the user replies, call this tool again with
+  decision = "APPROVED" (they said yes / 승인),
+  decision = "REJECTED" (they said no / 취소), or
+  decision = "REVISE"   (they asked for changes - put their words in user_comment).
+{_APPROVAL_COMMON}
+Report only what the user actually said."""
 
 UPDATE_TASK_PROGRESS_DESCRIPTION = """STEP 3 - EXECUTION TRACKING.
 Handle exactly ONE task per call.
@@ -144,7 +198,7 @@ PLAN_AND_THINK_SCHEMA: dict[str, Any] = {
         "thought": {
             "type": "string",
             "description": (
-                "Your reasoning for THIS step only. One idea per call. Example: 'Step 2: I must "
+                "Your reasoning for this step, in one or two sentences. Example: 'I must "
                 "first locate the Q3 report file before I can summarize it.'"
             ),
         },
@@ -160,15 +214,14 @@ PLAN_AND_THINK_SCHEMA: dict[str, Any] = {
             "type": "integer",
             "minimum": 1,
             "description": (
-                "Your current estimate of how many thinking steps are needed. You may raise this "
-                "number later. Example: 4"
+                "How many thinking steps you expect to need in total. Example: 3"
             ),
         },
         "need_more_thinking": {
             "type": "boolean",
             "description": (
-                "true = you will call plan_and_think again. false = this is your LAST thinking "
-                "step and task_list is now final. Example: true"
+                "false = task_list is ready (it does not need to be perfect - the user "
+                "reviews it). true = you need another thinking step. Example: false"
             ),
         },
         "task_list": {
@@ -214,8 +267,8 @@ PLAN_AND_THINK_SCHEMA: dict[str, Any] = {
             "type": "integer",
             "minimum": 1,
             "description": (
-                "OPTIONAL. Only set this when you are CORRECTING an earlier thinking step. Set it "
-                "to the step_number you are replacing. Example: 2"
+                "OPTIONAL - normally left out. The step_number of an earlier step that this "
+                "step replaces. Example: 2"
             ),
         },
         "plan_id": _PLAN_ID_PARAM,
@@ -223,21 +276,57 @@ PLAN_AND_THINK_SCHEMA: dict[str, Any] = {
     "required": ["goal", "thought", "step_number", "total_steps", "need_more_thinking"],
 }
 
+# The reasoning profile advertises only what a one-call plan needs. step_number,
+# total_steps and revises_step are left out on purpose - each is an invitation to plan
+# about planning - but the server still accepts them, so a model that sends them anyway
+# is not refused.
+PLAN_AND_THINK_SCHEMA_REASONING: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "goal": PLAN_AND_THINK_SCHEMA["properties"]["goal"],
+        "revised_goal": PLAN_AND_THINK_SCHEMA["properties"]["revised_goal"],
+        "task_list": PLAN_AND_THINK_SCHEMA["properties"]["task_list"],
+        "need_more_thinking": {
+            "type": "boolean",
+            "description": (
+                "Send false. Use true only if you genuinely cannot list the tasks yet: you "
+                "get one more call, and after it your latest task_list goes to the user as "
+                "it stands. Example: false"
+            ),
+        },
+        "thought": {
+            "type": "string",
+            "description": (
+                "OPTIONAL. One sentence on why this plan. Example: 'The report has to be "
+                "found before it can be summarized.'"
+            ),
+        },
+        "task_updates": PLAN_AND_THINK_SCHEMA["properties"]["task_updates"],
+        "plan_id": _PLAN_ID_PARAM,
+    },
+    "required": ["goal", "need_more_thinking"],
+}
+
+
+def _decision_param(chat: bool) -> dict[str, Any]:
+    if chat:
+        text = (
+            "ASK_USER = ask the user. APPROVED / REJECTED / REVISE = report what the user "
+            'replied in chat - never what you expect. Example: "ASK_USER"'
+        )
+    else:
+        text = (
+            "Send ASK_USER. The user answers on the approval page, and the server refuses "
+            "APPROVED / REJECTED / REVISE from you while their question is open. "
+            'Example: "ASK_USER"'
+        )
+    return {"type": "string", "enum": [d.value for d in Decision], "description": text}
+
+
 REQUEST_USER_APPROVAL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "decision": {
-            "type": "string",
-            "enum": [d.value for d in Decision],
-            "description": (
-                "ASK_USER = ask the human, and the ONLY value you may choose yourself. "
-                "APPROVED / REJECTED / REVISE report what the human ACTUALLY replied - never "
-                "what you expect or would prefer; the server refuses them while their question "
-                "is still open. If a call comes back with error_code APPROVAL_PENDING the human "
-                "has not answered yet: call again immediately with ASK_USER and the same "
-                'plan_summary, and write nothing in between. Example: "ASK_USER"'
-            ),
-        },
+        "decision": _decision_param(chat=False),
         "plan_summary": {
             "type": "string",
             "description": (
@@ -315,23 +404,42 @@ GET_CURRENT_PLAN_SCHEMA: dict[str, Any] = {
 }
 
 
-def build_tool_definitions(auto_advance: bool = True) -> list[dict[str, Any]]:
+def build_tool_definitions(
+    auto_advance: bool = True,
+    model_profile: str = "standard",
+    approval_mode: str = "chunked",
+    blocking: bool = True,
+) -> list[dict[str, Any]]:
     """The advertised tool list for a given configuration.
 
-    Only update_task_progress varies: whether the server starts the next task itself
-    changes what the model is supposed to send, and a description that contradicts the
-    running server is worse for a weak model than a slightly long one.
+    Every description says only what is true of the running server. One that describes a
+    different mode - STOP here, call again there - is a contradiction the model has to
+    reason its way out of, and for a thinking model that reasoning is the loop (D25).
     """
+    reasoning = model_profile == "reasoning"
+    if not blocking:
+        approval_text, chat = REQUEST_USER_APPROVAL_DESCRIPTION_CHAT, True
+    elif approval_mode == "return":
+        approval_text, chat = REQUEST_USER_APPROVAL_DESCRIPTION_RETURN, False
+    else:
+        approval_text, chat = REQUEST_USER_APPROVAL_DESCRIPTION, False
+    approval_schema = dict(REQUEST_USER_APPROVAL_SCHEMA)
+    approval_schema["properties"] = dict(REQUEST_USER_APPROVAL_SCHEMA["properties"])
+    approval_schema["properties"]["decision"] = _decision_param(chat=chat)
     return [
         {
             "name": "plan_and_think",
-            "description": PLAN_AND_THINK_DESCRIPTION,
-            "inputSchema": PLAN_AND_THINK_SCHEMA,
+            "description": PLAN_AND_THINK_DESCRIPTION_REASONING
+            if reasoning
+            else PLAN_AND_THINK_DESCRIPTION,
+            "inputSchema": PLAN_AND_THINK_SCHEMA_REASONING
+            if reasoning
+            else PLAN_AND_THINK_SCHEMA,
         },
         {
             "name": "request_user_approval",
-            "description": REQUEST_USER_APPROVAL_DESCRIPTION,
-            "inputSchema": REQUEST_USER_APPROVAL_SCHEMA,
+            "description": approval_text,
+            "inputSchema": approval_schema,
         },
         {
             "name": "update_task_progress",

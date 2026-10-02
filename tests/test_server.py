@@ -282,14 +282,26 @@ class TestGuardRails(HandlerTestCase):
         res = self.think(step_number=2)
         self.assertEqual(res["recorded_step"], 3)
 
-    def test_revises_step_supersedes_and_reverts_to_drafting(self):
+    def test_revises_step_supersedes_while_drafting(self):
         self.think(step_number=1)
-        self.think(step_number=2, need_more_thinking=False, task_list=["a", "b"])
+        self.think(step_number=2)
         res = self.think(step_number=3, revises_step=2)
         self.assertTrue(res["ok"])
         self.assertEqual(res["plan_status"], "DRAFTING")
         current = self.h.dispatch("get_current_plan", {"plan_id": "current"})
         self.assertIn("superseded_steps", current)
+
+    def test_revises_step_does_not_reopen_a_finished_plan(self):
+        """1.16 (D25): a finalized task list is not reopened by the model's second
+        thoughts - before, this put the plan back to DRAFTING, the lap a thinking model
+        could run forever. Only the human's 'request changes' reopens it."""
+        self.think(step_number=1)
+        self.think(step_number=2, need_more_thinking=False, task_list=["a", "b"])
+        res = self.think(step_number=3, revises_step=2)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["plan_status"], "AWAITING_APPROVAL")
+        self.assertEqual(res["next_action"], "CALL_REQUEST_USER_APPROVAL")
+        self.assertEqual([t["title"] for t in res["tasks"]], ["a", "b"])
 
     def test_revises_step_out_of_range(self):
         self.think(step_number=1)
@@ -584,12 +596,17 @@ class TestTaskCompletionEnforcement(HandlerTestCase):
         return self.approve_flow([f"작업{i}" for i in range(1, n + 1)])
 
     def test_batch_marking_is_refused(self):
-        """DONE fired at every task in a row must not complete anything."""
+        """DONE fired at every task in a row must not complete anything.
+
+        Since 1.16 the fourth refusal in a row is also a loop, so the circuit breaker
+        pauses the plan on it - either way nothing is marked done.
+        """
         self.approved()
         for tid in (1, 2, 3, 4):
             res = self.h.dispatch("update_task_progress", {"task_id": tid, "status": "DONE"})
             self.assertFalse(res["ok"], f"task {tid} accepted a bare DONE")
-            self.assertEqual(res["error_code"], "TASK_NOT_STARTED")
+            expected = "LOOP_HALTED" if tid == 4 else "TASK_NOT_STARTED"
+            self.assertEqual(res["error_code"], expected)
         cur = self.h.dispatch("get_current_plan", {"plan_id": "current"})
         self.assertEqual(cur["progress"], "0/4 done")
         self.assertNotEqual(cur["plan_status"], "COMPLETED")
@@ -606,6 +623,12 @@ class TestTaskCompletionEnforcement(HandlerTestCase):
         self.assertIn(res["error_code"], ("TASK_NOT_STARTED", "TASK_OUT_OF_ORDER"))
 
     def test_evidence_free_logs_are_refused(self):
+        # The evidence filter on its own: seven refusals in a row would otherwise trip
+        # the circuit breaker, which has its own tests (TestLoopBreaker).
+        self.h = PlanningHandlers(
+            self.store, Config(state_dir=self.state_dir, blocking_approval=False,
+                               loop_breaker=False)
+        )
         self.approved(1)
         self.h.dispatch("update_task_progress", {"task_id": 1, "status": "IN_PROGRESS"})
         for bad in ("", "완료", "done", "OK", "성공적으로 완료했습니다", "작업1", "  완료  "):
@@ -1228,7 +1251,7 @@ class FakeApprovalUI:
         self.live: dict | None = None
 
     def open_request(self, plan_id, goal, display, tasks, fingerprint="", phase="PLAN",
-                     summary=""):
+                     summary="", draft=False):
         if not self.available:
             return None
         # Mirrors the real store's reuse rule: re-asking about an unchanged plan is the
@@ -1245,20 +1268,29 @@ class FakeApprovalUI:
             "id": f"req{len(self.opened)}", "plan_id": plan_id, "fingerprint": fingerprint,
             "decision": self.decision, "comment": self.comment, "phase": phase,
             "tasks": tasks, "display": display, "goal": goal, "summary": summary,
-            "created_at": time.time(),
+            "draft": draft, "created_at": time.time(),
         }
         self.opened.append(record)
         self.live = record
         return record["id"]
 
     def has_pending(self, plan_id, fingerprint):
+        return self.pending_request(plan_id, fingerprint) is not None
+
+    def pending_request(self, plan_id, fingerprint):
         r = self.live
-        return bool(
+        if (
             r is not None
             and r["plan_id"] == plan_id
             and r["fingerprint"] == fingerprint
             and not r.get("decision")
-        )
+        ):
+            return r
+        return None
+
+    def set_agent_note(self, request_id, note):
+        if self.live is not None and self.live["id"] == request_id:
+            self.live["agent_note"] = note
 
     def request_age(self, request_id):
         r = self.live
@@ -1565,9 +1597,12 @@ class TestBlockingApproval(HandlerTestCase):
         h = self.blocking(ui, timeout=1)
         self.draft(h)
         self.ask(h)
-        h.dispatch("plan_and_think", {
-            "goal": "블로킹 승인 검증", "thought": "t", "step_number": 2, "total_steps": 2,
-            "need_more_thinking": False, "task_list": ["전혀 다른 작업"]})
+        # Changed underneath the page by another session. (Since 1.16 the model's own
+        # plan_and_think can no longer do this while the request is open - it waits on
+        # the human instead; see TestLoopRegressions.)
+        state = h.store.load()
+        state.active_plan.tasks[0].title = "전혀 다른 작업"
+        h.store.save(state)
         ui.resolve("APPROVED", "")     # 사람이 본 적 없는 계획에 대한 승인
         res = h.dispatch("get_current_plan", {"plan_id": "current"})
         self.assertEqual(res["plan_status"], "AWAITING_APPROVAL")
@@ -2225,9 +2260,13 @@ class TestMultiPlanEdges(HandlerTestCase):
         first = self.think(goal="같은 목표", need_more_thinking=False, task_list=["x"])
         second = self.think(goal="같은 목표", need_more_thinking=False, task_list=["y"])
         self.assertEqual(first["plan_id"], second["plan_id"])
+        # 1.16 (D25): the second call is a re-think of a finalized plan, so it is
+        # redirected to approval rather than allowed to replace the list the human is
+        # about to be shown.
         raw = json.loads((self.state_dir / "plan_state.json").read_text(encoding="utf-8"))
         plan = raw["plans"][first["plan_id"]]
-        self.assertEqual([t["title"] for t in plan["superseded_tasks"][0]], ["x"])
+        self.assertEqual([t["title"] for t in plan["tasks"]], ["x"])
+        self.assertEqual(second["next_action"], "CALL_REQUEST_USER_APPROVAL")
 
     def test_blocked_plan_does_not_block_its_sibling(self):
         a_id, b_id = self.two_plans()
@@ -2872,9 +2911,23 @@ class TestTargetedRevision(TargetedRevisionFixture):
             "goal": "g", "thought": "t2", "step_number": 2, "total_steps": 2,
             "need_more_thinking": False,
             "task_updates": [{"task_id": 1, "title": "몰래 바꾼 태스크"}]})
+        # Since 1.16 a finalized plan is not reopened by plan_and_think at all, so the
+        # edit never reaches the task list.
+        self.assertEqual(res["next_action"], "CALL_REQUEST_USER_APPROVAL")
+        self.assertEqual(self.h.store.load().active_plan.get_task(1).title, "하나")
+        self.assertIn("replan_redirected", self.audit())
+
+    def test_task_updates_while_drafting_without_a_request_are_refused(self):
+        """The same edit during a drafting round (after a failure, say) is refused."""
+        self.h.dispatch("plan_and_think", {
+            "goal": "g", "thought": "t", "step_number": 1, "total_steps": 2,
+            "need_more_thinking": True})
+        res = self.h.dispatch("plan_and_think", {
+            "goal": "g", "thought": "t2", "step_number": 2, "total_steps": 2,
+            "need_more_thinking": False,
+            "task_updates": [{"task_id": 1, "title": "몰래 바꾼 태스크"}]})
         self.assertFalse(res["ok"])
         self.assertEqual(res["error_code"], "REVISION_NOT_REQUESTED")
-        self.assertEqual(self.h.store.load().active_plan.get_task(1).title, "하나")
         self.assertIn("unrequested_task_updates", self.audit())
 
     def test_whole_plan_rewrite_is_accepted_but_recorded(self):
@@ -4070,8 +4123,8 @@ class TestUnmatchedTaskUpdates(TargetedRevisionFixture):
         h = self.blocking(FakeApprovalUI(decision=None))
         self.draft(h)
         res = self.update(h, ["아무도 요청하지 않은 수정"])
-        self.assertFalse(res["ok"])
-        self.assertEqual(res["error_code"], "MISSING_TASK_LIST")
+        # Since 1.16 the finalized plan is not reopened by plan_and_think at all.
+        self.assertEqual(res["next_action"], "CALL_REQUEST_USER_APPROVAL")
         self.assertEqual([t.title for t in self.plan(h).tasks], self.TASKS)
 
 

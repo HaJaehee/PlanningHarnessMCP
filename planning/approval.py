@@ -55,6 +55,14 @@ SERVER_SIGNATURE = "planning-mcp-approval"
 # per-task rewriting is meaningless - the plan is right, the execution is in dispute.
 PHASE_PLAN = "PLAN"
 PHASE_COMPLETION = "COMPLETION"
+# The circuit breaker stopped an agent that kept repeating itself (1.16.0, D25). Not a
+# question about the plan's content: the human decides whether to approve the draft as
+# it stands, let the agent continue (optionally with a direction), or cancel. Decisions
+# reuse the three existing values - APPROVED / REVISE / REJECTED - so a page served by an
+# older process, which renders this entry with its fallback form, still produces a
+# decision the new handler can read.
+PHASE_HALT = "HALT"
+PHASES = (PHASE_PLAN, PHASE_COMPLETION, PHASE_HALT)
 
 # No poll for this long means no tab is open.
 PAGE_IDLE_SEC = 10.0
@@ -185,6 +193,7 @@ class ApprovalStore:
         fingerprint: str,
         phase: str = PHASE_PLAN,
         summary: str = "",
+        draft: bool = False,
     ) -> str | None:
         """Queue a request for the human. Returns its id, or None if it could not be saved.
 
@@ -211,7 +220,10 @@ class ApprovalStore:
             "display": display,
             "tasks": tasks,
             "fingerprint": fingerprint,
-            "phase": phase if phase in (PHASE_PLAN, PHASE_COMPLETION) else PHASE_PLAN,
+            "phase": phase if phase in PHASES else PHASE_PLAN,
+            # HALT only: whether the card carries a task list the human can approve as
+            # it stands. Without one, lifting the halt can only mean "continue".
+            "draft": bool(draft),
             "created_at": time.time(),
             "created_by_pid": os.getpid(),
             "decision": None,
@@ -288,9 +300,12 @@ class ApprovalStore:
                 if entry.get("id") == request_id and entry.get("decision") is None:
                     wanted = scope if scope in SCOPES else SCOPE_PLAN
                     # Membership, not truthiness: an entry with no phase at all (written
-                    # by an older process) still falls back to a whole-plan rewrite.
+                    # by an older process) still falls back to a whole-plan rewrite. A
+                    # HALT card has no per-task review either.
                     if entry.get("phase") not in (PHASE_PLAN, PHASE_COMPLETION):
                         wanted = SCOPE_PLAN
+                    if entry.get("phase") == PHASE_HALT:
+                        cleaned = {}
                     entry["decision"] = decision
                     entry["comment"] = comment or ""
                     entry["task_comments"] = cleaned
@@ -351,6 +366,22 @@ class ApprovalStore:
             return max(0.0, time.time() - float(entry.get("created_at") or 0.0))
         except (TypeError, ValueError):
             return 0.0
+
+    def set_agent_note(self, request_id: str, note: str) -> None:
+        """Attach what the agent is still thinking while the human decides.
+
+        A thinking model that calls plan_and_think again during approval is not allowed
+        to change the plan the human is reading (D25) - but what it wanted to reconsider
+        is information, so it is shown on the card instead of being thrown away. Only the
+        latest note is kept.
+        """
+        with exclusive(self.lock_path):
+            queue = self._requests(self.read())
+            for candidate in queue:
+                if candidate.get("id") == request_id and candidate.get("decision") is None:
+                    candidate["agent_note"] = note
+                    self._write({"requests": queue})
+                    return
 
     def touch_agent(self, request_id: str) -> None:
         """Mark the agent as still waiting on this request.
@@ -460,6 +491,11 @@ h1{font-size:1.05rem;margin:0 0 .35rem;letter-spacing:.02em;text-transform:upper
 .summary{background:#f2f3f5;border-radius:8px;padding:.85rem 1rem;margin:0 0 1.25rem;
          font-size:.94rem;line-height:1.65;white-space:pre-wrap;word-break:break-word}
 @media(prefers-color-scheme:dark){.summary{background:#15171c}}
+/* Why the circuit breaker stopped the agent, and what the agent was still weighing.
+   Amber, not red: nothing is broken, a person is simply needed. */
+.summary.warn{background:#fdf0e3}
+.summary.agent{border-left:3px solid #8a5a00}
+@media(prefers-color-scheme:dark){.summary.warn{background:#2a2115}}
 .summary .lbl{display:block;font-size:.72rem;font-weight:600;text-transform:uppercase;
               letter-spacing:.04em;opacity:.5;margin-bottom:.35rem}
 .tasklabel{font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
@@ -635,7 +671,12 @@ function onInput(ev){
   if(el.tagName!=='TEXTAREA')return;
   const req=el.getAttribute('data-req');
   if(req){dset(req,el.getAttribute('data-tid'),el.value);relabel(req);return;}
-  if(el.id.indexOf('c-')===0)dset(el.id.slice(2),'_all',el.value);
+  if(el.id.indexOf('c-')===0){
+    const id=el.id.slice(2);
+    dset(id,'_all',el.value);
+    // A halt card's continue button says whether it carries a direction.
+    relabel(id);
+  }
 }
 // Another tab wrote a draft. Mirror it here so both windows show the same thing - the
 // property the old full-rebuild had by accident, kept on purpose.
@@ -669,7 +710,8 @@ async function poll(){
     const r=await fetch('/api/pending');const d=await r.json();
     const list=d.requests||[];
     dprune(list.map(x=>x.id));
-    const sig=list.map(x=>x.id+':'+(x.decided||'')+':'+(x.agent_waiting?1:0)).join('|');
+    const sig=list.map(x=>x.id+':'+(x.decided||'')+':'+(x.agent_waiting?1:0)+':'+
+      (x.agent_note||'').length).join('|');
     if(sig===seen)return;
     seen=sig;
     const undecided=list.filter(x=>!x.decided);
@@ -725,7 +767,14 @@ function revLabel(phase,ids,whole){
   const verb=done?'다시 작업 요청':'수정 요청';
   return ids.length===1?verb+' · '+ids[0]+'번만':verb+' · '+ids.length+'개 태스크만';
 }
+// The continue button on a halt card states whether it sends the agent a direction.
+function haltLabel(hasText){return hasText?'의견 전달 후 계속':'계속 진행';}
 function relabel(id){
+  if(PHASE[id]==='HALT'){
+    const b=document.getElementById('rev-'+id),c=document.getElementById('c-'+id);
+    if(b)b.textContent=haltLabel(!!(c&&c.value.trim()));
+    return;
+  }
   // Mark the rows that carry a comment, so a collapsed one is still visible as such.
   document.querySelectorAll('textarea[data-req="'+id+'"]').forEach(b=>{
     const task=b.closest('.task');
@@ -778,6 +827,47 @@ function taskRows(d){
     return row+'</div>';
   }).join('')+'</div>';
 }
+function chip(d){
+  return d.agent_waiting
+    ? '<div class="chip live">에이전트가 대기 중입니다 · 결정하시면 작업이 바로 이어집니다</div>'
+    : '<div class="chip idle">에이전트가 대기를 멈췄습니다 · 지금 결정하셔도 반영되며, '+
+      '채팅창에 메시지를 입력하시면 진행이 재개됩니다</div>';
+}
+// What the agent still wanted to reconsider while this request was open. It may not
+// change the plan the human is reading, so it is shown here instead of being lost.
+function agentNote(d){
+  return d.agent_note?'<div class="summary agent"><span class="lbl">에이전트 추가 의견</span>'+
+    esc(d.agent_note)+'</div>':'';
+}
+// The circuit breaker stopped an agent that kept repeating a step. The human is not
+// judging the plan's wording here but deciding how the agent continues - so no per-task
+// review, and the button set depends on whether there is a draft to approve as it stands.
+function haltCard(d){
+  const tasks=d.tasks||[];
+  let h='<h1>반복 감지 · '+esc(d.plan_id)+'</h1>'+
+    '<p class="goal"><span class="lbl">목표</span>'+esc(d.goal)+'</p>'+
+    '<div class="summary warn"><span class="lbl">에이전트가 멈춘 이유</span>'+esc(d.summary)+'</div>';
+  if(tasks.length){
+    h+='<p class="tasklabel">'+(d.draft?'현재 초안 · 태스크 ':'태스크 ')+tasks.length+'개</p>'+
+      '<div class="tasks">'+tasks.map(t=>'<div class="task"><div class="tt"><span class="tn">'+
+      esc(String(t.task_id))+'.</span><span>'+esc(t.title)+'</span>'+
+      (t.status&&t.status!=='PENDING'?'<span class="badge">'+esc(t.status)+'</span>':'')+
+      '</div></div>').join('')+'</div>';
+  }
+  h+=chip(d);
+  h+='<textarea id="c-'+esc(d.id)+
+    '" placeholder="에이전트에게 전할 방향을 입력해 주십시오 (선택 사항)"></textarea>';
+  h+='<div class="row">';
+  if(d.draft)h+='<button class="ok" onclick="decide(\\''+esc(d.id)+
+    '\\',\\'APPROVED\\')">이 초안으로 승인</button>';
+  h+='<button class="rev" id="rev-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
+    '\\',\\'REVISE\\')">'+haltLabel(false)+'</button>';
+  return h+'<button class="no" onclick="decide(\\''+esc(d.id)+
+    '\\',\\'REJECTED\\')">취소</button></div>';
+}
+const DONE_LABEL={APPROVED:'승인되었습니다',REJECTED:'거절되었습니다',REVISE:'수정 요청되었습니다'};
+const HALT_DONE_LABEL={APPROVED:'초안이 승인되었습니다',REJECTED:'취소되었습니다',
+  REVISE:'계속 진행하도록 했습니다'};
 function render(list){
   const root=document.getElementById('root');
   // Matches the static placeholder above, so the page does not flicker between two
@@ -787,7 +877,7 @@ function render(list){
   // 여러 세션이 동시에 승인을 기다릴 수 있으므로 큐 전체를 보여준다.
   root.innerHTML=list.map(d=>{
     if(d.decided){
-      const label={APPROVED:'승인되었습니다',REJECTED:'거절되었습니다',REVISE:'수정 요청되었습니다'}[d.decided]||d.decided;
+      const label=(d.phase==='HALT'?HALT_DONE_LABEL:DONE_LABEL)[d.decided]||d.decided;
       return '<div class="done">'+esc(d.plan_id)+' — '+label+
         '<br><span style="font-weight:400;opacity:.6;font-size:.9rem">'+
         '에이전트가 이 결정을 반영합니다.</span></div>';
@@ -795,6 +885,7 @@ function render(list){
     // An entry with no phase was published by an older server process on this same
     // state directory. It has no per-task review, so fall back to the original form.
     PHASE[d.id]=d.phase;
+    if(d.phase==='HALT')return haltCard(d);
     const perTask=(d.phase==='PLAN'||d.phase==='COMPLETION')&&d.tasks&&d.tasks.length;
     // The fallback path keeps the original layout on purpose: `display` already opens
     // with its own title, 목표 and summary, so composing a header above it would repeat
@@ -802,10 +893,8 @@ function render(list){
     let html=perTask?header(d)+taskRows(d)
       :'<h1>'+(d.phase==='COMPLETION'?'완료 확인':'승인 요청')+' · '+esc(d.plan_id)+
        '</h1><p class="goal">'+esc(d.goal)+'</p><pre>'+esc(d.display)+'</pre>';
-    html+=d.agent_waiting
-      ? '<div class="chip live">에이전트가 대기 중입니다 · 결정하시면 작업이 바로 이어집니다</div>'
-      : '<div class="chip idle">에이전트가 대기를 멈췄습니다 · 지금 결정하셔도 반영되며, '+
-        '채팅창에 메시지를 입력하시면 진행이 재개됩니다</div>';
+    html+=agentNote(d);
+    html+=chip(d);
     html+='<textarea id="c-'+esc(d.id)+
       '" placeholder="전체 의견을 입력해 주십시오 (거절 사유도 여기에 입력하실 수 있습니다)"></textarea>';
     if(perTask)html+='<label class="scope"><input type="checkbox" id="all-'+esc(d.id)+
@@ -992,9 +1081,10 @@ class ApprovalServer:
     def open_request(
         self, plan_id: str, goal: str, display: str, tasks: list[dict[str, Any]],
         fingerprint: str = "", phase: str = PHASE_PLAN, summary: str = "",
+        draft: bool = False,
     ) -> str | None:
         request_id = self.store.publish(
-            plan_id, goal, display, tasks, fingerprint, phase, summary
+            plan_id, goal, display, tasks, fingerprint, phase, summary, draft
         )
         self._surface()
         return request_id
@@ -1004,6 +1094,12 @@ class ApprovalServer:
 
     def has_pending(self, plan_id: str, fingerprint: str) -> bool:
         return self.store.has_pending(plan_id, fingerprint)
+
+    def pending_request(self, plan_id: str, fingerprint: str) -> dict[str, Any] | None:
+        return self.store.pending_entry(plan_id, fingerprint)
+
+    def set_agent_note(self, request_id: str, note: str) -> None:
+        self.store.set_agent_note(request_id, note)
 
     def request_age(self, request_id: str) -> float:
         return self.store.request_age(request_id)
@@ -1150,6 +1246,8 @@ class ApprovalServer:
                             # per-task review on what may be a completion report. The
                             # page treats a missing phase as "use the original form".
                             "phase": e.get("phase"),
+                            "draft": bool(e.get("draft")),
+                            "agent_note": e.get("agent_note") or "",
                             "decided": e.get("decision"),
                             # Whether an agent is still holding a call open for this
                             # request. Deliberately not a countdown: the request
