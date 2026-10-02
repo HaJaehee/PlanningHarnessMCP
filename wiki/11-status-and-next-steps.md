@@ -7,7 +7,7 @@
   기타 → revision), the pick becomes the task, and the model never sees the unchosen options
   again. Also on the halt card and in the draft; chat-mode relay; off switch and limits.
   Plan and decisions: [`docs/plan-2.0-task-alternatives.md`](../docs/plan-2.0-task-alternatives.md).
-- **Tests:** 519 unit + 6 smoke, all passing (`tests/test_alternatives.py` is new).
+- **Tests:** 528 unit + 6 smoke, all passing (`tests/test_alternatives.py` is new).
 - **Not packaged or pushed.** `MANIFEST.txt` is still the 1.15.1 one, so `verify_install.py`
   reports NO-GO on integrity until `make_package.py` is rerun.
 

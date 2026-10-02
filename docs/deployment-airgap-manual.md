@@ -87,7 +87,7 @@ python tests/smoke_stdio.py
 python tools/make_package.py
 ```
 
-실행 시 `dist/planning-mcp-1.0.0-<날짜>.zip` 압축 파일과 루트 경로의 `MANIFEST.txt`가 생성되며, 콘솔 마지막 줄에 패키지 전체의 SHA-256 체크섬이 출력됩니다.
+실행 시 `dist/planning-mcp-2.0.0-<날짜>.zip` 압축 파일과 루트 경로의 `MANIFEST.txt`가 생성되며, 콘솔 마지막 줄에 패키지 전체의 SHA-256 체크섬이 출력됩니다.
 
 ### 2-3. 체크섬을 패키지 아카이브 외부에 별도 보관
 
@@ -96,7 +96,7 @@ python tools/make_package.py
 사내 PC에서 압축을 풀기 **전에** 다음 명령으로 파일 해시를 대조하십시오:
 
 ```powershell
-Get-FileHash .\planning-mcp-1.0.0-20260724.zip -Algorithm SHA256
+Get-FileHash .\planning-mcp-2.0.0-20260724.zip -Algorithm SHA256
 ```
 
 해시값이 일치하지 않는다면 전송 중 파일이 손상되었거나 망연계 보안 솔루션에 의해 파일이 변조된 것입니다. 이 경우 압축을 해제하지 말고 패키지를 다시 반입하십시오.
@@ -149,7 +149,7 @@ Get-FileHash .\python-3.12.10-embed-amd64.zip -Algorithm SHA256
 python tools/make_package.py --with-python C:\dl\python-3.12.10-embed-amd64.zip
 ```
 
-실행 완료 시 `dist/planning-mcp-1.0.0-<날짜>-with-python.zip` 아카이브가 생성됩니다.
+실행 완료 시 `dist/planning-mcp-2.0.0-<날짜>-with-python.zip` 아카이브가 생성됩니다.
 
 패키징 스크립트는 임베디드 zip 파일을 **원본 그대로(Verbatim, 무압축 원형 보존)** 패키지 내부에 저장합니다. 임의로 압축을 해제하거나 재압축, 파일 수정을 가하지 않습니다. 그래야 보안 검토자가 python.org 공식 웹사이트에 공표된 SHA-256 체크섬과 1:1로 직접 대조하여 인터프리터의 위·변조 여부를 확실히 검증할 수 있기 때문입니다. 상세 출처 정보는 패키지 내 `runtime/RUNTIME.md` 파일에 자동 생성됩니다.
 
@@ -291,7 +291,7 @@ Get-ChildItem C:\ -Recurse -Filter python.exe -ErrorAction SilentlyContinue -Dep
 ### 6-1. 배치
 
 ```powershell
-Expand-Archive -Path .\planning-mcp-1.0.0-20260724.zip -DestinationPath D:\
+Expand-Archive -Path .\planning-mcp-2.0.0-20260724.zip -DestinationPath D:\
 Get-ChildItem -Recurse -Path D:\planning-mcp | Unblock-File
 ```
 

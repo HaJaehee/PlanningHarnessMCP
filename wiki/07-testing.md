@@ -1,6 +1,6 @@
 # 07 · Testing
 
-**519 unit tests + 6 end-to-end smoke tests, all passing** (as of 2.0.0). Standard-library
+**528 unit tests + 6 end-to-end smoke tests, all passing** (as of 2.0.0). Standard-library
 `unittest` only. This project's defect history proves the rule: *test the seam before you
 trust it.* See [09-defects-and-lessons.md](09-defects-and-lessons.md).
 
@@ -69,7 +69,7 @@ on the 4th call.
 
 ## Alternatives suite (`tests/test_alternatives.py`, 2.0.0)
 
-76 tests. The guarantees: *what was picked is what runs, only the human picks while a page is
+85 tests. The guarantees: *what was picked is what runs, only the human picks while a page is
 open, after approval the model never sees an option that was not picked, and a plan with no
 choices behaves - and fingerprints - exactly as in 1.16.*
 
@@ -81,6 +81,7 @@ choices behaves - and fingerprints - exactly as in 1.16.*
 | `TestTheUnchosenStayUnseen` | scans every response of a full lifecycle for an option that was not picked. Verified to fail when `Task.brief()` leaks options |
 | `TestStoreRecordsOnlyWhatWasShown` | the store refuses picks that were not on screen; picks count only on a plan / halt approval |
 | `TestDraftAlternatives`, `TestHaltCardChoices` | alternatives kept with the draft, replaced with it, submitted with it; the halt card's choice UI and its fingerprint |
+| `TestTopic` | the heading: the model's topic, its aliases (not `label`), the first one per task, the neutral fallback, chat text, page, halt card |
 | `TestSchema`, `TestPageTemplate`, `TestPersistence`, `TestConfig` | advertised fields per profile / mode, the page template, round-trips, env |
 
 ## Smoke tests (real subprocesses, real HTTP)

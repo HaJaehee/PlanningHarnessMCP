@@ -88,6 +88,10 @@
                 "reason": {
                   "type": "string",
                   "description": "Its trade-off, short. Example: 'faster, loses formatting'"
+                },
+                "topic": {
+                  "type": "string",
+                  "description": "OPTIONAL. What is being chosen, in two to four words, in the language you use with the user - shown as the heading of the choice. Once per task is enough. Example: '집계 방식'"
                 }
               },
               "required": [
@@ -95,7 +99,7 @@
                 "title"
               ]
             },
-            "description": "OPTIONAL. Other ways to do a task, ONLY when the choice depends on the user's preference - not on facts you can check yourself. The task in task_list is your recommendation; the user picks one option on the approval page and you are told which. At most 3 per task, 3 tasks per plan. Example: [{\"task_id\": 2, \"title\": \"Export to CSV and total it with a script\", \"reason\": \"faster, loses formatting\"}]"
+            "description": "OPTIONAL. Other ways to do a task, ONLY when the choice depends on the user's preference - not on facts you can check yourself. The task in task_list is your recommendation; the user picks one option on the approval page and you are told which. At most 3 per task, 3 tasks per plan. Example: [{\"task_id\": 2, \"title\": \"Export to CSV and total it with a script\", \"reason\": \"faster, loses formatting\", \"topic\": \"집계 방식\"}]"
           },
           "recommended_reasons": {
             "type": "array",
@@ -291,6 +295,10 @@
                   "reason": {
                     "type": "string",
                     "description": "Its trade-off, short. Example: 'faster, loses formatting'"
+                  },
+                  "topic": {
+                    "type": "string",
+                    "description": "OPTIONAL. What is being chosen, in two to four words, in the language you use with the user - shown as the heading of the choice. Once per task is enough. Example: '집계 방식'"
                   }
                 },
                 "required": [
@@ -298,7 +306,7 @@
                   "title"
                 ]
               },
-              "description": "OPTIONAL. Other ways to do a task, ONLY when the choice depends on the user's preference - not on facts you can check yourself. The task in task_list is your recommendation; the user picks one option on the approval page and you are told which. At most 3 per task, 3 tasks per plan. Example: [{\"task_id\": 2, \"title\": \"Export to CSV and total it with a script\", \"reason\": \"faster, loses formatting\"}]"
+              "description": "OPTIONAL. Other ways to do a task, ONLY when the choice depends on the user's preference - not on facts you can check yourself. The task in task_list is your recommendation; the user picks one option on the approval page and you are told which. At most 3 per task, 3 tasks per plan. Example: [{\"task_id\": 2, \"title\": \"Export to CSV and total it with a script\", \"reason\": \"faster, loses formatting\", \"topic\": \"집계 방식\"}]"
             },
             "recommended_reasons": {
               "type": "array",

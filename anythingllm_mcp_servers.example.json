@@ -1,6 +1,6 @@
 {
   "_README": [
-    "AnythingLLM MCP 서버 등록 예시. (planning-mcp 1.9.0 기준)",
+    "AnythingLLM MCP 서버 등록 예시. (planning-mcp 2.0.0 기준)",
     "서버 버전은 config.py 의 SERVER_VERSION 이며, MCP initialize 의 serverInfo.version 으로 보고됩니다.",
     "",
     "1. AnythingLLM의 Agent Skills -> MCP Servers 화면에서 설정 파일의 실제 경로를 확인합니다.",

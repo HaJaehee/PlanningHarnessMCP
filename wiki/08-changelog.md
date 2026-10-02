@@ -340,12 +340,14 @@ whatever the human picks becomes the task. Plan and decisions:
   too, without 기타 (§8-2); a reason for the recommendation (§8-4); both profiles, with
   `PLANNING_MCP_ALTERNATIVES=off` (§8-1); limits `PLANNING_MCP_MAX_ALTERNATIVES` /
   `PLANNING_MCP_MAX_CHOICE_POINTS` (3 / 3).
+- Each choice is headed by what is being chosen: the model's optional `topic` ("집계 방식 · 3가지
+  중 선택"), or "진행 방법 · N가지 중 선택" without one - not "choose one of the following".
 - The page keeps its drafts and says so when a decision is not recorded (it used to clear
   them after any POST).
 - Major version: the plan model (`options`, `chosen`, `draft_alternatives`) and the approval
   protocol (`choices`) changed. State files from 1.16 load unchanged.
 
-76 new tests in `tests/test_alternatives.py`; no existing test changed expectation.
+85 new tests in `tests/test_alternatives.py`; no existing test changed expectation.
 
 ---
 

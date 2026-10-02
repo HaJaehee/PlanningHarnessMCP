@@ -346,13 +346,17 @@ the button, and the click released the agent's held call within a second with
 ## Choosing between alternatives (2.0.0)
 
 ```
-2.  다음 중 하나를 고르십시오
+2.  집계 방식 · 3가지 중 선택
     ◉ A. 엑셀 피벗으로 매출 집계  [권장] — 보고서 서식이 그대로 유지됨
     ○ B. CSV로 내보낸 뒤 스크립트로 집계 — 빠르지만 서식이 사라짐
     ○ C. 수작업으로 합계 계산 — 느리지만 도구가 필요 없음
     ○    기타 (직접 입력)
 ```
 
+- The heading says what is being chosen - the model's `topic` ("집계 방식") and the number of
+  options. Without a topic it reads "진행 방법 · N가지 중 선택". It used to say "다음 중 하나를
+  고르십시오", which told the human nothing about what they were choosing. Display only: the
+  topic is not in the fingerprint and changes nothing about what runs.
 - The recommendation (A) is pre-selected and marked 권장 with its reason; every alternative
   shows its trade-off, so the human can pick without asking.
 - The approve button states its consequence before it is clicked, like the REVISE button:

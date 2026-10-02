@@ -63,7 +63,9 @@ Optional: `task_list` (required when finalizing), `task_updates`, `revised_goal`
 - On finalize → `plan_status: AWAITING_APPROVAL`, `next_action: CALL_REQUEST_USER_APPROVAL`.
 - **Alternatives (2.0.0).** `task_list` is the model's *recommendation*. For a task whose right
   way depends on the user's preference it may add `alternatives:
-  [{"task_id", "title", "reason"}]` (other ways to do that task) and `recommended_reasons:
+  [{"task_id", "title", "reason", "topic"}]` (other ways to do that task; `topic` names what
+  is being chosen in a few words, heads the choice, and is optional - the first one per task
+  wins) and `recommended_reasons:
   [{"task_id", "reason"}]` (why it prefers its own) - the `{task_id, ...}` shape `task_updates`
   already taught it. `task_id` numbers into the same call's `task_list`. The server turns them
   into each task's `options` (index 0 = the recommendation) after validating: unknown numbers,
