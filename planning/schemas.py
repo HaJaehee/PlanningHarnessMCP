@@ -340,6 +340,14 @@ def _alternatives_params(max_per_task: int, max_points: int) -> dict[str, Any]:
                         "type": "string",
                         "description": "Its trade-off, short. Example: 'faster, loses formatting'",
                     },
+                    "topic": {
+                        "type": "string",
+                        "description": (
+                            "OPTIONAL. What is being chosen, in two to four words, in the "
+                            "language you use with the user - shown as the heading of the "
+                            "choice. Once per task is enough. Example: '집계 방식'"
+                        ),
+                    },
                 },
                 "required": ["task_id", "title"],
             },
@@ -349,7 +357,7 @@ def _alternatives_params(max_per_task: int, max_points: int) -> dict[str, Any]:
                 "your recommendation; the user picks one option on the approval page and you "
                 f"are told which. At most {max_per_task} per task, {max_points} tasks per "
                 'plan. Example: [{"task_id": 2, "title": "Export to CSV and total it with a '
-                'script", "reason": "faster, loses formatting"}]'
+                'script", "reason": "faster, loses formatting", "topic": "집계 방식"}]'
             ),
         },
         "recommended_reasons": {

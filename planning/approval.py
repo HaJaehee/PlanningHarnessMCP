@@ -585,7 +585,9 @@ textarea.tc{display:none;min-height:2.4rem;margin:.4rem 0 0 1.95em;width:calc(10
      font-weight:600;margin-left:.3rem}
 @media(prefers-color-scheme:dark){.rec{background:#16281c;color:#5dbb77}}
 .why{opacity:.65;font-size:.84rem}
-.pick{opacity:.7;font-style:italic}
+/* The heading of a choice: what is being chosen, then how many options. */
+.pick{font-weight:600}
+.cnt{opacity:.55;font-size:.84rem;font-weight:400}
 .err{background:#fdecea;color:#b42318;border-radius:8px;padding:.6rem .9rem;margin:0 0 1rem;
      font-size:.9rem}
 /* Whether an agent is still holding a call open for this request. Not a countdown:
@@ -835,6 +837,12 @@ function haltLabel(hasText){return hasText?'의견 전달 후 계속':'계속 �
 // the server refuses any index that was not on screen.
 const LETTERS='ABCDEFGH';
 function hasChoice(t){return !!(t.options&&t.options.length>=2);}
+// '집계 방식 · 3가지 중 선택' - what is being chosen, from the model; a neutral noun phrase
+// when it gave none. Mirrors choices.choice_heading, which writes the chat text.
+function choiceHeading(t){
+  return '<span class="pick">'+esc((t.topic||'').trim()||'진행 방법')+
+    '</span><span class="cnt"> · '+t.options.length+'가지 중 선택</span>';
+}
 function optionsHtml(d,t,allowOther){
   if(!hasChoice(t))return '';
   const name='ch-'+d.id+'-'+t.task_id;
@@ -928,7 +936,7 @@ function taskRows(d){
     const picked=done&&hasChoice(t)&&t.chosen!=null
       ?'<span class="badge">'+(t.chosen===0?'권장안':LETTERS[t.chosen]+'안 선택')+'</span>':'';
     let row='<div class="task"><div class="tt"><span class="tn">'+esc(String(t.task_id))+
-      '.</span>'+(choose?'<span class="pick">다음 중 하나를 고르십시오</span>'
+      '.</span>'+(choose?'<span>'+choiceHeading(t)+'</span>'
                         :'<span>'+esc(t.title)+'</span>')+picked+
       (badge?'<span class="badge">'+esc(t.status)+'</span>':'')+
       '<button class="tcbtn" type="button" aria-expanded="false" '+
@@ -978,7 +986,7 @@ function haltCard(d){
     h+='<p class="tasklabel">'+(d.draft?'현재 초안 · 태스크 ':'태스크 ')+tasks.length+'개</p>'+
       '<div class="tasks">'+tasks.map(t=>'<div class="task"><div class="tt"><span class="tn">'+
       esc(String(t.task_id))+'.</span>'+
-      (hasChoice(t)?'<span class="pick">다음 중 하나를 고르십시오</span>'
+      (hasChoice(t)&&d.draft?'<span>'+choiceHeading(t)+'</span>'
                    :'<span>'+esc(t.title)+'</span>')+
       (t.status&&t.status!=='PENDING'?'<span class="badge">'+esc(t.status)+'</span>':'')+
       '</div>'+(d.draft?optionsHtml(d,t,false):'')+'</div>').join('')+'</div>';

@@ -101,6 +101,32 @@ def build_options(
     return options, notes
 
 
+def collect_topics(
+    alternatives: list[dict[str, Any]], options: dict[int, list[dict[str, str]]]
+) -> dict[int, str]:
+    """{task_id: what is being chosen}, for tasks that kept a choice.
+
+    The first non-empty topic among a task's alternatives wins - the model is asked to
+    send it once, but sending it on every alternative must not be an error.
+    """
+    topics: dict[int, str] = {}
+    for item in alternatives:
+        tid = item.get("task_id")
+        topic = str(item.get("topic") or "").strip()
+        if topic and tid in options and tid not in topics:
+            topics[tid] = topic
+    return topics
+
+
+def choice_heading(topic: str | None, count: int) -> str:
+    """The heading a choice is shown under: '집계 방식 · 3가지 중 선택'.
+
+    Without a topic from the model it falls back to a neutral noun phrase - an
+    instruction like "choose one of the following" says nothing about what is chosen.
+    """
+    return f"{(topic or '').strip() or '진행 방법'} · {count}가지 중 선택"
+
+
 def validate_page_choices(
     tasks: list[dict[str, Any]], raw: Any
 ) -> dict[str, int] | None:
@@ -168,6 +194,8 @@ def validate_model_choices(
 __all__ = [
     "LETTERS",
     "build_options",
+    "choice_heading",
+    "collect_topics",
     "letter",
     "validate_model_choices",
     "validate_page_choices",

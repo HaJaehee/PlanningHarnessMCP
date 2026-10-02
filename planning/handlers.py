@@ -36,7 +36,7 @@ from .config import (
     NO_PROGRESS_WAIT_CEILING_SEC,
     Config,
 )
-from .choices import build_options, letter, validate_model_choices
+from .choices import build_options, collect_topics, letter, validate_model_choices
 from .leniency import UNMATCHED_TITLES_KEY, normalize
 from .loopguard import (
     NO_PLAN,
@@ -587,6 +587,7 @@ class PlanningHandlers:
     def _draft_page_tasks(self, plan: Plan) -> list[dict[str, Any]]:
         """The draft as approval-page rows, with the choices it carries."""
         options = self._draft_options(plan)
+        topics = collect_topics(list(plan.draft_alternatives), options)
         rows = []
         for i, title in enumerate(plan.draft_tasks, start=1):
             row: dict[str, Any] = {
@@ -594,6 +595,8 @@ class PlanningHandlers:
             }
             if i in options:
                 row["options"] = options[i]
+                if i in topics:
+                    row["topic"] = topics[i]
             rows.append(row)
         return rows
 
@@ -643,10 +646,12 @@ class PlanningHandlers:
             # The human read this draft on the halt card and approved it as it stands.
             if plan.status is PlanStatus.DRAFTING:
                 options = self._draft_options(plan)
+                topics = collect_topics(list(plan.draft_alternatives), options)
                 if plan.tasks:
                     plan.superseded_tasks.append([t.to_dict() for t in plan.tasks])
                 plan.tasks = [
-                    Task(task_id=i, title=title, options=options.get(i))
+                    Task(task_id=i, title=title, options=options.get(i),
+                         choice_topic=topics.get(i))
                     for i, title in enumerate(draft, start=1)
                 ]
                 plan.clear_draft()
@@ -1645,8 +1650,10 @@ class PlanningHandlers:
             locked,
         )
         notes.extend(alt_notes)
+        topics = collect_topics(alternatives, options)
         for task in plan.tasks:
             task.options = options.get(task.task_id)
+            task.choice_topic = topics.get(task.task_id)
 
     @staticmethod
     def _carry_evidence(previous: list[Task], current: list[Task]) -> list[int]:

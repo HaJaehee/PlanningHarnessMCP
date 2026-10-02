@@ -152,6 +152,9 @@ class Task:
     # `title` becomes that option's text. None on a task that offered no choice.
     options: list[dict[str, str]] | None = None
     chosen: int | None = None
+    # What is being chosen, in a few words ("집계 방식") - the heading of the choice on
+    # the page and in the chat text. Display only: it changes nothing about what runs.
+    choice_topic: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -166,6 +169,7 @@ class Task:
             "previous_result_log": self.previous_result_log,
             "options": self.options,
             "chosen": self.chosen,
+            "choice_topic": self.choice_topic,
         }
 
     @classmethod
@@ -182,6 +186,7 @@ class Task:
             previous_result_log=raw.get("previous_result_log"),
             options=_clean_options(raw.get("options")),
             chosen=raw.get("chosen") if isinstance(raw.get("chosen"), int) else None,
+            choice_topic=str(raw["choice_topic"]) if raw.get("choice_topic") else None,
         )
 
     @property
@@ -199,6 +204,7 @@ class Task:
         """The task was rewritten, so the options it offered no longer describe it."""
         self.options = None
         self.chosen = None
+        self.choice_topic = None
 
     def clear_revision_marks(self) -> None:
         self.revision_note = None
@@ -247,6 +253,8 @@ class Task:
         out = self.brief()
         if self.has_choice:
             out["options"] = [dict(o) for o in self.options or []]
+            if self.choice_topic:
+                out["topic"] = self.choice_topic
             if self.chosen is not None:
                 out["chosen"] = self.chosen
         return out

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .choices import letter
+from .choices import choice_heading, letter
 from .models import ErrorCode, NextAction, Plan, PlanStatus
 from .state_machine import resolve_next_action
 
@@ -164,7 +164,8 @@ def render_plan_for_user(
     for task in plan.tasks:
         mark = "↻ " if task.revision_note else ""
         if task.has_choice:
-            lines.append(f"{mark}{task.task_id}. 다음 중 하나를 고르십시오")
+            heading = choice_heading(task.choice_topic, len(task.options or []))
+            lines.append(f"{mark}{task.task_id}. {heading}")
             for index, option in enumerate(task.options or []):
                 tag = " [권장]" if index == 0 else ""
                 why = f" — {option['reason']}" if option.get("reason") else ""

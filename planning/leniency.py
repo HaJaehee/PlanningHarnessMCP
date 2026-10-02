@@ -255,6 +255,9 @@ def _coerce_task_updates(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
 _ALT_ID_KEYS = ("task_id", "taskId", "taskid", "id", "task_number", "number")
 _ALT_TITLE_KEYS = ("title", "option", "alternative", "text", "name", "task", "description")
 _REASON_KEYS = ("reason", "why", "tradeoff", "trade_off", "because", "note", "pros_cons")
+# What is being chosen ("집계 방식"), shown as the heading of the choice. "label" is left
+# out on purpose: a model is as likely to put the alternative itself there.
+_TOPIC_KEYS = ("topic", "header", "heading", "subject", "question", "choice_topic")
 # "2: export to CSV", "task 2 - export to CSV", "2) export to CSV"
 _ID_PREFIX = re.compile(r"^\s*(?:task\s*)?(\d{1,2})\s*[:.)\]\-–—]\s*(.+?)\s*$", re.IGNORECASE)
 
@@ -314,8 +317,11 @@ def _coerce_alternatives(value: Any) -> list[dict[str, Any]]:
         if tid is None or tid < 1 or not title:
             continue
         reason = _first_text(item, _REASON_KEYS)
-        out.append({"task_id": tid, "title": title,
-                    "reason": "" if reason == title else reason})
+        entry = {"task_id": tid, "title": title, "reason": "" if reason == title else reason}
+        topic = _first_text(item, _TOPIC_KEYS)
+        if topic and topic != title:
+            entry["topic"] = topic
+        out.append(entry)
     return out
 
 

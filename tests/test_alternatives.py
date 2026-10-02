@@ -151,6 +151,78 @@ class TestLeniency(unittest.TestCase):
         self.assertTrue(any("letters" in n for n in notes))
 
 
+class TestTopic(AltCase):
+    """What is being chosen ('집계 방식') heads the choice; without one, a neutral noun
+    phrase. "Choose one of the following" said nothing about what was being chosen."""
+
+    def test_leniency_reads_the_topic_and_its_aliases(self):
+        for key in ("topic", "header", "subject", "question"):
+            clean, _ = normalize("plan_and_think", {"goal": "g", "alternatives": [
+                {"task_id": 2, "title": "CSV", key: "집계 방식"}]})
+            self.assertEqual(clean["alternatives"][0]["topic"], "집계 방식", key)
+
+    def test_label_is_not_a_topic(self):
+        """A model is as likely to put the alternative itself under 'label'."""
+        clean, _ = normalize("plan_and_think", {"goal": "g", "alternatives": [
+            {"task_id": 2, "title": "CSV", "label": "CSV"}]})
+        self.assertNotIn("topic", clean["alternatives"][0])
+
+    def test_the_first_topic_of_a_task_wins(self):
+        h = self.handler()
+        self.think(h, alts=[{"task_id": 2, "title": ALT, "topic": "집계 방식"},
+                            {"task_id": 2, "title": ALT2, "topic": "다른 주제"}])
+        task = self.plan(h).tasks[1]
+        self.assertEqual(task.choice_topic, "집계 방식")
+        self.assertEqual(task.page_brief()["topic"], "집계 방식")
+        self.assertNotIn("topic", task.brief())
+
+    def test_the_heading_in_chat(self):
+        h = self.handler()
+        self.think(h, alts=[{"task_id": 2, "title": ALT, "topic": "집계 방식"},
+                            {"task_id": 3, "title": "3줄 요약"}])
+        display = self.ask(h)["display_to_user"]
+        self.assertIn("2. 집계 방식 · 2가지 중 선택", display)
+        self.assertIn("3. 진행 방법 · 2가지 중 선택", display)
+        self.assertNotIn("다음 중 하나를 고르십시오", display)
+
+    def test_the_page_gets_the_topic(self):
+        ui = FakeApprovalUI(decision=None)
+        h = self.handler(ui)
+        self.think(h, alts=[{"task_id": 2, "title": ALT, "topic": "집계 방식"}])
+        self.ask(h)
+        self.assertEqual(ui.opened[-1]["tasks"][1]["topic"], "집계 방식")
+
+    def test_the_halt_card_gets_the_draft_topic(self):
+        ui = FakeApprovalUI(decision=None)
+        h = self.handler(ui, breaker_repeat=2)
+        alts = [{"task_id": 2, "title": ALT, "topic": "집계 방식"}]
+        self.think(h, more=True, alts=alts)
+        self.think(h, step=2, more=True, alts=alts, thought="same")
+        self.think(h, step=2, more=True, alts=alts, thought="same")
+        self.assertEqual(ui.live["tasks"][1]["topic"], "집계 방식")
+        ui.resolve("APPROVED", choices={"2": 1})
+        h.dispatch("get_current_plan", {"plan_id": "current"})
+        self.assertEqual(self.plan(h).tasks[1].choice_topic, "집계 방식")
+
+    def test_rewriting_the_task_drops_the_topic(self):
+        task = Task(task_id=2, title="b", options=[{"title": "b", "reason": ""},
+                                                     {"title": "c", "reason": ""}],
+                    choice_topic="집계 방식")
+        task.clear_choice()
+        self.assertIsNone(task.choice_topic)
+
+    def test_the_page_template(self):
+        self.assertIn("function choiceHeading(t)", _PAGE)
+        self.assertIn("||'진행 방법')", _PAGE)
+        self.assertIn("'가지 중 선택</span>'", _PAGE)
+        self.assertNotIn("다음 중 하나를 고르십시오", _PAGE)
+
+    def test_the_schema_offers_it(self):
+        props = {t["name"]: t for t in build_tool_definitions()}["plan_and_think"][
+            "inputSchema"]["properties"]["alternatives"]["items"]["properties"]
+        self.assertIn("topic", props)
+
+
 class TestBuildOptions(unittest.TestCase):
     def test_the_recommendation_is_option_a(self):
         opts, notes = build_options(TASKS, ALTS, {2: "서식 유지"}, 3, 3)

@@ -767,7 +767,7 @@ class TestPromptHygiene(unittest.TestCase):
 class TestTelemetry(LoopCase):
     def test_initialize_records_the_client(self):
         h = self.handler()
-        proto = McpProtocol(h, build_tool_definitions(), "planning-mcp", "1.16.0")
+        proto = McpProtocol(h, build_tool_definitions(), "planning-mcp", "2.0.0")
         proto.handle_message({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                               "params": {"clientInfo": {"name": "zed", "version": "0.2"}}})
         self.think(h, thought="Wait, let me reconsider. Actually, 다시 생각해 보면")
@@ -781,7 +781,7 @@ class TestTelemetry(LoopCase):
 
     def test_the_instructions_no_longer_say_answering_anything(self):
         h = self.handler()
-        proto = McpProtocol(h, build_tool_definitions(), "planning-mcp", "1.16.0")
+        proto = McpProtocol(h, build_tool_definitions(), "planning-mcp", "2.0.0")
         out = proto.handle_message({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                                     "params": {}})
         self.assertIn("ANSWER_USER means write the answer", out["result"]["instructions"])
