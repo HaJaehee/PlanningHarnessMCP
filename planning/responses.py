@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .choices import letter
 from .models import ErrorCode, NextAction, Plan, PlanStatus
 from .state_machine import resolve_next_action
 
@@ -84,7 +85,11 @@ def render_completion_report(plan: Plan, plan_summary: str | None = None) -> str
         lines.append(plan_summary.strip())
     lines.append("")
     for task in plan.tasks:
-        lines.append(f"{task.task_id}. {task.title}")
+        picked = task.chosen_option()
+        mark = ""
+        if picked is not None:
+            mark = "(권장안) " if task.chosen == 0 else f"({letter(task.chosen)}안 선택) "
+        lines.append(f"{task.task_id}. {mark}{task.title}")
         # A task the human sent back last round. Showing what they asked for, and what
         # it used to say, is what lets them check the request in one line instead of
         # re-reading the whole report.
@@ -131,7 +136,9 @@ def render_halt_for_user(plan: Plan, reason: str, draft: list[str], on_page: boo
     return "\n".join(lines)
 
 
-def render_plan_for_user(plan: Plan, plan_summary: str | None = None) -> str:
+def render_plan_for_user(
+    plan: Plan, plan_summary: str | None = None, on_page: bool = True
+) -> str:
     """Pre-rendered approval block. The model only has to echo this string, which is the
     single most reliable operation a weak model can perform.
 
@@ -156,7 +163,14 @@ def render_plan_for_user(plan: Plan, plan_summary: str | None = None) -> str:
     revised = 0
     for task in plan.tasks:
         mark = "↻ " if task.revision_note else ""
-        lines.append(f"{mark}{task.task_id}. {task.title}")
+        if task.has_choice:
+            lines.append(f"{mark}{task.task_id}. 다음 중 하나를 고르십시오")
+            for index, option in enumerate(task.options or []):
+                tag = " [권장]" if index == 0 else ""
+                why = f" — {option['reason']}" if option.get("reason") else ""
+                lines.append(f"   {letter(index)}. {option['title']}{tag}{why}")
+        else:
+            lines.append(f"{mark}{task.task_id}. {task.title}")
         if task.previous_title:
             lines.append(f"   이전: {task.previous_title}")
         if task.revision_note:
@@ -165,5 +179,12 @@ def render_plan_for_user(plan: Plan, plan_summary: str | None = None) -> str:
     lines.append("")
     if revised:
         lines.append(f"↻ 표시된 {revised}개 태스크만 수정했습니다. 나머지는 그대로입니다.")
+    if plan.choice_points():
+        lines.append(
+            "선택지가 있는 태스크는 승인 페이지에서 고르실 수 있습니다. 고르지 않으면 [권장]안으로 진행합니다."
+            if on_page
+            else "선택지가 있는 태스크는 승인하실 때 '2번 B안'처럼 알려 주십시오. "
+            "말씀이 없으면 [권장]안으로 진행합니다."
+        )
     lines.append("이 계획을 승인합니까? (승인 / 수정 요청 / 거절)")
     return "\n".join(lines)

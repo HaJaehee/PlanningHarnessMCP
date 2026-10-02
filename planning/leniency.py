@@ -26,8 +26,10 @@ _ALLOWED_KEYS: dict[str, set[str]] = {
         "task_updates",
         "revises_step",
         "plan_id",
+        "alternatives",
+        "recommended_reasons",
     },
-    "request_user_approval": {"decision", "plan_summary", "user_comment", "plan_id"},
+    "request_user_approval": {"decision", "plan_summary", "user_comment", "plan_id", "choices"},
     "update_task_progress": {"task_id", "status", "result_log", "plan_id"},
     "get_current_plan": {"plan_id"},
 }
@@ -246,6 +248,141 @@ def _coerce_task_updates(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
     return list(out.values()), unmatched
 
 
+# ---- alternatives (2.0.0) ---------------------------------------------------
+# Narrower than _TASK_ID_KEYS on purpose: in an alternative, "task" is far more often the
+# alternative's text than its id, and reading digits out of "Q3 report" would attach it
+# to task 3.
+_ALT_ID_KEYS = ("task_id", "taskId", "taskid", "id", "task_number", "number")
+_ALT_TITLE_KEYS = ("title", "option", "alternative", "text", "name", "task", "description")
+_REASON_KEYS = ("reason", "why", "tradeoff", "trade_off", "because", "note", "pros_cons")
+# "2: export to CSV", "task 2 - export to CSV", "2) export to CSV"
+_ID_PREFIX = re.compile(r"^\s*(?:task\s*)?(\d{1,2})\s*[:.)\]\-–—]\s*(.+?)\s*$", re.IGNORECASE)
+
+
+def _as_items(value: Any) -> list[Any]:
+    """Lists, JSON strings, line-separated strings and {"2": ...} maps, as one list."""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            return _as_items(json.loads(text))
+        except ValueError:
+            return [line for line in re.split(r"[\n;]+", text) if line.strip()]
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        if any(k in value for k in _ALT_ID_KEYS):
+            return [value]
+        items: list[Any] = []
+        for key, entry in value.items():  # {"2": "...", "3": [...], "4": {...}}
+            for one in entry if isinstance(entry, list) else [entry]:
+                if isinstance(one, dict):
+                    merged = dict(one)
+                    merged.setdefault("task_id", key)
+                    items.append(merged)
+                else:
+                    items.append({"task_id": key, "title": one, "reason": one})
+        return items
+    return []
+
+
+def _first_text(item: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _coerce_alternatives(value: Any) -> list[dict[str, Any]]:
+    """Into [{"task_id": int, "title": str, "reason": str}]. Entries with no task id or no
+    text are dropped: which task an alternative belongs to is never guessed."""
+    out: list[dict[str, Any]] = []
+    for item in _as_items(value):
+        if isinstance(item, str):
+            m = _ID_PREFIX.match(item)
+            if not m:
+                continue
+            item = {"task_id": m.group(1), "title": m.group(2)}
+        if not isinstance(item, dict):
+            continue
+        raw_id = next((item[k] for k in _ALT_ID_KEYS if item.get(k) is not None), None)
+        tid = _coerce_int(raw_id) if not isinstance(raw_id, str) or raw_id.strip().isdigit() \
+            else None
+        title = _first_text(item, _ALT_TITLE_KEYS)
+        if tid is None or tid < 1 or not title:
+            continue
+        reason = _first_text(item, _REASON_KEYS)
+        out.append({"task_id": tid, "title": title,
+                    "reason": "" if reason == title else reason})
+    return out
+
+
+def _coerce_reasons(value: Any) -> dict[int, str]:
+    """Into {task_id: reason}."""
+    out: dict[int, str] = {}
+    for item in _as_items(value):
+        if isinstance(item, str):
+            m = _ID_PREFIX.match(item)
+            if not m:
+                continue
+            item = {"task_id": m.group(1), "reason": m.group(2)}
+        if not isinstance(item, dict):
+            continue
+        raw_id = next((item[k] for k in _ALT_ID_KEYS if item.get(k) is not None), None)
+        tid = _coerce_int(raw_id) if not isinstance(raw_id, str) or raw_id.strip().isdigit() \
+            else None
+        reason = _first_text(item, _REASON_KEYS + ("title", "text"))
+        if tid and tid > 0 and reason:
+            out[tid] = reason
+    return out
+
+
+_RECOMMENDED_WORDS = {"recommended", "default", "권장", "권장안", "기본"}
+
+
+def _choice_index(value: Any) -> int | None:
+    """"A" / "b" / "B안" / "option C" / "recommended" -> 0-based index.
+
+    A bare number is refused on purpose: "1" could mean the first option (A) or index 1
+    (B), and the server does not guess which option a user chose.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    if text in _RECOMMENDED_WORDS:
+        return 0
+    m = re.fullmatch(r"(?:option\s*)?([a-h])\s*(?:안|案)?", text)
+    return "abcdefgh".index(m.group(1)) if m else None
+
+
+def _coerce_choices(value: Any) -> tuple[dict[str, int], list[str]]:
+    out: dict[str, int] = {}
+    bad: list[str] = []
+    for item in _as_items(value):
+        if isinstance(item, dict):
+            raw_id = next((item[k] for k in _ALT_ID_KEYS if item.get(k) is not None), None)
+            pick = next((item[k] for k in ("choice", "option", "pick", "title", "reason")
+                         if item.get(k) is not None), None)
+        else:
+            continue
+        tid = _coerce_int(raw_id)
+        index = _choice_index(pick)
+        if tid is None or tid < 1:
+            continue
+        if index is None:
+            bad.append(str(tid))
+            continue
+        out[str(tid)] = index
+    notes = (
+        [f"Could not read the choice for task(s) {', '.join(bad)}. Use letters: A is the "
+         "recommendation, B / C / D the alternatives."]
+        if bad else []
+    )
+    return out, notes
+
+
 def _normalize_enum(value: Any, aliases: dict[str, Any]) -> str | None:
     if not isinstance(value, str):
         return None
@@ -355,6 +492,40 @@ def normalize(tool_name: str, args: Any) -> tuple[dict[str, Any], list[str]]:
                 )
         if unmatched_titles:
             clean[UNMATCHED_TITLES_KEY] = unmatched_titles
+
+    if "alternatives" in clean:
+        raw = clean["alternatives"]
+        coerced_alts = _coerce_alternatives(raw)
+        if coerced_alts:
+            clean["alternatives"] = coerced_alts
+        else:
+            clean.pop("alternatives")
+            if raw:
+                notes.append(
+                    "Could not read 'alternatives'; ignored it. Expected "
+                    '[{"task_id": 2, "title": "the other way", "reason": "why"}].'
+                )
+
+    if "recommended_reasons" in clean:
+        raw = clean["recommended_reasons"]
+        coerced_reasons = _coerce_reasons(raw)
+        if coerced_reasons:
+            clean["recommended_reasons"] = coerced_reasons
+        else:
+            clean.pop("recommended_reasons")
+            if raw:
+                notes.append(
+                    "Could not read 'recommended_reasons'; ignored it. Expected "
+                    '[{"task_id": 2, "reason": "why you recommend it"}].'
+                )
+
+    if "choices" in clean:
+        coerced_choices, choice_notes = _coerce_choices(clean["choices"])
+        notes.extend(choice_notes)
+        if coerced_choices:
+            clean["choices"] = coerced_choices
+        else:
+            clean.pop("choices")
 
     if "status" in clean:
         normalized = _normalize_enum(clean["status"], _STATUS_ALIASES)

@@ -55,6 +55,13 @@ anything runs - that review is the verification step.
 If the user commented on particular tasks, the server names them: send task_updates
 instead of task_list, rewriting only those tasks."""
 
+# Appended to the reasoning description when alternatives are on (2.0.0). The
+# self-verification loop of D25 is mostly a model oscillating between two ways of doing
+# one task; this hands that indecision to the person whose preference decides it.
+_TORN_REASONING = """
+If you are torn between two ways of doing a task, do not reconsider. Put the one you
+prefer in task_list and the other in alternatives. The user picks."""
+
 # request_user_approval reads differently in each approval mode, and a description that
 # describes the wrong one is a contradiction the model has to reason its way out of.
 # Before 1.16 there was one text for all of them: "ASK_USER, then STOP" and "after the
@@ -308,6 +315,76 @@ PLAN_AND_THINK_SCHEMA_REASONING: dict[str, Any] = {
 }
 
 
+def _alternatives_params(max_per_task: int, max_points: int) -> dict[str, Any]:
+    """The two optional plan_and_think fields of 2.0.0, in the {task_id, ...} shape
+    task_updates already taught the model."""
+    return {
+        "alternatives": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "The task's number in task_list (first = 1). Example: 2",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": (
+                            "Another way to do that task. Example: 'Export the table to CSV "
+                            "and total it with a script'"
+                        ),
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Its trade-off, short. Example: 'faster, loses formatting'",
+                    },
+                },
+                "required": ["task_id", "title"],
+            },
+            "description": (
+                "OPTIONAL. Other ways to do a task, ONLY when the choice depends on the user's "
+                "preference - not on facts you can check yourself. The task in task_list is "
+                "your recommendation; the user picks one option on the approval page and you "
+                f"are told which. At most {max_per_task} per task, {max_points} tasks per "
+                'plan. Example: [{"task_id": 2, "title": "Export to CSV and total it with a '
+                'script", "reason": "faster, loses formatting"}]'
+            ),
+        },
+        "recommended_reasons": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "integer", "minimum": 1, "description": "Example: 2"},
+                    "reason": {
+                        "type": "string",
+                        "description": "Example: 'keeps the report formatting'",
+                    },
+                },
+                "required": ["task_id", "reason"],
+            },
+            "description": (
+                "OPTIONAL. Why you recommend the task_list version of a task that has "
+                'alternatives. Example: [{"task_id": 2, "reason": "keeps the report '
+                'formatting"}]'
+            ),
+        },
+    }
+
+
+_CHOICES_PARAM: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": {"type": "string"},
+    "description": (
+        "OPTIONAL, with decision='APPROVED' only. The option the user picked in chat for each "
+        "task that offered a choice, as a letter: A = your recommendation, B / C / D = the "
+        'alternatives in order. Leave a task out to keep A. Example: {"2": "B"}'
+    ),
+}
+
+
 def _decision_param(chat: bool) -> dict[str, Any]:
     if chat:
         text = (
@@ -409,6 +486,9 @@ def build_tool_definitions(
     model_profile: str = "standard",
     approval_mode: str = "chunked",
     blocking: bool = True,
+    alternatives: bool = True,
+    max_alternatives: int = 3,
+    max_choice_points: int = 3,
 ) -> list[dict[str, Any]]:
     """The advertised tool list for a given configuration.
 
@@ -426,15 +506,25 @@ def build_tool_definitions(
     approval_schema = dict(REQUEST_USER_APPROVAL_SCHEMA)
     approval_schema["properties"] = dict(REQUEST_USER_APPROVAL_SCHEMA["properties"])
     approval_schema["properties"]["decision"] = _decision_param(chat=chat)
+    # Only in chat mode does the model relay what the user picked; with a page the user
+    # picks there, so the field is not even offered (2.0.0).
+    if chat and alternatives:
+        approval_schema["properties"]["choices"] = _CHOICES_PARAM
+
+    plan_text = PLAN_AND_THINK_DESCRIPTION_REASONING if reasoning else PLAN_AND_THINK_DESCRIPTION
+    plan_schema = dict(PLAN_AND_THINK_SCHEMA_REASONING if reasoning else PLAN_AND_THINK_SCHEMA)
+    if alternatives:
+        plan_schema["properties"] = {
+            **plan_schema["properties"],
+            **_alternatives_params(max_alternatives, max_choice_points),
+        }
+        if reasoning:
+            plan_text += _TORN_REASONING
     return [
         {
             "name": "plan_and_think",
-            "description": PLAN_AND_THINK_DESCRIPTION_REASONING
-            if reasoning
-            else PLAN_AND_THINK_DESCRIPTION,
-            "inputSchema": PLAN_AND_THINK_SCHEMA_REASONING
-            if reasoning
-            else PLAN_AND_THINK_SCHEMA,
+            "description": plan_text,
+            "inputSchema": plan_schema,
         },
         {
             "name": "request_user_approval",

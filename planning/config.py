@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SERVER_NAME = "planning-mcp"
-SERVER_VERSION = "1.16.0"
+SERVER_VERSION = "2.0.0"
 
 # The state dir is resolved from this file, NOT from the working directory.
 # AnythingLLM spawns the server with its own CWD, which is why plans "disappear"
@@ -156,6 +156,12 @@ class Config:
     # A goal completed less than this many seconds ago is not planned again; the model
     # is told to answer with the finished results instead. 0 = off.
     replan_cooldown: int = 600
+    # --- per-task alternatives (2.0.0) -------------------------------------
+    # The model may offer other ways to do a task; the human picks on the approval page.
+    # off = the fields are not advertised and are ignored if sent anyway.
+    alternatives: bool = True
+    max_alternatives: int = 3    # per task (so 2-4 options with the recommendation)
+    max_choice_points: int = 3   # tasks per plan that may offer a choice
 
     @property
     def thinking_budget(self) -> int:
@@ -206,6 +212,9 @@ class Config:
             breaker_error_streak=_env_int("PLANNING_MCP_BREAKER_ERROR_STREAK", 4),
             breaker_respawn=_env_int("PLANNING_MCP_BREAKER_RESPAWN", 3),
             replan_cooldown=_env_int("PLANNING_MCP_REPLAN_COOLDOWN", 600),
+            alternatives=_env_bool("PLANNING_MCP_ALTERNATIVES", True),
+            max_alternatives=_env_int("PLANNING_MCP_MAX_ALTERNATIVES", 3),
+            max_choice_points=_env_int("PLANNING_MCP_MAX_CHOICE_POINTS", 3),
         )
 
 

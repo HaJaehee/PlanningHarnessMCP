@@ -15,6 +15,23 @@ from .models import ErrorCode, NextAction, Plan, PlanStatus, TaskStatus
 # ---------------------------------------------------------------------------
 
 
+def choice_note(task) -> str:
+    """The human's pick, restated wherever the task is handed to the model (2.0.0).
+
+    Said at the moment of execution, not only in the approval reply, for the reason
+    _rework_suffix exists: a sentence the model saw once, turns ago, is one it has lost.
+    Only the chosen option is ever named - the others are not repeated anywhere.
+    """
+    picked = task.chosen_option() if task is not None else None
+    if picked is None or not task.chosen:
+        return ""
+    reason = f" ({picked['reason']})" if picked.get("reason") else ""
+    return (
+        f" The user chose this way of doing it over your recommendation{reason} - do it "
+        "exactly this way."
+    )
+
+
 def _halt_action(plan: Plan) -> tuple[str, str]:
     """What a model does while the circuit breaker holds its plan.
 
@@ -407,14 +424,17 @@ def _status_action_inner(plan: Plan | None) -> tuple[str, str]:
         if task.status == TaskStatus.IN_PROGRESS.value:
             return (
                 NextAction.CALL_UPDATE_TASK_PROGRESS.value,
-                f"The task in next_task below ('{task.title}') is in progress. When it is "
-                "finished, call update_task_progress with its task_id, status='DONE' and "
-                "a result_log describing what you actually did." + outstanding,
+                f"The task in next_task below ('{task.title}') is in progress."
+                + choice_note(task)
+                + " When it is finished, call update_task_progress with its task_id, "
+                "status='DONE' and a result_log describing what you actually did."
+                + outstanding,
             )
         return (
             NextAction.CALL_UPDATE_TASK_PROGRESS.value,
-            f"Next task is '{task.title}' - next_task below holds its task_id. Call "
-            "update_task_progress with that task_id and status='IN_PROGRESS'."
+            f"Next task is '{task.title}' - next_task below holds its task_id."
+            + choice_note(task)
+            + " Call update_task_progress with that task_id and status='IN_PROGRESS'."
             + outstanding,
         )
 

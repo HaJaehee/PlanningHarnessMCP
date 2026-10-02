@@ -40,6 +40,7 @@ from typing import Any
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
+from .choices import validate_page_choices
 from .filelock import exclusive
 
 log = logging.getLogger("planning-mcp.approval")
@@ -103,6 +104,9 @@ class Verdict:
     comment: str = ""
     task_comments: dict[str, str] = field(default_factory=dict)
     scope: str = SCOPE_PLAN
+    # 2.0.0 - {task_id: option index} for the tasks that offered a choice. Validated
+    # against the options that were on screen before it is ever recorded.
+    choices: dict[str, int] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +234,7 @@ class ApprovalStore:
             "comment": "",
             "task_comments": {},
             "scope": SCOPE_PLAN,
+            "choices": {},
             "decided_at": None,
         }
         with exclusive(self.lock_path) as got:
@@ -276,6 +281,7 @@ class ApprovalStore:
         comment: str,
         task_comments: Any = None,
         scope: Any = None,
+        choices: Any = None,
     ) -> bool:
         """Called by the page, for one specific queued request.
 
@@ -289,6 +295,11 @@ class ApprovalStore:
         enforced here is that an entry with NO phase at all - written by an older process
         during a rolling restart, which had no per-task review of finished work - falls
         back to a whole-plan revision rather than being guessed at.
+
+        `choices` (2.0.0) must name options this request actually showed, or nothing is
+        recorded: the page only ever posts an index it rendered, so anything else is a
+        stale tab or a forged request, and recording it would run something nobody
+        picked. They count only on an approval, and never on a completion report.
         """
         if decision not in DECISIONS:
             return False
@@ -306,10 +317,18 @@ class ApprovalStore:
                         wanted = SCOPE_PLAN
                     if entry.get("phase") == PHASE_HALT:
                         cleaned = {}
+                    picked: dict[str, int] = {}
+                    if decision == "APPROVED" and entry.get("phase") in (PHASE_PLAN, PHASE_HALT):
+                        checked = validate_page_choices(entry.get("tasks") or [], choices)
+                        if checked is None:
+                            log.warning("Refused choices that were not on screen: %r", choices)
+                            return False
+                        picked = checked
                     entry["decision"] = decision
                     entry["comment"] = comment or ""
                     entry["task_comments"] = cleaned
                     entry["scope"] = wanted
+                    entry["choices"] = picked
                     entry["decided_at"] = time.time()
                     # If this cannot be saved the click did nothing; say so rather than
                     # letting the page claim the decision was recorded.
@@ -409,6 +428,10 @@ class ApprovalStore:
             comment=entry.get("comment", "") or "",
             task_comments=ApprovalStore._clean_task_comments(entry.get("task_comments")),
             scope=scope if scope in SCOPES else SCOPE_PLAN,
+            choices={
+                str(k): v for k, v in (entry.get("choices") or {}).items()
+                if isinstance(v, int) and not isinstance(v, bool)
+            },
         )
 
     def _take(self, match) -> Verdict | None:
@@ -552,6 +575,19 @@ textarea.tc{display:none;min-height:2.4rem;margin:.4rem 0 0 1.95em;width:calc(10
 .scope{display:flex;align-items:center;gap:.45rem;margin:-.5rem 0 1rem;font-size:.86rem;
        opacity:.75}
 .scope input{margin:0}
+/* 2.0.0 - a task that offers a choice. The recommendation is pre-selected and marked;
+   each option carries its trade-off, so the human can pick without asking. */
+.opts{display:flex;flex-direction:column;gap:.3rem;margin:.4rem 0 0 1.95em;font-size:.9rem}
+.opt{display:flex;gap:.45rem;align-items:baseline;cursor:pointer;line-height:1.45}
+.opt input{margin:0;flex:0 0 auto}
+.optl{opacity:.55;min-width:1.1em;font-variant-numeric:tabular-nums}
+.rec{font-size:.72rem;padding:.05rem .4rem;border-radius:4px;background:#e6f4ea;color:#1a7f37;
+     font-weight:600;margin-left:.3rem}
+@media(prefers-color-scheme:dark){.rec{background:#16281c;color:#5dbb77}}
+.why{opacity:.65;font-size:.84rem}
+.pick{opacity:.7;font-style:italic}
+.err{background:#fdecea;color:#b42318;border-radius:8px;padding:.6rem .9rem;margin:0 0 1rem;
+     font-size:.9rem}
 /* Whether an agent is still holding a call open for this request. Not a countdown:
    the request outlives any one tool call, so the honest thing to show is not how long
    is left but whether deciding right now resumes the conversation by itself. */
@@ -567,7 +603,7 @@ textarea.tc{display:none;min-height:2.4rem;margin:.4rem 0 0 1.95em;width:calc(10
 <div class="idle">현재 대기 중인 승인 요청이 없습니다.<br>
 <span style="font-size:.85rem">에이전트가 계획을 제출하면 이곳에 표시됩니다.</span></div></div>
 <script>
-let seen='',busy=false,flash=null,pendingCount=0;
+let seen='',busy=false,flash=null,pendingCount=0,lastError='';
 const IDLE_TITLE='planning-mcp 승인';
 // A popup can be blocked, land on another monitor, or open behind other windows.
 // So the page makes itself noticeable instead: the tab title flashes and a short tone
@@ -654,6 +690,14 @@ function restore(list){
         }
       }
     });
+    // The human's picks survive a rebuild like their comments do (D22).
+    document.querySelectorAll('input[type=radio][data-req="'+d.id+'"]').forEach(r=>{
+      const v=dget(d.id,'ch'+r.getAttribute('data-ctid'));
+      if(v!==''&&r.value===v){
+        r.checked=true;
+        if(v==='other')openComment(d.id,r.getAttribute('data-ctid'),false);
+      }
+    });
     relabel(d.id);
   });
 }
@@ -662,6 +706,15 @@ function restore(list){
 function onInput(ev){
   const el=ev.target;
   if(!el)return;
+  if(el.type==='radio'&&el.hasAttribute('data-ctid')){
+    const req=el.getAttribute('data-req'),tid=el.getAttribute('data-ctid');
+    dset(req,'ch'+tid,el.value);
+    // Something other than the options on offer is a change to the task itself, which
+    // is what the per-task comment and the REVISE button already handle.
+    if(el.value==='other')openComment(req,tid,true);
+    relabel(req);
+    return;
+  }
   if(el.type==='checkbox'&&el.id.indexOf('all-')===0){
     const req=el.id.slice(4);
     dset(req,'_whole',el.checked?'1':'');
@@ -689,6 +742,13 @@ function onStorage(ev){
   if(tid==='_whole'){
     const box=document.getElementById('all-'+req);
     if(box)box.checked=value==='1';
+    relabel(req);
+    return;
+  }
+  if(tid.indexOf('ch')===0){
+    const r=document.querySelector('input[type=radio][data-req="'+req+'"][data-ctid="'+
+      tid.slice(2)+'"][value="'+value+'"]');
+    if(r){r.checked=true;if(value==='other')openComment(req,tid.slice(2),false);}
     relabel(req);
     return;
   }
@@ -769,7 +829,67 @@ function revLabel(phase,ids,whole){
 }
 // The continue button on a halt card states whether it sends the agent a direction.
 function haltLabel(hasText){return hasText?'의견 전달 후 계속':'계속 진행';}
+// ---- choices (2.0.0) -------------------------------------------------------
+// A task that offers a choice shows its options as radios, the model's recommendation
+// (index 0) pre-selected and marked 권장. What is picked travels with the approval;
+// the server refuses any index that was not on screen.
+const LETTERS='ABCDEFGH';
+function hasChoice(t){return !!(t.options&&t.options.length>=2);}
+function optionsHtml(d,t,allowOther){
+  if(!hasChoice(t))return '';
+  const name='ch-'+d.id+'-'+t.task_id;
+  const attrs=' name="'+esc(name)+'" data-req="'+esc(d.id)+'" data-ctid="'+
+    esc(String(t.task_id))+'"';
+  let h='<div class="opts">';
+  t.options.forEach((o,i)=>{
+    // aria-label: a screen reader (and the accessibility tree) otherwise names the
+    // radio by its value, "0" / "1", rather than by the option it stands for.
+    h+='<label class="opt"><input type="radio"'+attrs+' value="'+i+'"'+(i===0?' checked':'')+
+      ' aria-label="'+LETTERS[i]+'. '+esc(o.title)+(i===0?' (권장)':'')+
+      '"><span class="optl">'+LETTERS[i]+'.</span><span>'+esc(o.title)+
+      (i===0?'<span class="rec">권장</span>':'')+
+      (o.reason?' <span class="why">— '+esc(o.reason)+'</span>':'')+'</span></label>';
+  });
+  if(allowOther)h+='<label class="opt"><input type="radio"'+attrs+' value="other" aria-label="기타">'+
+    '<span class="optl"></span><span>기타 (직접 입력)</span></label>';
+  return h+'</div>';
+}
+function checkedOf(id){
+  return Array.from(document.querySelectorAll('input[type=radio][data-req="'+id+'"]:checked'));
+}
+function choicesOf(id){
+  const out={};
+  checkedOf(id).forEach(r=>{if(r.value!=='other')out[r.getAttribute('data-ctid')]=Number(r.value);});
+  return out;
+}
+function anyOther(id){return checkedOf(id).some(r=>r.value==='other');}
+// The approve button, like the REVISE button, says what it will do before it is
+// clicked: which options it carries, or that 기타 needs a revision request instead.
+function okLabel(phase,id){
+  const base=phase==='HALT'?'이 초안으로 승인':'승인';
+  if(anyOther(id))return base+' · 기타는 수정 요청으로';
+  const changed=Object.entries(choicesOf(id)).filter(([k,v])=>v!==0);
+  if(!changed.length)return base;
+  if(changed.length===1)return base+' · '+changed[0][0]+'번 '+LETTERS[changed[0][1]]+'안';
+  return base+' · 선택 '+changed.length+'건 반영';
+}
+function relabelOk(id){
+  const b=document.getElementById('ok-'+id);
+  if(!b)return;
+  b.textContent=okLabel(PHASE[id],id);
+  b.disabled=anyOther(id);
+}
+function openComment(req,tid,focus){
+  const ta=document.querySelector('textarea.tc[data-req="'+req+'"][data-tid="'+tid+'"]');
+  const task=ta&&ta.closest('.task');
+  if(!task)return;
+  task.classList.add('open');
+  const btn=task.querySelector('.tcbtn');
+  if(btn)btn.setAttribute('aria-expanded','true');
+  if(focus)ta.focus();
+}
 function relabel(id){
+  relabelOk(id);
   if(PHASE[id]==='HALT'){
     const b=document.getElementById('rev-'+id),c=document.getElementById('c-'+id);
     if(b)b.textContent=haltLabel(!!(c&&c.value.trim()));
@@ -802,11 +922,18 @@ function taskRows(d){
   return '<p class="tasklabel">태스크 '+(d.tasks||[]).length+'개</p>'+
     '<div class="tasks">'+(d.tasks||[]).map(t=>{
     const badge=t.status&&t.status!=='PENDING'&&!(done&&t.status==='DONE');
+    const choose=!done&&hasChoice(t)&&t.chosen==null;
+    // On a completion report a task that offered a choice says which one was carried
+    // out, so the human can check it was done the way they picked.
+    const picked=done&&hasChoice(t)&&t.chosen!=null
+      ?'<span class="badge">'+(t.chosen===0?'권장안':LETTERS[t.chosen]+'안 선택')+'</span>':'';
     let row='<div class="task"><div class="tt"><span class="tn">'+esc(String(t.task_id))+
-      '.</span><span>'+esc(t.title)+'</span>'+
+      '.</span>'+(choose?'<span class="pick">다음 중 하나를 고르십시오</span>'
+                        :'<span>'+esc(t.title)+'</span>')+picked+
       (badge?'<span class="badge">'+esc(t.status)+'</span>':'')+
       '<button class="tcbtn" type="button" aria-expanded="false" '+
       'onclick="toggleComment(this)">'+(done?'다시 작업':'의견')+'</button></div>';
+    if(choose)row+=optionsHtml(d,t,true);
     if(t.previous_title)row+='<div class="was">'+esc(t.previous_title)+'</div>';
     if(t.revision_note)row+='<div class="note">\\u21BB 요청하신 내용: '+
       esc(t.revision_note)+'</div>';
@@ -850,15 +977,17 @@ function haltCard(d){
   if(tasks.length){
     h+='<p class="tasklabel">'+(d.draft?'현재 초안 · 태스크 ':'태스크 ')+tasks.length+'개</p>'+
       '<div class="tasks">'+tasks.map(t=>'<div class="task"><div class="tt"><span class="tn">'+
-      esc(String(t.task_id))+'.</span><span>'+esc(t.title)+'</span>'+
+      esc(String(t.task_id))+'.</span>'+
+      (hasChoice(t)?'<span class="pick">다음 중 하나를 고르십시오</span>'
+                   :'<span>'+esc(t.title)+'</span>')+
       (t.status&&t.status!=='PENDING'?'<span class="badge">'+esc(t.status)+'</span>':'')+
-      '</div></div>').join('')+'</div>';
+      '</div>'+(d.draft?optionsHtml(d,t,false):'')+'</div>').join('')+'</div>';
   }
   h+=chip(d);
   h+='<textarea id="c-'+esc(d.id)+
     '" placeholder="에이전트에게 전할 방향을 입력해 주십시오 (선택 사항)"></textarea>';
   h+='<div class="row">';
-  if(d.draft)h+='<button class="ok" onclick="decide(\\''+esc(d.id)+
+  if(d.draft)h+='<button class="ok" id="ok-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
     '\\',\\'APPROVED\\')">이 초안으로 승인</button>';
   h+='<button class="rev" id="rev-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
     '\\',\\'REVISE\\')">'+haltLabel(false)+'</button>';
@@ -874,8 +1003,9 @@ function render(list){
   // different wordings when the first poll lands.
   if(!list.length){root.innerHTML='<div class="idle">현재 대기 중인 승인 요청이 없습니다.<br>'+
     '<span style="font-size:.85rem">에이전트가 계획을 제출하면 이곳에 표시됩니다.</span></div>';return;}
+  const anyChoice=list.some(d=>!d.decided&&(d.tasks||[]).some(hasChoice));
   // 여러 세션이 동시에 승인을 기다릴 수 있으므로 큐 전체를 보여준다.
-  root.innerHTML=list.map(d=>{
+  root.innerHTML=(lastError?'<div class="err">'+esc(lastError)+'</div>':'')+list.map(d=>{
     if(d.decided){
       const label=(d.phase==='HALT'?HALT_DONE_LABEL:DONE_LABEL)[d.decided]||d.decided;
       return '<div class="done">'+esc(d.plan_id)+' — '+label+
@@ -903,13 +1033,16 @@ function render(list){
                              :'계획 전체를 다시 세우기 (태스크 추가·삭제·순서 변경 시 선택)')+
       '</label>';
     return html+'<div class="row">'+
-      '<button class="ok" onclick="decide(\\''+esc(d.id)+'\\',\\'APPROVED\\')">승인</button>'+
+      '<button class="ok" id="ok-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
+      '\\',\\'APPROVED\\')">승인</button>'+
       '<button class="rev" id="rev-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
       '\\',\\'REVISE\\')">'+(perTask?revLabel(d.phase,[],false):'수정 요청')+'</button>'+
       '<button class="no" onclick="decide(\\''+esc(d.id)+
       '\\',\\'REJECTED\\')">거절</button></div>';
   }).join('<hr style="border:0;border-top:1px solid #ccd0d5;margin:1.75rem 0">')+
-    '<p class="hint">태스크의 [의견] 또는 [다시 작업] 버튼을 누르면 해당 태스크에만 요청을 남기실 수 '+
+    '<p class="hint">'+(anyChoice?'선택지가 있는 태스크는 [권장]안이 기본으로 선택되어 있습니다. '+
+    '다른 안을 고르면 승인 버튼에 반영 내용이 표시되고, 기타를 고르면 수정 요청으로 바뀝니다.<br>':'')+
+    '태스크의 [의견] 또는 [다시 작업] 버튼을 누르면 해당 태스크에만 요청을 남기실 수 '+
     '있습니다. 완료 보고 단계에서는 지정하신 태스크만 다시 실행되며, 나머지 태스크의 결과는 '+
     '그대로 유지됩니다.<br>'+
     '결정하시기 전까지 해당 에이전트는 후속 작업을 진행하지 못합니다. '+
@@ -923,13 +1056,15 @@ async function decide(id,dec){
   // Task comments travel with every decision, not just a targeted one: even when the
   // whole plan is being rewritten, what the human said about task 3 is useful context.
   try{
-    await fetch('/api/decide',{method:'POST',headers:{'Content-Type':'application/json'},
+    const r=await fetch('/api/decide',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({id:id,decision:dec,comment:c,
-        task_comments:comments(id),scope:scopeOf(id)})});
-    // Only once the decision is away. Clearing first would lose the text if the POST
-    // failed, and this is the one copy of it.
-    dclear(id);
-  }catch(e){}
+        task_comments:comments(id),scope:scopeOf(id),choices:choicesOf(id)})});
+    const j=await r.json();
+    // Only once the decision is recorded. Clearing first would lose the text if it was
+    // not, and this is the one copy of it.
+    if(j&&j.ok){dclear(id);lastError='';}
+    else lastError='결정을 기록하지 못했습니다. 화면이 최신이 아닐 수 있으니 잠시 후 다시 시도해 주십시오.';
+  }catch(e){lastError='결정을 전송하지 못했습니다. 다시 시도해 주십시오.';}
   busy=false;seen='';poll();
 }
 // Bound to #root rather than to each textarea: #root outlives every re-render, so the
@@ -1279,6 +1414,7 @@ class ApprovalServer:
                     body.get("comment", ""),
                     body.get("task_comments"),
                     body.get("scope"),
+                    body.get("choices"),
                 )
                 self._json({"ok": ok})
 

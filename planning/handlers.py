@@ -8,6 +8,7 @@ No handler raises; `dispatch` converts any escaping exception into a resync inst
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import re
@@ -35,6 +36,7 @@ from .config import (
     NO_PROGRESS_WAIT_CEILING_SEC,
     Config,
 )
+from .choices import build_options, letter, validate_model_choices
 from .leniency import UNMATCHED_TITLES_KEY, normalize
 from .loopguard import (
     NO_PLAN,
@@ -65,7 +67,7 @@ from .responses import (
     render_halt_for_user,
     render_plan_for_user,
 )
-from .state_machine import can_start_task, execution_guard
+from .state_machine import can_start_task, choice_note, execution_guard
 from .store import State, Store, goal_key, title_key
 
 log = logging.getLogger("planning-mcp.handlers")
@@ -140,6 +142,11 @@ def reconsider_markers(text: str) -> int:
 # away". Never reaches the model.
 _LOOP_SIGNAL = "_loop_signal"
 REPLAN_REDIRECTED = "REPLAN_REDIRECTED"
+# Internal keys on the args handed to _approve: choices from the page (already validated
+# against what was on screen) and choices the model relayed in chat mode (validated
+# leniently against the plan). Never accepted from the model directly.
+_PAGE_CHOICES = "_page_choices"
+_MODEL_CHOICES = "_model_choices"
 
 
 # Why the breaker stopped an agent, worded for the human who has to decide what next.
@@ -341,7 +348,10 @@ class PlanningHandlers:
         if not plan.halt:
             return base
         payload = "\x00".join(
-            [base, str(plan.halt.get("id", ""))] + plan.halt_draft()
+            [base, str(plan.halt.get("id", ""))]
+            + plan.halt_draft()
+            + [json.dumps([plan.draft_alternatives, plan.draft_reasons],
+                          ensure_ascii=False, sort_keys=True)]
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
@@ -356,6 +366,46 @@ class PlanningHandlers:
         except Exception:  # noqa: BLE001 - an unreadable queue must not fail a call
             log.exception("Could not read the approval queue")
             return None
+
+    def _model_choices(
+        self, args: dict[str, Any], notes: list[str]
+    ) -> dict[str, int] | None:
+        """Choices the model relays from a chat reply - honoured only with no page.
+
+        With a page, the human picks there and the page is the only channel a choice may
+        arrive by; one the model sends is a guess at what they want (D20's lesson,
+        applied to choices).
+        """
+        relayed = args.get("choices")
+        if not relayed:
+            return None
+        if self.approval_ui is not None:
+            notes.append(
+                "choices are made by the user on the approval page; the ones you sent were "
+                "ignored."
+            )
+            return None
+        return relayed
+
+    @staticmethod
+    def _choices_sentence(plan: Plan) -> str:
+        """What the human picked, worded for the model - chosen options only."""
+        parts = []
+        for task in plan.tasks:
+            picked = task.chosen_option()
+            if picked is None:
+                continue
+            if task.chosen == 0:
+                parts.append(f"task {task.task_id}: your recommendation")
+            else:
+                parts.append(f"task {task.task_id}: '{task.title}'")
+        if not parts:
+            return ""
+        return (
+            " The user chose how to do the tasks that offered a choice - "
+            + "; ".join(parts)
+            + ". Do each one exactly that way."
+        )
 
     @staticmethod
     def _redirected(response: dict[str, Any]) -> dict[str, Any]:
@@ -507,10 +557,9 @@ class PlanningHandlers:
         if thought:
             summary = f"{summary}\n에이전트의 마지막 생각: {thought}"
         tasks = (
-            [{"task_id": i, "title": t, "status": TaskStatus.PENDING.value}
-             for i, t in enumerate(draft, start=1)]
+            self._draft_page_tasks(plan)
             if plan.status is PlanStatus.DRAFTING
-            else plan.tasks_brief()
+            else plan.tasks_for_page()
         )
         fingerprint = self._request_fingerprint(plan)
         request_id = self.approval_ui.open_request(
@@ -525,7 +574,63 @@ class PlanningHandlers:
             refusal=ErrorCode.LOOP_HALTED,
         )
 
-    def _mutate_halt(self, plan: Plan, decision: str, comment: str | None) -> str:
+    def _draft_options(self, plan: Plan) -> dict[int, list[dict[str, str]]]:
+        options, _ = build_options(
+            list(plan.draft_tasks),
+            list(plan.draft_alternatives),
+            {int(k): v for k, v in plan.draft_reasons.items() if str(k).isdigit()},
+            self.config.max_alternatives,
+            self.config.max_choice_points,
+        )
+        return options
+
+    def _draft_page_tasks(self, plan: Plan) -> list[dict[str, Any]]:
+        """The draft as approval-page rows, with the choices it carries."""
+        options = self._draft_options(plan)
+        rows = []
+        for i, title in enumerate(plan.draft_tasks, start=1):
+            row: dict[str, Any] = {
+                "task_id": i, "title": title, "status": TaskStatus.PENDING.value
+            }
+            if i in options:
+                row["options"] = options[i]
+            rows.append(row)
+        return rows
+
+    def _apply_choices(self, plan: Plan, choices: dict[Any, int] | None) -> list[dict]:
+        """Make the human's pick the task (2.0.0). Returns what changed, for the audit.
+
+        Every task that offered a choice gets a `chosen`, so the record says the human
+        decided it - picking the recommendation is a decision too. Anything missing or
+        out of range keeps the recommendation (index 0).
+        """
+        picks = {str(k): v for k, v in (choices or {}).items()}
+        changed: list[dict] = []
+        for task in plan.tasks:
+            if not task.has_choice:
+                continue
+            index = picks.get(str(task.task_id), 0)
+            if not isinstance(index, int) or not 0 <= index < len(task.options or []):
+                index = 0
+            task.chosen = index
+            picked = (task.options or [])[index]["title"]
+            if picked != task.title:
+                changed.append({"task_id": task.task_id, "from": task.title, "to": picked})
+                task.title = picked
+        if plan.choice_points():
+            self.store.audit(
+                "choices_applied",
+                plan_id=plan.plan_id,
+                chosen={str(t.task_id): letter(t.chosen or 0) for t in plan.tasks
+                        if t.has_choice},
+                changed=changed or None,
+            )
+        return changed
+
+    def _mutate_halt(
+        self, plan: Plan, decision: str, comment: str | None,
+        choices: dict[Any, int] | None = None,
+    ) -> str:
         """Apply the human's answer to a halt. Returns what happened, for the audit."""
         draft = plan.halt_draft()
         plan.halt = None
@@ -537,16 +642,18 @@ class PlanningHandlers:
         if decision == Decision.APPROVED.value and draft:
             # The human read this draft on the halt card and approved it as it stands.
             if plan.status is PlanStatus.DRAFTING:
+                options = self._draft_options(plan)
                 if plan.tasks:
                     plan.superseded_tasks.append([t.to_dict() for t in plan.tasks])
                 plan.tasks = [
-                    Task(task_id=i, title=title) for i, title in enumerate(draft, start=1)
+                    Task(task_id=i, title=title, options=options.get(i))
+                    for i, title in enumerate(draft, start=1)
                 ]
-                plan.draft_tasks = []
+                plan.clear_draft()
                 plan.pending_revision = None
                 plan.set_status(PlanStatus.AWAITING_APPROVAL)
             plan.approval.requested_at = now_iso()
-            self._mutate_approved(plan, comment)
+            self._mutate_approved(plan, comment, choices)
             return "draft_approved"
         # Continue - with a direction, if the human gave one.
         plan.guidance = (comment or "").strip() or None
@@ -558,9 +665,9 @@ class PlanningHandlers:
 
     def _resolve_halt(
         self, state: State, plan: Plan, decision: str, comment: str | None,
-        notes: list[str],
+        notes: list[str], choices: dict[Any, int] | None = None,
     ) -> dict[str, Any]:
-        action = self._mutate_halt(plan, decision, comment)
+        action = self._mutate_halt(plan, decision, comment, choices)
         guidance = plan.guidance
         self.store.save(state)
         self.store.audit(
@@ -569,7 +676,10 @@ class PlanningHandlers:
         if action == "cancelled":
             message = "The user cancelled this plan. Nothing more will run."
         elif action == "draft_approved":
-            message = "The user approved your draft plan as it stands. Execution is unlocked."
+            message = (
+                "The user approved your draft plan. Execution is unlocked."
+                + self._choices_sentence(plan)
+            )
         else:
             message = "The user let you continue." + (
                 f' They said: "{guidance}". Follow that.' if guidance else ""
@@ -593,7 +703,15 @@ class PlanningHandlers:
         """
         payload = "\x00".join(
             [plan.goal]
-            + [f"{t.task_id}|{t.title}|{t.status}|{(t.result_log or '')}" for t in plan.tasks]
+            + [
+                f"{t.task_id}|{t.title}|{t.status}|{(t.result_log or '')}"
+                # Options join the payload only where a task has them (2.0.0), so a plan
+                # with no choices keeps exactly its 1.16 fingerprint - a request left on
+                # the page across a rolling upgrade still matches.
+                + (f"|{json.dumps(t.options, ensure_ascii=False, sort_keys=True)}|{t.chosen}"
+                   if t.has_choice else "")
+                for t in plan.tasks
+            ]
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
@@ -625,18 +743,22 @@ class PlanningHandlers:
             except Exception:  # noqa: BLE001 - never fail a call over UI housekeeping
                 log.debug("Could not withdraw the approval request for %s", plan.plan_id)
 
-    def _mutate_approved(self, plan: Plan, comment: str | None) -> None:
+    def _mutate_approved(
+        self, plan: Plan, comment: str | None, choices: dict[Any, int] | None = None
+    ) -> None:
         plan.approval.decision = Decision.APPROVED.value
         plan.approval.decided_at = now_iso()
         if comment:
             plan.approval.user_comment = comment
+        if plan.status is not PlanStatus.AWAITING_COMPLETION:
+            self._apply_choices(plan, choices)
         # The "you flagged this one" markers exist to guide a re-read of a revised plan.
         # Once it is approved they are answered, and leaving them would decorate the
         # completion report with stale complaints.
         plan.clear_revision_marks()
         plan.pending_revision = None
         plan.rework_from_completion = False
-        plan.draft_tasks = []
+        plan.clear_draft()
         self._milestone(plan)
         # Approving a completion report closes the plan; approving a draft unlocks it -
         # unless the draft is already finished work carried through a redraft, in which
@@ -766,7 +888,7 @@ class PlanningHandlers:
         # A new drafting round: a fresh thinking budget, and no stale draft from the round
         # the human just sent back.
         plan.step_budget_end = 0
-        plan.draft_tasks = []
+        plan.clear_draft()
         # Markers from a previous round would otherwise read as complaints about this one.
         plan.clear_revision_marks()
         targets = (
@@ -802,7 +924,9 @@ class PlanningHandlers:
         verdict: Verdict = taken
         if plan.halt:
             # The fingerprint matched the halt card, so this answers the halt.
-            action = self._mutate_halt(plan, verdict.decision, verdict.comment)
+            action = self._mutate_halt(
+                plan, verdict.decision, verdict.comment, verdict.choices
+            )
             self.store.save(state)
             self.store.audit(
                 "late_decision_applied", plan_id=plan.plan_id, decision=verdict.decision,
@@ -810,7 +934,7 @@ class PlanningHandlers:
             )
             return
         if verdict.decision == Decision.APPROVED.value:
-            self._mutate_approved(plan, verdict.comment)
+            self._mutate_approved(plan, verdict.comment, verdict.choices)
         elif verdict.decision == Decision.REJECTED.value:
             self._mutate_rejected(plan, verdict.comment)
         else:
@@ -1181,7 +1305,7 @@ class PlanningHandlers:
             if plan.status is not PlanStatus.DRAFTING:
                 # Re-entering DRAFTING opens a new round with a fresh thinking budget.
                 plan.step_budget_end = 0
-                plan.draft_tasks = []
+                plan.clear_draft()
             plan.set_status(PlanStatus.DRAFTING)
             plan.approval.reset_request()
             state.active_plan_id = plan.plan_id
@@ -1246,6 +1370,16 @@ class PlanningHandlers:
                 need_more = True
                 notes.append("need_more_thinking was missing; assumed true (still planning).")
 
+        # --- alternatives (2.0.0) ---------------------------------------------
+        alternatives: list[dict[str, Any]] = list(args.get("alternatives") or [])
+        reasons: dict[int, str] = dict(args.get("recommended_reasons") or {})
+        if (alternatives or reasons) and not self.config.alternatives:
+            notes.append(
+                "Alternatives are turned off on this server; 'alternatives' and "
+                "'recommended_reasons' were ignored. Send only task_list."
+            )
+            alternatives, reasons = [], {}
+
         # --- thinking budget --------------------------------------------------
         # The round's budget is fixed on its first step. A model whose habit is one
         # more check (D25) is not refused when it runs out - a refusal is one more thing
@@ -1256,7 +1390,14 @@ class PlanningHandlers:
         if budget > 0 and plan.step_budget_end <= 0:
             plan.step_budget_end = (step_number - 1) + budget
         if need_more and args.get("task_list"):
+            # The alternatives travel with the draft they number into: a new draft
+            # replaces them, so a choice can never point at a task that has moved.
             plan.draft_tasks = list(args["task_list"])[: self.config.max_tasks]
+            plan.draft_alternatives = alternatives
+            plan.draft_reasons = {str(k): v for k, v in reasons.items()}
+        elif need_more and (alternatives or reasons) and plan.draft_tasks:
+            plan.draft_alternatives = alternatives
+            plan.draft_reasons = {str(k): v for k, v in reasons.items()}
         auto_submitted = False
         if need_more and budget > 0 and step_number >= plan.step_budget_end:
             if plan.draft_tasks:
@@ -1302,10 +1443,19 @@ class PlanningHandlers:
             # is the answer. Refusing (MISSING_TASK_LIST) would send a model that has
             # finally stopped back into the loop it just left.
             task_list = list(plan.draft_tasks)
+            if not alternatives and not reasons:
+                alternatives = list(plan.draft_alternatives)
+                reasons = {int(k): v for k, v in plan.draft_reasons.items()}
             if not auto_submitted:
                 notes.append(
                     "No task_list was sent, so your latest draft task_list was used."
                 )
+        if task_updates and (alternatives or reasons) and not task_list:
+            notes.append(
+                "alternatives can only be offered with a full task_list; they were ignored "
+                "for this task_updates call."
+            )
+            alternatives, reasons = [], {}
 
         # A model told to rewrite one flagged task frequently sends only the new wording -
         # task_updates=["the rewritten task"] - because that is what it was asked for.
@@ -1419,14 +1569,16 @@ class PlanningHandlers:
                 self.store.audit(
                     "evidence_carried", plan_id=plan.plan_id, tasks=carried
                 )
+        self._attach_options(plan, alternatives, reasons, notes)
         plan.set_status(PlanStatus.AWAITING_APPROVAL)
         plan.approval.reset_request()
-        plan.draft_tasks = []
+        plan.clear_draft()
         self._milestone(plan)
         self.store.save(state)
         self.store.audit(
             "plan_finalized", plan_id=plan.plan_id, tasks=[t.title for t in plan.tasks],
             auto=auto_submitted or None,
+            choice_points=plan.choice_points() or None,
         )
 
         if auto_submitted and self.approval_ui is not None:
@@ -1442,20 +1594,59 @@ class PlanningHandlers:
                 budget_note += f"\n에이전트의 마지막 생각: {last_thought}"
             return self._ask_user(state, plan, {"plan_summary": budget_note}, notes)
 
+        points = plan.choice_points()
+        offered = (
+            f" Task(s) {', '.join(str(t) for t in points)} offer a choice; the user picks "
+            "on the approval page, and you will be told which way to do them."
+            if points
+            else ""
+        )
         return build(
             plan,
             recorded_step=step_number,
             total_steps=plan.total_steps,
             tasks=plan.tasks_brief(),
+            choice_points=points or None,
             notes=notes,
             qualify=len(state.active_plans()) > 1,
             goal=plan.goal if goal_was_revised else None,
             message=(
                 f"Plan created with {len(plan.tasks)} tasks. It does not need more "
                 "checking - the user reviews it next. Execution is locked until they "
-                "approve."
+                "approve." + offered
             ),
         )
+
+    def _attach_options(
+        self,
+        plan: Plan,
+        alternatives: list[dict[str, Any]],
+        reasons: dict[int, str],
+        notes: list[str],
+    ) -> None:
+        """Turn the model's alternatives into each task's options (2.0.0).
+
+        Every task's choice is rebuilt from what came with this task list - a redraft
+        that drops an alternative drops the choice. A task already DONE (carried through
+        a redraft from the completion report) offers none: there is nothing left to
+        choose about work that has happened.
+        """
+        for task in plan.tasks:
+            task.clear_choice()
+        if not (alternatives or reasons):
+            return
+        locked = {t.task_id for t in plan.tasks if t.status == TaskStatus.DONE.value}
+        options, alt_notes = build_options(
+            [t.title for t in plan.tasks],
+            alternatives,
+            reasons,
+            self.config.max_alternatives,
+            self.config.max_choice_points,
+            locked,
+        )
+        notes.extend(alt_notes)
+        for task in plan.tasks:
+            task.options = options.get(task.task_id)
 
     @staticmethod
     def _carry_evidence(previous: list[Task], current: list[Task]) -> list[int]:
@@ -1550,6 +1741,7 @@ class PlanningHandlers:
             task = plan.get_task(task_id)
             task.previous_title = task.title
             task.title = title
+            task.clear_choice()  # the old options described the old wording
             task.revision_note = targets[task_id]
             # A rewritten task is a different task, so whatever was done for the old one
             # no longer counts. Untouched tasks keep their status and their result_log.
@@ -1573,7 +1765,7 @@ class PlanningHandlers:
             )
 
         plan.pending_revision = None
-        plan.draft_tasks = []
+        plan.clear_draft()
         plan.set_status(PlanStatus.AWAITING_APPROVAL)
         plan.approval.reset_request()
         self._milestone(plan)
@@ -1655,7 +1847,8 @@ class PlanningHandlers:
                     approval_url=self.approval_ui.url if self.approval_ui else None,
                 )
             return self._resolve_halt(
-                state, plan, decision.value, args.get("user_comment"), notes
+                state, plan, decision.value, args.get("user_comment"), notes,
+                choices=self._model_choices(args, notes),
             )
 
         if decision is Decision.ASK_USER:
@@ -1695,6 +1888,10 @@ class PlanningHandlers:
             )
 
         if decision is Decision.APPROVED:
+            relayed = self._model_choices(args, notes)
+            args = {k: v for k, v in args.items() if k != "choices"}
+            if relayed:
+                args[_MODEL_CHOICES] = relayed
             return self._approve(state, plan, args, notes)
         if decision is Decision.REVISE:
             return self._revise(state, plan, args, notes)
@@ -1759,7 +1956,9 @@ class PlanningHandlers:
         display = (
             render_completion_report(plan, plan_summary)
             if completion_phase
-            else render_plan_for_user(plan, plan_summary)
+            else render_plan_for_user(
+                plan, plan_summary, on_page=self.approval_ui is not None
+            )
         )
 
         # The URL only reaches the human through stderr otherwise, which nobody reads in
@@ -1777,7 +1976,7 @@ class PlanningHandlers:
             fingerprint = self._fingerprint(plan)
             phase = PHASE_COMPLETION if completion_phase else PHASE_PLAN
             request_id = self.approval_ui.open_request(
-                plan.plan_id, plan.goal, display, plan.tasks_brief(),
+                plan.plan_id, plan.goal, display, plan.tasks_for_page(),
                 fingerprint, phase, plan_summary,
             )
             if request_id is None:
@@ -1923,11 +2122,16 @@ class PlanningHandlers:
                 )
             if plan.halt:
                 return self._resolve_halt(
-                    state, plan, decided.decision, decided.comment, notes
+                    state, plan, decided.decision, decided.comment, notes,
+                    choices=decided.choices,
                 )
             # Reuse the already-tested transitions so the blocking path and the
             # two-phase path can never diverge.
-            forwarded = {"user_comment": decided.comment} if decided.comment else {}
+            forwarded: dict[str, Any] = (
+                {"user_comment": decided.comment} if decided.comment else {}
+            )
+            if decided.choices:
+                forwarded[_PAGE_CHOICES] = decided.choices
             if decided.decision == Decision.APPROVED.value:
                 return self._approve(state, plan, forwarded, notes)
             if decided.decision == Decision.REJECTED.value:
@@ -2188,7 +2392,12 @@ class PlanningHandlers:
                 tasks=plan.tasks_brief(),
             )
 
-        self._mutate_approved(plan, args.get("user_comment"))
+        choices = args.get(_PAGE_CHOICES)
+        if choices is None and args.get(_MODEL_CHOICES):
+            options = {t.task_id: t.options for t in plan.tasks if t.has_choice}
+            choices, choice_notes = validate_model_choices(options, args[_MODEL_CHOICES])
+            notes.extend(choice_notes)
+        self._mutate_approved(plan, args.get("user_comment"), choices)
         self.store.save(state)
         self.store.audit(
             "completion_verified" if completion_phase else "approved",
@@ -2214,7 +2423,7 @@ class PlanningHandlers:
                 "The user approved this plan. Every task in it is already finished, so "
                 "report completion now instead of executing anything."
                 if plan.status is PlanStatus.AWAITING_COMPLETION
-                else "Execution is now unlocked."
+                else "Execution is now unlocked." + self._choices_sentence(plan)
             ),
             notes=notes,
             qualify=len(state.active_plans()) > 1,
@@ -2590,6 +2799,7 @@ class PlanningHandlers:
                 "for you and is in next_task - do that work NOW, then report it DONE "
                 "with its own result_log. Do not send IN_PROGRESS again."
                 + self._rework_suffix(advanced)
+                + choice_note(advanced)
             )
         elif nxt is not None:
             # Nothing was auto-started (auto_advance off, or the next task is not
@@ -2599,6 +2809,7 @@ class PlanningHandlers:
                 "in next_task. Call update_task_progress with its task_id and "
                 "status='IN_PROGRESS'."
                 + self._rework_suffix(nxt)
+                + choice_note(nxt)
             )
         elif plan.status is PlanStatus.AWAITING_COMPLETION:
             # Every task is finished, so the only thing left is the completion report.

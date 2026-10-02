@@ -103,6 +103,18 @@ class ErrorCode(str, Enum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
+def _clean_options(raw: Any) -> list[dict[str, str]] | None:
+    """Options from a state file; anything malformed reads as "no choice"."""
+    if not isinstance(raw, list):
+        return None
+    out = [
+        {"title": str(o.get("title") or ""), "reason": str(o.get("reason") or "")}
+        for o in raw
+        if isinstance(o, dict) and str(o.get("title") or "").strip()
+    ]
+    return out if len(out) >= 2 else None
+
+
 def _safe_int(value: Any, default: int) -> int:
     """An int from a state file that may have been hand-edited. Never raises."""
     try:
@@ -134,6 +146,12 @@ class Task:
     # redo work with no record of what it did the first time is working blind, and a
     # small one will simply produce something unrelated. Kept until the plan completes.
     previous_result_log: str | None = None
+    # 2.0.0 - a choice the human makes on the approval page. options[0] is the model's
+    # recommendation (the title it sent in task_list), options[1:] its alternatives; each
+    # {"title", "reason"}. `chosen` is the index the human picked, set at approval, and
+    # `title` becomes that option's text. None on a task that offered no choice.
+    options: list[dict[str, str]] | None = None
+    chosen: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -146,6 +164,8 @@ class Task:
             "revision_note": self.revision_note,
             "previous_title": self.previous_title,
             "previous_result_log": self.previous_result_log,
+            "options": self.options,
+            "chosen": self.chosen,
         }
 
     @classmethod
@@ -160,7 +180,25 @@ class Task:
             revision_note=raw.get("revision_note"),
             previous_title=raw.get("previous_title"),
             previous_result_log=raw.get("previous_result_log"),
+            options=_clean_options(raw.get("options")),
+            chosen=raw.get("chosen") if isinstance(raw.get("chosen"), int) else None,
         )
+
+    @property
+    def has_choice(self) -> bool:
+        return bool(self.options) and len(self.options) >= 2
+
+    def chosen_option(self) -> dict[str, str] | None:
+        if not self.has_choice or self.chosen is None:
+            return None
+        if not 0 <= self.chosen < len(self.options or []):
+            return None
+        return self.options[self.chosen]
+
+    def clear_choice(self) -> None:
+        """The task was rewritten, so the options it offered no longer describe it."""
+        self.options = None
+        self.chosen = None
 
     def clear_revision_marks(self) -> None:
         self.revision_note = None
@@ -194,6 +232,23 @@ class Task:
             out["previous_title"] = self.previous_title
         if self.previous_result_log:
             out["previous_result_log"] = self.previous_result_log
+        # Only what was chosen, never what was not (2.0.0). This dict is what the model
+        # reads; an alternative it can still see is an alternative it may still do - the
+        # D19 lesson, applied before the fact. The page gets the options from page_brief.
+        picked = self.chosen_option()
+        if picked is not None:
+            out["chosen_by_user"] = "recommended" if self.chosen == 0 else "alternative"
+            if picked.get("reason"):
+                out["choice_reason"] = picked["reason"]
+        return out
+
+    def page_brief(self) -> dict[str, Any]:
+        """What the approval page shows: the model's view plus every option on offer."""
+        out = self.brief()
+        if self.has_choice:
+            out["options"] = [dict(o) for o in self.options or []]
+            if self.chosen is not None:
+                out["chosen"] = self.chosen
         return out
 
 
@@ -298,6 +353,11 @@ class Plan:
     # has something the server can put in front of the human when its thinking budget
     # runs out. Cleared whenever a task list is finalized.
     draft_tasks: list[str] = field(default_factory=list)
+    # 2.0.0 - the alternatives and recommended reasons sent with that draft, kept with it
+    # so a draft the server submits on the model's behalf still offers the choices the
+    # model was torn between. Tied to draft_tasks' numbering: replaced or cleared with it.
+    draft_alternatives: list[dict[str, Any]] = field(default_factory=list)
+    draft_reasons: dict[str, str] = field(default_factory=dict)
     # The step number at which this drafting round's thinking budget is spent. 0 means
     # "not started": the next thinking step opens a fresh round. Reset to 0 whenever the
     # plan re-enters DRAFTING (a human asked for changes, a task failed, a halt was lifted).
@@ -329,6 +389,8 @@ class Plan:
             "original_goal": self.original_goal or self.goal,
             "goal_history": self.goal_history,
             "draft_tasks": self.draft_tasks,
+            "draft_alternatives": self.draft_alternatives,
+            "draft_reasons": self.draft_reasons,
             "step_budget_end": self.step_budget_end,
             "halt": self.halt,
             "guidance": self.guidance,
@@ -356,6 +418,12 @@ class Plan:
             # Fields added in 1.16.0. A file written earlier has none of them, which reads
             # as "no draft, no budget round started, not halted" - exactly right.
             draft_tasks=[str(t) for t in (raw.get("draft_tasks") or []) if isinstance(t, str)],
+            draft_alternatives=[
+                a for a in (raw.get("draft_alternatives") or []) if isinstance(a, dict)
+            ],
+            draft_reasons={
+                str(k): str(v) for k, v in (raw.get("draft_reasons") or {}).items()
+            } if isinstance(raw.get("draft_reasons"), dict) else {},
             step_budget_end=_safe_int(raw.get("step_budget_end"), 0),
             halt=raw.get("halt") if isinstance(raw.get("halt"), dict) else None,
             guidance=str(raw["guidance"]) if raw.get("guidance") else None,
@@ -499,6 +567,18 @@ class Plan:
     def tasks_brief(self) -> list[dict[str, Any]]:
         return [t.brief() for t in self.tasks]
 
+    def tasks_for_page(self) -> list[dict[str, Any]]:
+        """The task rows the approval page renders - with every option on offer."""
+        return [t.page_brief() for t in self.tasks]
+
+    def choice_points(self) -> list[int]:
+        return [t.task_id for t in self.tasks if t.has_choice]
+
+    def clear_draft(self) -> None:
+        self.draft_tasks = []
+        self.draft_alternatives = []
+        self.draft_reasons = {}
+
     def next_task_brief(self) -> dict[str, Any] | None:
         """The one task the model may act on now - the ONLY place an id is published.
 
@@ -525,6 +605,11 @@ class Plan:
             out["revision_note"] = task.revision_note
         if task.previous_result_log:
             out["previous_result_log"] = task.previous_result_log
+        picked = task.chosen_option()
+        if picked is not None:
+            out["chosen_by_user"] = "recommended" if task.chosen == 0 else "alternative"
+            if picked.get("reason"):
+                out["choice_reason"] = picked["reason"]
         return out
 
     # ---- targeted revision ---------------------------------------------
