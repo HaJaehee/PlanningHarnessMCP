@@ -1249,13 +1249,12 @@ function editCriterion(btn,req,tid){
 function dwRow(d,t,editable){
   const has=!!t.done_when,rid=esc(d.id),tid=esc(String(t.task_id));
   if(!has&&!editable)return '';
-  let h='<div class="dw'+(has?'':' hid')+'"><span class="dwl">완료 기준</span>'+
+  let h='<div class="dw'+(has?'':' hid')+'"><span class="dwl">태스크 완료 기준</span>'+
     '<span class="dwt">'+esc(t.done_when||'')+
     (t.done_when_by==='user'?'<span class="dwby">사용자 지정</span>':'')+'</span>';
   if(editable)h+='<input class="dwi" type="text" maxlength="200" data-req="'+rid+
     '" data-dtid="'+tid+'" data-orig="'+esc(t.done_when||'')+'" value="'+esc(t.done_when||'')+
-    '" placeholder="이 태스크가 끝났다고 볼 기준 (예: 분기별 합계 4행이 있는 표가 저장된다)" '+
-    'aria-label="'+tid+'번 완료 기준">'+
+    '" aria-label="'+tid+'번 태스크 완료 기준">'+
     '<button class="dwbtn" type="button" onclick="editCriterion(this,\\''+rid+'\\',\\''+
     tid+'\\')">수정</button>';
   return h+'</div>';
@@ -1391,7 +1390,7 @@ function taskRows(d){
       (took?'<span class="took">소요 '+took+'</span>':'')+
       (editable&&!t.done_when?'<button class="tcbtn dwadd" type="button" '+
         'onclick="editCriterion(this,\\''+esc(d.id)+'\\',\\''+esc(String(t.task_id))+
-        '\\')">기준 추가</button>':'')+
+        '\\')">완료 기준 추가</button>':'')+
       '<button class="tcbtn" type="button" aria-expanded="false" '+
       'onclick="toggleComment(this)">'+(done?'다시 작업':'의견')+'</button></div>';
     if(choose)row+=optionsHtml(d,t,true);
@@ -1597,7 +1596,7 @@ function hintHtml(list){
     '태스크의 [의견] 또는 [다시 작업] 버튼을 누르면 해당 태스크에만 요청을 남기실 수 '+
     '있습니다. 완료 보고 단계에서는 지정하신 태스크만 다시 실행되며, 나머지 태스크의 결과는 '+
     '그대로 유지됩니다.<br>'+
-    (anyPlan?'[기준 추가] 또는 [수정]으로 태스크의 완료 기준을 직접 적으실 수 있습니다. '+
+    (anyPlan?'[완료 기준 추가] 또는 [수정]으로 태스크의 완료 기준을 직접 적으실 수 있습니다. '+
     '적은 기준은 승인과 함께 반영되며, 수정 요청을 거치지 않습니다.<br>':'')+
     '결정하시기 전까지 해당 에이전트는 후속 작업을 진행하지 못합니다. '+
     '요청은 응답하실 때까지 사라지지 않으니 천천히 검토해 주시기 바랍니다.');

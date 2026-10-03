@@ -1199,8 +1199,20 @@ class TestToolTextIsLean(unittest.TestCase):
 class TestPageTemplate(unittest.TestCase):
     def test_the_page_can_write_a_criterion_and_send_it(self):
         for piece in ("criteria:criteriaOf(id)", "function criteriaOf(id)", "function dwRow(",
-                      "기준 추가", "완료 기준", "data-orig=", "'dw'+", "row+=dwRow(d,t,editable)"):
+                      "data-orig=", "'dw'+", "row+=dwRow(d,t,editable)"):
             self.assertIn(piece, _PAGE, piece)
+
+    def test_the_criterion_row_is_named_for_what_it_is(self):
+        """The label says whose criterion it is, the button says what it adds, and the
+        field carries no sample sentence - the label beside it already says what goes
+        in, and a grey example read as if something had been filled in."""
+        self.assertIn('<span class="dwl">태스크 완료 기준</span>', _PAGE)
+        self.assertIn(">완료 기준 추가</button>", _PAGE)
+        self.assertIn("[완료 기준 추가] 또는 [수정]으로", _PAGE)
+        self.assertIn("번 태스크 완료 기준\">", _PAGE)
+        row = _PAGE[_PAGE.index("function dwRow("):_PAGE.index("// ---- what the server found")]
+        self.assertNotIn("placeholder", row)
+        self.assertNotIn("이 태스크가 끝났다고 볼 기준", _PAGE)
 
     def test_the_approve_button_says_what_it_carries(self):
         self.assertIn("' · 완료 기준 '+crit+'건 반영'", _PAGE)

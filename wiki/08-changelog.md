@@ -485,6 +485,9 @@ where 3.1 spends its effort, in two directions: ask less of the model, give the 
   box stays open, a selection and the caret stay where they were. A decision switches off
   and redraws its own card only
   ([06](06-human-in-the-loop.md#one-card-at-a-time-310)).
+- **The criterion row says what it is.** Its label is 태스크 완료 기준 (was 완료 기준), the
+  button that adds one is 완료 기준 추가 (was 기준 추가), and the field no longer shows a
+  sample sentence as its placeholder.
 - **Nothing typed is dropped.** A request not yet applied can be taken back and its words
   return to the box; a stop or a note that arrives after the last task is shown on the
   completion report; one that meets a failure goes to the model with the failure; a memo

@@ -403,12 +403,14 @@ shown what the server itself found after it. Server side:
 
 ```
 2.  엑셀 피벗으로 매출 집계                                        [의견]
-    완료 기준  분기별 매출 합계 4행이 있는 표가 만들어진다            [수정]
-3.  5줄 요약 작성                                    [기준 추가]   [의견]
+    태스크 완료 기준  분기별 매출 합계 4행이 있는 표가 만들어진다     [수정]
+3.  5줄 요약 작성                               [완료 기준 추가]   [의견]
 ```
 
 - A task the model gave a criterion shows it with [수정]; a task without one shows only a small
-  [기준 추가] button. Rendered as an open field on every row it would be the twelve textareas of
+  [완료 기준 추가] button (the row label and the button were 완료 기준 / 기준 추가 until
+  3.1.0, and the field carried a sample sentence as its placeholder - removed, because the
+  label beside it already says what goes in). Rendered as an open field on every row it would be the twelve textareas of
   1.11 again - the plan is what the human came to read.
 - The human writes or rewrites it **and approves in the same click**. Nothing about the task
   changed, so there is nothing for the agent to redraft and no round trip through 수정 요청 -
