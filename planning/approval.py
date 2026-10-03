@@ -787,15 +787,30 @@ dialog.about::backdrop{background:rgba(0,0,0,.35)}
 textarea.tc{display:none;min-height:2.4rem;margin:.4rem 0 0 1.95em;width:calc(100% - 1.95em);
             font-size:.86rem;padding:.4rem .55rem}
 .task.open textarea.tc{display:block}
-.tcbtn{flex:0 0 auto;min-width:0;margin-left:auto;align-self:center;padding:.15rem .5rem;
-       font-size:.76rem;font-weight:500;border-radius:6px;background:#e6e8eb;color:inherit;
-       opacity:.65}
-.tcbtn:hover{opacity:1}
-.task.open .tcbtn{opacity:1}
+/* The small buttons on a task row - 의견 / 다시 작업, 완료 기준 추가, 수정. They used to be
+   flat grey at 65% opacity and read as labels rather than as something to press. Bold
+   now, and slightly raised: a light edge on top, a shadow underneath, pressed in while
+   held - and while the comment box the button opens is open. */
+.tcbtn,.dwbtn{flex:0 0 auto;min-width:0;font-weight:700;border-radius:6px;color:inherit;
+              border:1px solid #c2c7ce;background:linear-gradient(#fff,#e1e4e8);
+              box-shadow:0 1px 2px rgba(0,0,0,.2),inset 0 1px 0 #fff}
+.tcbtn:hover,.dwbtn:hover{background:linear-gradient(#fff,#d5d9df)}
+.tcbtn:active,.dwbtn:active,.tcbtn[aria-expanded="true"]{
+  background:#dfe2e6;box-shadow:inset 0 1px 2px rgba(0,0,0,.28)}
+.tcbtn:active,.dwbtn:active{transform:translateY(1px)}
+.tcbtn{margin-left:auto;align-self:center;padding:.15rem .5rem;font-size:.76rem}
 /* A comment written and then collapsed is still submitted, so the row has to keep saying
    so - otherwise the human sends a targeted revision they can no longer see. */
-.task.filled .tcbtn{background:#8a5a00;color:#fff;opacity:1}
-@media(prefers-color-scheme:dark){.tcbtn{background:#2c3038}}
+.task.filled .tcbtn:not(.dwadd){background:#8a5a00;border-color:#6d4700;color:#fff;
+  box-shadow:0 1px 2px rgba(0,0,0,.25),inset 0 1px 0 rgba(255,255,255,.25)}
+@media(prefers-color-scheme:dark){
+  .tcbtn,.dwbtn{border-color:#4a505b;background:linear-gradient(#3b414b,#2a2e36);
+                box-shadow:0 1px 2px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.1)}
+  .tcbtn:hover,.dwbtn:hover{background:linear-gradient(#454b56,#30353e)}
+  .tcbtn:active,.dwbtn:active,.tcbtn[aria-expanded="true"]{
+    background:#23272e;box-shadow:inset 0 1px 2px rgba(0,0,0,.6)}
+  .task.filled .tcbtn:not(.dwadd){background:#8a5a00;border-color:#b07a14}
+}
 .scope{display:flex;align-items:center;gap:.45rem;margin:-.5rem 0 1rem;font-size:.86rem;
        opacity:.75}
 .scope input{margin:0}
@@ -824,10 +839,7 @@ textarea.tc{display:none;min-height:2.4rem;margin:.4rem 0 0 1.95em;width:calc(10
 .dwl{flex:0 0 auto;font-size:.72rem;font-weight:600;letter-spacing:.04em;opacity:.5}
 .dwt{flex:1 1 auto;word-break:break-word}
 .dwby{font-size:.72rem;opacity:.6;margin-left:.35rem}
-.dwbtn{flex:0 0 auto;min-width:0;padding:.1rem .45rem;font-size:.74rem;font-weight:500;
-       border-radius:6px;background:#e6e8eb;color:inherit;opacity:.65}
-.dwbtn:hover{opacity:1}
-@media(prefers-color-scheme:dark){.dwbtn{background:#2c3038}}
+.dwbtn{padding:.1rem .45rem;font-size:.74rem}
 input.dwi{display:none;flex:1 1 auto;min-width:0;box-sizing:border-box;border-radius:6px;
           padding:.3rem .5rem;border:1px solid #ccd0d5;font:inherit;font-size:.86rem;
           background:transparent;color:inherit}

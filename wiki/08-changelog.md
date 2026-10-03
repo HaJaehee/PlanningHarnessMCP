@@ -490,6 +490,9 @@ where 3.1 spends its effort, in two directions: ask less of the model, give the 
   반영`), the warning about evidence that repeats it, and the plan and completion text
   shown in chat. The button that adds one is 완료 기준 추가 (was 기준 추가), and the field
   no longer shows a sample sentence as its placeholder.
+- **The small row buttons look like buttons.** 의견 / 다시 작업, 완료 기준 추가 and 수정 were
+  flat grey at 65% opacity; they are bold and slightly raised (a border, a light top edge,
+  a shadow underneath), pressed in while held and while the comment box is open.
 - **Nothing typed is dropped.** A request not yet applied can be taken back and its words
   return to the box; a stop or a note that arrives after the last task is shown on the
   completion report; one that meets a failure goes to the model with the failure; a memo

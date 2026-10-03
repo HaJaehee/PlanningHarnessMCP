@@ -1214,6 +1214,24 @@ class TestPageTemplate(unittest.TestCase):
         self.assertNotIn("placeholder", row)
         self.assertNotIn("이 태스크가 끝났다고 볼 기준", _PAGE)
 
+    def test_the_small_row_buttons_look_like_buttons(self):
+        """의견, 완료 기준 추가 and 수정 were flat grey at 65% opacity and were missed.
+        They are bold and slightly raised, in both colour schemes."""
+        start = _PAGE.index(".tcbtn,.dwbtn{")
+        rule = _PAGE[start:_PAGE.index("}", start)]
+        for piece in ("font-weight:700", "border:1px solid", "linear-gradient(",
+                      "box-shadow:0 1px 2px"):
+            self.assertIn(piece, rule, piece)
+        css = _PAGE[:_PAGE.index("</style>")]
+        for selector in (".tcbtn{", ".dwbtn{", ".tcbtn,.dwbtn{"):
+            at = css.index(selector)
+            self.assertNotIn("opacity", css[at:css.index("}", at)], selector)
+        self.assertIn('.tcbtn[aria-expanded="true"]', css)
+        dark = css[css.index("@media(prefers-color-scheme:dark){\n  .tcbtn,.dwbtn{"):]
+        self.assertIn("linear-gradient(#3b414b,#2a2e36)", dark[:400])
+        # Only the button whose comment is filled turns amber - not the one beside it.
+        self.assertIn(".task.filled .tcbtn:not(.dwadd){", css)
+
     def test_the_criterion_has_one_name_wherever_the_user_reads_it(self):
         """Page and chat text alike say 태스크 완료 기준. The one place the shorter form
         stays is the button that adds one, which the user named 완료 기준 추가."""
