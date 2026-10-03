@@ -36,7 +36,10 @@ class Session:
         env = dict(os.environ, PYTHONUTF8="1", PLANNING_MCP_BLOCKING_APPROVAL="true",
                    PLANNING_MCP_APPROVAL_PORT=str(PORT),
                    PLANNING_MCP_APPROVAL_OPEN_BROWSER="false",
-                   PLANNING_MCP_APPROVAL_TIMEOUT="900")
+                   PLANNING_MCP_APPROVAL_TIMEOUT="900",
+                   # The model-asks flow of 3.0 (still supported). The flow where the server asks
+                   # by itself is tests/smoke_gate_and_run.py.
+                   PLANNING_MCP_AUTO_ASK="false")
         self.p = subprocess.Popen(
             [sys.executable, "-u", str(SERVER), "--state-dir", state_dir, "--log-level", "ERROR"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,

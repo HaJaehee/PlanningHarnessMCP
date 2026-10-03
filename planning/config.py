@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SERVER_NAME = "planning-mcp"
-SERVER_VERSION = "3.0.0"
+SERVER_VERSION = "3.1.0"
 # Shown in the approval page's information dialog (the small "i" beside the version).
 SERVER_AUTHOR = "Ha, Jaehee"
 SERVER_AUTHOR_EMAIL = "lovesm135@naver.com"
@@ -226,6 +226,17 @@ class Config:
     # must, the unfinished ones after it) while finished tasks keep their results.
     # off = the pre-3.0 behaviour: re-plan the whole task list.
     local_repair: bool = True
+    # --- the gate on the transition, and the run in between (3.1.0) ----------
+    # The server asks the human itself at the two moments a plan changes hands:
+    # when the model sends its final task list, and when the last task is DONE.
+    # The model no longer has to remember a separate request_user_approval call
+    # at either point - that tool is left with one job, waiting on a decision.
+    # off = the pre-3.1 flow: the model asks with request_user_approval.
+    auto_ask: bool = True
+    # Show the plan on the approval page while it runs, with a way for the human
+    # to stop it or change what is left. Takes effect when the agent next reports
+    # a task; a tool that is already running is not interrupted.
+    run_control: bool = True
 
     @property
     def file_checks(self) -> bool:
@@ -290,6 +301,8 @@ class Config:
             evidence_novelty=_env_float("PLANNING_MCP_EVIDENCE_NOVELTY", 0.3),
             artifact_roots=_env_dirs("PLANNING_MCP_ARTIFACT_ROOTS"),
             local_repair=_env_bool("PLANNING_MCP_LOCAL_REPAIR", True),
+            auto_ask=_env_bool("PLANNING_MCP_AUTO_ASK", True),
+            run_control=_env_bool("PLANNING_MCP_RUN_CONTROL", True),
         )
 
 

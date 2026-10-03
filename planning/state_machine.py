@@ -100,6 +100,36 @@ def _repair_hint(plan: Plan) -> str:
     )
 
 
+def _steer_hint(plan: Plan) -> str:
+    """What to send after the human wrote to the agent while the plan was running.
+
+    Their words become the wording of the tasks they affect - which the human then
+    re-approves and the completion report shows - rather than a sentence the model is
+    trusted to keep in mind. No particular task has to change, so the example names
+    the first unfinished one and the rest are offered, not demanded.
+    """
+    targets = plan.revision_targets()
+    note = next(iter(targets.values()), "")
+    allowed = sorted(set(targets) | plan.revision_open())
+    first = allowed[0] if allowed else 1
+    done = [t.task_id for t in plan.tasks if t.status == TaskStatus.DONE.value]
+    kept = (
+        f" Task(s) {', '.join(str(t) for t in done)} are finished and keep their "
+        "results - do NOT redo or resend them."
+        if done
+        else ""
+    )
+    return (
+        f'While you were working the user wrote: "{_clip(note, 400)}". Rewrite the '
+        "unfinished task(s) this changes: call plan_and_think with "
+        'need_more_thinking=false and task_updates=[{"task_id": %d, "title": "<that '
+        'task, rewritten to follow what they wrote>"}] - do NOT send task_list unless '
+        "the whole plan has to change. You may rewrite task(s) %s; leave out a task "
+        "that does not change.%s The user approves the change before you continue."
+        % (first, ", ".join(str(t) for t in allowed), kept)
+    )
+
+
 def _halt_action(plan: Plan) -> tuple[str, str]:
     """What a model does while the circuit breaker holds its plan.
 
@@ -108,6 +138,24 @@ def _halt_action(plan: Plan) -> tuple[str, str]:
     the human has been shown the halt yet, and on which channel they will answer in.
     """
     halt = plan.halt or {}
+    if plan.paused_by_user():
+        # The human stopped it from the approval page (3.1.0). Same shape as a breaker
+        # halt, different words: nothing kept repeating, and saying so would send the
+        # model looking for a mistake it did not make.
+        if not halt.get("asked"):
+            return (
+                NextAction.CALL_REQUEST_USER_APPROVAL.value,
+                "The user paused this plan. Do not start or report any task. Call "
+                "request_user_approval with decision='ASK_USER' - the user decides how "
+                "it continues. Write nothing else.",
+            )
+        return (
+            NextAction.STOP_AND_WAIT_FOR_USER.value,
+            "The user paused this plan and decides on the approval page how it "
+            "continues. Show display_to_user to the user and end your turn. When the "
+            "user writes to you again, call request_user_approval with "
+            "decision='ASK_USER' to pick up their decision.",
+        )
     if not halt.get("asked"):
         return (
             NextAction.CALL_REQUEST_USER_APPROVAL.value,
@@ -133,7 +181,7 @@ def _halt_action(plan: Plan) -> tuple[str, str]:
 
 
 def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
-    if code is ErrorCode.LOOP_HALTED:
+    if code in (ErrorCode.LOOP_HALTED, ErrorCode.PLAN_PAUSED):
         if plan is not None and plan.halt:
             return _halt_action(plan)
         # A loop that never resolved to a plan (the same routing error over and over)
@@ -171,8 +219,8 @@ def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
             return (
                 NextAction.CALL_REQUEST_USER_APPROVAL.value,
                 "The user has not decided yet how this paused plan continues. Call "
-                "request_user_approval again at once with decision='ASK_USER'. Do nothing "
-                "else and write nothing meanwhile.",
+                "request_user_approval at once with decision='ASK_USER', and again each "
+                "time you get this. Do nothing else and write nothing meanwhile.",
             )
         # Two callers share this code, and the instruction is the same for both: a wait
         # chunk that ended with the request still on screen, and a model that tried to
@@ -184,8 +232,8 @@ def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
             "The user has NOT decided yet. No approval has been given and nothing is "
             "unlocked. Do not execute anything, do not answer the user, do not ask them "
             "anything and do not print the plan again. Call request_user_approval "
-            "immediately with decision='ASK_USER' and the same plan_summary as before. "
-            "Repeat that until this response changes. Output no text meanwhile.",
+            "immediately with decision='ASK_USER'. Repeat that until this response "
+            "changes. Output no text meanwhile.",
         )
     if code is ErrorCode.PLAN_NOT_READY:
         return (
@@ -204,7 +252,7 @@ def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
         return (
             NextAction.CALL_PLAN_AND_THINK.value,
             f"{which}You may NOT continue to another task. Call plan_and_think to re-plan "
-            "around this failure, then request approval again.",
+            "around this failure. The user approves the new plan before you continue.",
         )
     if code is ErrorCode.PLAN_CANCELLED:
         return (
@@ -240,9 +288,9 @@ def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
         return (
             NextAction.CALL_REQUEST_USER_APPROVAL.value,
             "The CURRENT version of this plan was never shown to the user - it may have "
-            "been revised or replaced since you last asked. Call request_user_approval "
-            "with decision='ASK_USER' and a plan_summary of the current plan, show it to "
-            "the user, and wait for their answer. Do not reuse an old approval.",
+            "been revised or replaced since it was last shown. Call "
+            "request_user_approval with decision='ASK_USER' so the user sees the "
+            "current plan, and wait for their answer. Do not reuse an old approval.",
         )
     if code is ErrorCode.APPROVAL_EXPIRED:
         return (
@@ -332,6 +380,11 @@ def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
             "If you are re-planning, send a full task_list instead.",
         )
     if code is ErrorCode.REVISION_INCOMPLETE:
+        if plan is not None and plan.steering() and plan.revision_targets():
+            return (
+                NextAction.CALL_PLAN_AND_THINK.value,
+                "No unfinished task was rewritten. " + _steer_hint(plan),
+            )
         if plan is not None and plan.repairing() and plan.revision_targets():
             return (
                 NextAction.CALL_PLAN_AND_THINK.value,
@@ -438,6 +491,8 @@ def _status_action_inner(plan: Plan | None) -> tuple[str, str]:
         targets = plan.revision_targets()
         if targets and plan.repairing():
             return NextAction.CALL_PLAN_AND_THINK.value, _repair_hint(plan)
+        if targets and plan.steering():
+            return NextAction.CALL_PLAN_AND_THINK.value, _steer_hint(plan)
         if targets:
             listed = "; ".join(
                 f"task {tid}: \"{comment}\"" for tid, comment in sorted(targets.items())
@@ -553,8 +608,8 @@ def _status_action_inner(plan: Plan | None) -> tuple[str, str]:
         return (
             NextAction.CALL_REQUEST_USER_APPROVAL.value,
             "Every task is marked DONE, but the plan is NOT complete until the user has "
-            "verified it. Call request_user_approval with decision='ASK_USER' and a "
-            "plan_summary of what you actually produced, task by task.",
+            "verified it. Call request_user_approval with decision='ASK_USER' so the "
+            "user can check the results.",
         )
 
     if status is PlanStatus.BLOCKED:
@@ -618,7 +673,7 @@ def execution_guard(plan: Plan | None, autoapprove: bool = False) -> ErrorCode |
     if plan is None:
         return ErrorCode.NO_ACTIVE_PLAN
     if plan.halt:
-        return ErrorCode.LOOP_HALTED
+        return ErrorCode.PLAN_PAUSED if plan.paused_by_user() else ErrorCode.LOOP_HALTED
     status = plan.status
     if status in (PlanStatus.APPROVED, PlanStatus.IN_EXECUTION):
         return None

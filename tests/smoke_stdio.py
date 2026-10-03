@@ -44,7 +44,10 @@ class Client:
             cwd=str(tempfile.gettempdir()),  # prove the state dir does not depend on CWD
             # This script drives the two-phase approval protocol; blocking approval
             # waits for a human and is covered by the unit suite instead.
-            env=dict(os.environ, PLANNING_MCP_BLOCKING_APPROVAL="false", PYTHONUTF8="1"),
+            # The model-asks flow of 3.0 (still supported). The flow where the server asks
+            # by itself is tests/smoke_gate_and_run.py.
+            env=dict(os.environ, PLANNING_MCP_BLOCKING_APPROVAL="false", PYTHONUTF8="1",
+                     PLANNING_MCP_AUTO_ASK="false"),
         )
         self._id = 0
 

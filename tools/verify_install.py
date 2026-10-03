@@ -242,6 +242,7 @@ def main() -> int:
     run_child("shared-approval smoke test", ["tests/smoke_shared_approval.py"])
     run_child("multi-plan smoke test", ["tests/smoke_multi_plan.py"])
     run_child("SSE transport smoke test", ["tests/smoke_sse.py"])
+    run_child("gate-and-run smoke test", ["tests/smoke_gate_and_run.py"])
 
     failures = [label for label, ok, _ in _results if not ok]
     print("\n" + "=" * 68)

@@ -290,7 +290,7 @@ class TestChoiceValidation(unittest.TestCase):
 
 class TestProposing(AltCase):
     def test_finalize_attaches_options(self):
-        h = self.handler()
+        h = self.handler(auto_ask=False)
         res = self.think(h)
         self.assertTrue(res["ok"], res)
         self.assertEqual(res["choice_points"], [2])
@@ -301,7 +301,7 @@ class TestProposing(AltCase):
         self.assertIsNone(task.chosen)
 
     def test_the_model_view_never_lists_options(self):
-        h = self.handler()
+        h = self.handler(auto_ask=False)
         res = self.think(h)
         self.assertNotIn(ALT, json.dumps(res, ensure_ascii=False))
 
@@ -598,7 +598,7 @@ class TestDraftAlternatives(AltCase):
         self.assertEqual(self.plan(h).draft_alternatives, ALTS)
 
     def test_an_auto_submitted_draft_offers_the_choices(self):
-        h = self.handler(max_thinking_steps=2)
+        h = self.handler(max_thinking_steps=2, auto_ask=False)
         self.think(h, more=True)
         res = self.think(h, step=2, more=True, tasks=False, alts=None, reasons=None)
         self.assertEqual(res["plan_status"], "AWAITING_APPROVAL")

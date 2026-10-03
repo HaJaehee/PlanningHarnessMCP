@@ -145,6 +145,60 @@ Report: when the user replies, call this tool again with
 {_APPROVAL_COMMON}
 Report only what the user actually said."""
 
+# --- the server asks at the transition (3.1.0, PLANNING_MCP_AUTO_ASK) -------------
+# With it on - the default - the final plan_and_think call and the last DONE are the
+# approval requests, so three things in these texts would be false: that the plan is
+# "reviewed" some time later, that request_user_approval is a step, and that the model
+# writes a plan_summary. Each is replaced rather than explained: the text gets shorter,
+# and the rule it carried - "now ask" - is one the model no longer has to keep.
+_REVIEWED_LATER = (
+    "  It does not need to be perfect: the user reviews it before anything runs."
+)
+_REVIEWED_IN_THIS_CALL = (
+    "  It does not need to be perfect: that call shows it to the user, who reviews it\n"
+    "  before anything runs."
+)
+_REVIEWED_LATER_REASONING = (
+    "Do not re-check the plan here. The user reviews it on the approval page before\n"
+    "anything runs - that review is the verification step."
+)
+_REVIEWED_IN_THIS_CALL_REASONING = (
+    "Do not re-check the plan here. That call shows it to the user, who reviews it before\n"
+    "anything runs - that review is the verification step."
+)
+
+_ASKS_ITSELF = (
+    "The server asks the user itself - when you send your task list, and when the last "
+    "task\nis DONE"
+)
+
+REQUEST_USER_APPROVAL_DESCRIPTION_AUTO = f"""WAITING FOR THE USER.
+{_ASKS_ITSELF} - and that call waits while they decide. Call this tool only when a
+response tells you to, with decision = "ASK_USER":
+- error_code APPROVAL_PENDING means the user is still deciding: call at once, and again
+  each time you get it. Write nothing in between.
+- When the user decides, plan_status and next_action in the response tell you the
+  result. Follow them.
+- If the response contains display_to_user, show it to the user and end your turn.
+Only the user decides. Never send APPROVED, REJECTED or REVISE yourself."""
+
+REQUEST_USER_APPROVAL_DESCRIPTION_AUTO_RETURN = f"""WAITING FOR THE USER.
+{_ASKS_ITSELF}. That response carries display_to_user: show it to the user
+and end your turn.
+When the user writes to you again, call this tool with decision = "ASK_USER": that
+collects their decision. Then follow next_action.
+Only the user decides. Never send APPROVED, REJECTED or REVISE yourself."""
+
+REQUEST_USER_APPROVAL_DESCRIPTION_AUTO_CHAT = f"""REPORT THE USER'S REPLY.
+{_ASKS_ITSELF}. That response carries display_to_user: show it to the user
+and end your turn.
+When the user replies, call this tool with
+  decision = "APPROVED" (they said yes / 승인),
+  decision = "REJECTED" (they said no / 취소), or
+  decision = "REVISE"   (they asked for changes - put their words in user_comment).
+decision = "ASK_USER" shows the plan or the results to the user again.
+Report only what the user actually said."""
+
 # Each rule once (3.0.0 trim). The longer text this replaces said "one task per call"
 # three times, the FAILED rule twice, and the result_log requirement in three places -
 # a habit that grew one field failure at a time (D14, D16). The rules themselves are all
@@ -548,6 +602,7 @@ def build_tool_definitions(
     done_when: bool = True,
     file_checks: bool = False,
     local_repair: bool = True,
+    auto_ask: bool = True,
 ) -> list[dict[str, Any]]:
     """The advertised tool list for a given configuration.
 
@@ -557,20 +612,40 @@ def build_tool_definitions(
     """
     reasoning = model_profile == "reasoning"
     if not blocking:
-        approval_text, chat = REQUEST_USER_APPROVAL_DESCRIPTION_CHAT, True
+        chat = True
+        approval_text = (
+            REQUEST_USER_APPROVAL_DESCRIPTION_AUTO_CHAT if auto_ask
+            else REQUEST_USER_APPROVAL_DESCRIPTION_CHAT
+        )
     elif approval_mode == "return":
-        approval_text, chat = REQUEST_USER_APPROVAL_DESCRIPTION_RETURN, False
+        chat = False
+        approval_text = (
+            REQUEST_USER_APPROVAL_DESCRIPTION_AUTO_RETURN if auto_ask
+            else REQUEST_USER_APPROVAL_DESCRIPTION_RETURN
+        )
     else:
-        approval_text, chat = REQUEST_USER_APPROVAL_DESCRIPTION, False
+        chat = False
+        approval_text = (
+            REQUEST_USER_APPROVAL_DESCRIPTION_AUTO if auto_ask
+            else REQUEST_USER_APPROVAL_DESCRIPTION
+        )
     approval_schema = dict(REQUEST_USER_APPROVAL_SCHEMA)
     approval_schema["properties"] = dict(REQUEST_USER_APPROVAL_SCHEMA["properties"])
     approval_schema["properties"]["decision"] = _decision_param(chat=chat)
+    if auto_ask:
+        # The model no longer opens the request, so it has no overview to write: the
+        # field would be one more thing to fill in for nobody to read.
+        del approval_schema["properties"]["plan_summary"]
     # Only in chat mode does the model relay what the user picked; with a page the user
     # picks there, so the field is not even offered (2.0.0).
     if chat and alternatives:
         approval_schema["properties"]["choices"] = _CHOICES_PARAM
 
     plan_text = PLAN_AND_THINK_DESCRIPTION_REASONING if reasoning else PLAN_AND_THINK_DESCRIPTION
+    if auto_ask:
+        plan_text = plan_text.replace(_REVIEWED_LATER, _REVIEWED_IN_THIS_CALL).replace(
+            _REVIEWED_LATER_REASONING, _REVIEWED_IN_THIS_CALL_REASONING
+        )
     plan_schema = dict(PLAN_AND_THINK_SCHEMA_REASONING if reasoning else PLAN_AND_THINK_SCHEMA)
     if alternatives:
         plan_schema["properties"] = {
@@ -599,6 +674,9 @@ def build_tool_definitions(
         UPDATE_TASK_PROGRESS_DESCRIPTION if auto_advance
         else UPDATE_TASK_PROGRESS_DESCRIPTION_MANUAL
     )
+    if auto_ask:
+        # Approval is no longer a step of its own, so execution is the second one.
+        update_text = update_text.replace("STEP 3 -", "STEP 2 -", 1)
     update_schema = dict(UPDATE_TASK_PROGRESS_SCHEMA)
     if done_when:
         plan_schema["properties"] = {

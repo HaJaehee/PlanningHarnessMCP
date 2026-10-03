@@ -204,6 +204,7 @@ class ApprovalStore:
         phase: str = PHASE_PLAN,
         summary: str = "",
         draft: bool = False,
+        origin: str = "",
     ) -> str | None:
         """Queue a request for the human. Returns its id, or None if it could not be saved.
 
@@ -234,6 +235,9 @@ class ApprovalStore:
             # HALT only: whether the card carries a task list the human can approve as
             # it stands. Without one, lifting the halt can only mean "continue".
             "draft": bool(draft),
+            # HALT only: "user" when the human stopped a running plan themselves (3.1.0)
+            # rather than the circuit breaker stopping a loop. Changes the card's words.
+            "origin": str(origin or ""),
             "created_at": time.time(),
             "created_by_pid": os.getpid(),
             "decision": None,
@@ -524,6 +528,166 @@ class ApprovalStore:
 
 
 # ---------------------------------------------------------------------------
+# The run board (3.1.0)
+# ---------------------------------------------------------------------------
+
+RUNS_FILENAME = "runs.json"
+RUNS_LOCK_FILENAME = ".runslock"
+
+# What the human may ask of a running plan from the page.
+CONTROL_PAUSE = "PAUSE"   # stop before the next task; they then decide on a pause card
+CONTROL_NOTE = "NOTE"     # change what is left: the agent rewrites the unfinished tasks
+CONTROL_CLEAR = "CLEAR"   # withdraw a request that has not been applied yet
+CONTROLS = (CONTROL_PAUSE, CONTROL_NOTE)
+MAX_CONTROL_CHARS = 1000
+
+
+class RunBoard:
+    """The plans that are executing right now, and what the human has asked of them.
+
+    Between the plan approval and the completion report the page used to say "no
+    pending requests": the human could neither see the work nor stop it, and the host
+    this server is written for has no approval step of its own. The board is that view,
+    and the one channel back.
+
+    Its own file rather than a second list in approval.json: a planning-mcp process from
+    before 3.1 on the same state directory rewrites that file whole, and would drop a
+    stop the human had just asked for without anyone noticing.
+
+    A control is a request, not a mutation. The page records it here; the server applies
+    it when the agent next reports a task, inside the same transaction as every other
+    change to the plan, and consumes it there. Until then the page shows it as asked
+    for, not as done - which is exactly what is true.
+    """
+
+    def __init__(self, state_dir: Path):
+        self.state_dir = Path(state_dir)
+
+    @property
+    def path(self) -> Path:
+        return self.state_dir / RUNS_FILENAME
+
+    @property
+    def lock_path(self) -> Path:
+        return self.state_dir / RUNS_LOCK_FILENAME
+
+    def read(self) -> dict[str, dict[str, Any]]:
+        """{plan_id: entry}. Lock-free: writes are atomic."""
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8")) or {}
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return {}
+        runs = raw.get("runs") if isinstance(raw, dict) else None
+        if not isinstance(runs, dict):
+            return {}
+        return {str(k): v for k, v in runs.items() if isinstance(v, dict)}
+
+    def _write(self, runs: dict[str, dict[str, Any]]) -> bool:
+        tmp = self.path.with_suffix(".json.tmp")
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({"runs": runs}, ensure_ascii=False, indent=2))
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.path)
+            return True
+        except OSError as exc:
+            log.error("Could not persist the run board: %s", exc)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+
+    def sync(self, wanted: dict[str, dict[str, Any]]) -> bool:
+        """Make the board show exactly `wanted`. Returns whether that is on disk.
+
+        A control the human asked for survives a refresh of its plan's entry. One whose
+        plan has left the board goes with it: that plan is no longer running, so there
+        is nothing left to stop - the caller has already taken any words it carried.
+        """
+        if not wanted and not self.read():
+            return True  # nothing running, nothing shown: never touch the disk for that
+        with exclusive(self.lock_path):
+            current = self.read()
+            now = time.time()
+            merged: dict[str, dict[str, Any]] = {}
+            for plan_id, entry in wanted.items():
+                old = current.get(plan_id) or {}
+                new = dict(entry)
+                if old.get("control"):
+                    new["control"] = old["control"]
+                # When the agent last reported: the moment this entry last changed.
+                same = old.get("rev") == new.get("rev") and old.get("updated_at")
+                new["updated_at"] = old["updated_at"] if same else now
+                merged[plan_id] = new
+            if merged == current:
+                return True
+            return self._write(merged)
+
+    def request(self, plan_id: str, action: str, comment: Any = "") -> bool:
+        """Called by the page. False = nothing was recorded, and the page says so."""
+        if action not in CONTROLS and action != CONTROL_CLEAR:
+            return False
+        text = str(comment or "").strip()[:MAX_CONTROL_CHARS]
+        if action == CONTROL_NOTE and not text:
+            return False
+        with exclusive(self.lock_path):
+            runs = self.read()
+            entry = runs.get(plan_id)
+            if entry is None:
+                # The plan is no longer running - it finished, failed or was stopped
+                # while the page still showed the card.
+                return False
+            if action == CONTROL_CLEAR:
+                if entry.pop("control", None) is None:
+                    return True
+            else:
+                entry["control"] = {
+                    "id": uuid.uuid4().hex[:12],
+                    "action": action,
+                    "comment": text,
+                    "at": time.time(),
+                }
+            return self._write(runs)
+
+    def pending(self, plan_id: str) -> dict[str, Any] | None:
+        """The control waiting for this plan, without consuming it."""
+        control = (self.read().get(plan_id) or {}).get("control")
+        if isinstance(control, dict) and control.get("action") in CONTROLS:
+            return control
+        return None
+
+    def take(self, plan_id: str) -> dict[str, Any] | None:
+        """Consume the control for a plan. Called by the handler that applies it."""
+        if self.pending(plan_id) is None:
+            return None  # the common case, answered without the lock
+        with exclusive(self.lock_path):
+            runs = self.read()
+            control = (runs.get(plan_id) or {}).pop("control", None)
+            if not isinstance(control, dict) or control.get("action") not in CONTROLS:
+                return None
+            if not self._write(runs):
+                # Not consumed, so not applied: it stays on the page as asked for and
+                # the next call tries again, rather than being applied twice.
+                return None
+            return control
+
+    def peek(self) -> list[dict[str, Any]]:
+        """Every run that still has a live approval, in plan order."""
+        now = time.time()
+        out = []
+        for _, entry in sorted(self.read().items()):
+            try:
+                expired = now > float(entry.get("expires_at") or now + 1)
+            except (TypeError, ValueError):
+                expired = False
+            if not expired:
+                out.append(entry)
+        return out
+
+
+# ---------------------------------------------------------------------------
 # The page
 # ---------------------------------------------------------------------------
 
@@ -692,6 +856,19 @@ input.dwi{display:none;flex:1 1 auto;min-width:0;box-sizing:border-box;border-ra
   .chip.live{background:#16281c;color:#5dbb77}
   .chip.idle{background:#2a2115;color:#d9a441}
 }
+/* 3.1.0 - a plan that is running. Not a question: the human may watch, stop it before
+   its next task, or change what is left. */
+.badge.now{background:#e6f4ea;color:#1a7f37;opacity:1}
+@media(prefers-color-scheme:dark){.badge.now{background:#16281c;color:#5dbb77}}
+.seen{font-size:.76rem;opacity:.5;margin:-.6rem 0 .9rem}
+.pendingctl{background:#fdf0e3;border-radius:8px;padding:.75rem .95rem;margin:0 0 1rem;
+            font-size:.9rem;line-height:1.6}
+@media(prefers-color-scheme:dark){.pendingctl{background:#2a2115}}
+.pendingctl .q{display:block;margin-top:.3rem;opacity:.8;white-space:pre-wrap;
+               word-break:break-word}
+.linkbtn{display:block;flex:none;min-width:0;margin-top:.55rem;padding:.25rem .7rem;
+         font-size:.8rem;font-weight:500;border-radius:6px;background:#fff;color:inherit}
+@media(prefers-color-scheme:dark){.linkbtn{background:#2c3038}}
 </style></head><body><div class="ver"><span class="vt">planning-mcp __PLANNING_MCP_VERSION__</span>
 <button class="info" id="about-open" type="button" aria-label="프로그램 정보" title="정보">i</button></div>
 <div class="card" id="root">
@@ -903,17 +1080,48 @@ async function poll(){
   try{
     const r=await fetch('/api/pending');const d=await r.json();
     const list=d.requests||[];
-    dprune(list.map(x=>x.id));
+    RUNS=d.runs||[];
+    dprune(list.map(x=>x.id).concat(RUNS.map(runId)));
     const sig=list.map(x=>x.id+':'+(x.decided||'')+':'+(x.agent_waiting?1:0)+':'+
-      (x.agent_note||'').length).join('|');
+      (x.agent_note||'').length).join('|')+'#'+RUNS.map(x=>x.plan_id+':'+(x.rev||'')+':'+
+      (x.control?x.control.id:'')).join('|');
     if(sig===seen)return;
     seen=sig;
     const undecided=list.filter(x=>!x.decided);
     pendingCount=undecided.length;
+    const focus=focusKey();
     render(list);
     restore(list);
+    restoreRuns();
+    refocus(focus);
+    // A running plan is not a question, so it never raises the alarm.
     if(undecided.length)alertOn();else alertOff();
   }catch(e){}
+}
+// A run card redraws each time the agent reports a task, which can be while the human is
+// typing into it. The text survives - it is a draft - and this puts the caret back.
+function focusKey(){
+  const el=document.activeElement;
+  if(!el||!el.closest||!el.closest('#root'))return null;
+  const key={id:el.id||'',req:'',tid:'',dtid:'',start:null,end:null};
+  if(!key.id&&el.getAttribute){
+    key.req=el.getAttribute('data-req')||'';
+    key.tid=el.getAttribute('data-tid')||'';
+    key.dtid=el.getAttribute('data-dtid')||'';
+    if(!key.req)return null;
+  }
+  try{key.start=el.selectionStart;key.end=el.selectionEnd;}catch(e){}
+  return key;
+}
+function refocus(key){
+  if(!key)return;
+  let el=null;
+  if(key.id)el=document.getElementById(key.id);
+  else if(key.tid)el=document.querySelector('textarea[data-req="'+key.req+'"][data-tid="'+key.tid+'"]');
+  else if(key.dtid)el=document.querySelector('input.dwi[data-req="'+key.req+'"][data-dtid="'+key.dtid+'"]');
+  if(!el||el.disabled)return;
+  el.focus();
+  try{if(typeof key.start==='number')el.setSelectionRange(key.start,key.end);}catch(e){}
 }
 // Quotes are escaped too so the same helper is safe inside an attribute value.
 function esc(s){return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
@@ -1132,6 +1340,8 @@ function openComment(req,tid,focus){
   if(focus)ta.focus();
 }
 function relabel(id){
+  // A run card has no button whose label depends on what is typed.
+  if(PHASE[id]==='RUN')return;
   relabelOk(id);
   if(PHASE[id]==='HALT'){
     const b=document.getElementById('rev-'+id),c=document.getElementById('c-'+id);
@@ -1231,10 +1441,14 @@ function agentNote(d){
 // judging the plan's wording here but deciding how the agent continues - so no per-task
 // review, and the button set depends on whether there is a draft to approve as it stands.
 function haltCard(d){
-  const tasks=d.tasks||[];
-  let h='<h1>반복 감지 · '+esc(d.plan_id)+'</h1>'+verNote(d)+
+  // origin 'user': the human stopped a running plan from its run card (3.1.0). Same
+  // decisions as a breaker halt - continue, with or without a direction, or cancel -
+  // under words that do not suggest the agent did something wrong.
+  const tasks=d.tasks||[],user=d.origin==='user';
+  let h='<h1>'+(user?'실행 멈춤':'반복 감지')+' · '+esc(d.plan_id)+'</h1>'+verNote(d)+
     '<p class="goal"><span class="lbl">목표</span>'+esc(d.goal)+'</p>'+
-    '<div class="summary warn"><span class="lbl">에이전트가 멈춘 이유</span>'+esc(d.summary)+'</div>';
+    '<div class="summary warn"><span class="lbl">'+(user?'멈춘 이유':'에이전트가 멈춘 이유')+
+    '</span>'+esc(d.summary)+'</div>';
   if(tasks.length){
     h+='<p class="tasklabel">'+(d.draft?'현재 초안 · 태스크 ':'태스크 ')+tasks.length+'개</p>'+
       '<div class="tasks">'+tasks.map(t=>'<div class="task"><div class="tt"><span class="tn">'+
@@ -1242,7 +1456,12 @@ function haltCard(d){
       (hasChoice(t)&&d.draft?'<span>'+choiceHeading(t)+'</span>'
                    :'<span>'+esc(t.title)+'</span>')+
       (t.status&&t.status!=='PENDING'?'<span class="badge">'+esc(t.status)+'</span>':'')+
-      '</div>'+(d.draft?optionsHtml(d,t,false):'')+dwRow(d,t,false)+'</div>').join('')+'</div>';
+      '</div>'+(d.draft?optionsHtml(d,t,false):'')+dwRow(d,t,false)+
+      // What is already done, for a plan the human stopped: it is what they weigh
+      // when deciding whether the rest should run.
+      (user&&t.status==='DONE'&&(t.result_log||'').trim()
+        ?'<div class="ev">\\u2192 '+esc(t.result_log.trim())+'</div>':'')+
+      '</div>').join('')+'</div>';
   }
   h+=chip(d);
   h+='<textarea id="c-'+esc(d.id)+
@@ -1253,7 +1472,96 @@ function haltCard(d){
   h+='<button class="rev" id="rev-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
     '\\',\\'REVISE\\')">'+haltLabel(false)+'</button>';
   return h+'<button class="no" onclick="decide(\\''+esc(d.id)+
-    '\\',\\'REJECTED\\')">취소</button></div>';
+    '\\',\\'REJECTED\\')">'+(user?'계획 취소':'취소')+'</button></div>';
+}
+// ---- a plan that is running (3.1.0) ---------------------------------------------
+// Between the plan approval and the completion report there used to be nothing here.
+// This card is not a question, so it raises no alarm: it shows what is finished and what
+// is in progress, and lets the human stop the plan before its next task or change what
+// is left. Either takes effect when the agent next reports a task - the server cannot
+// interrupt a tool that is already running, and the page says so.
+let RUNS=[];
+function runId(r){return 'run-'+r.plan_id;}
+const RUN_STATE={DONE:'완료',IN_PROGRESS:'진행 중',FAILED:'실패',PENDING:'대기'};
+const RUN_HINT='실행 중인 계획은 에이전트가 태스크를 보고할 때마다 갱신됩니다. [멈춤]과 '+
+  '[의견 전달]은 에이전트가 진행 중인 태스크를 보고하는 시점에 적용되며, 이미 실행 중인 '+
+  '도구는 중단되지 않습니다.<br>';
+function clock(ts){
+  if(typeof ts!=='number')return '';
+  const d=new Date(ts*1000);
+  return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+}
+function runRows(r){
+  const tasks=r.tasks||[],fin=tasks.filter(t=>t.status==='DONE').length;
+  return '<p class="tasklabel">태스크 '+tasks.length+'개 · 완료 '+fin+'개</p>'+
+    '<div class="tasks">'+tasks.map(t=>{
+    const took=t.status==='DONE'?tookText(t.duration_sec):'';
+    let row='<div class="task"><div class="tt"><span class="tn">'+esc(String(t.task_id))+
+      '.</span><span>'+esc(t.title)+'</span><span class="badge'+
+      (t.status==='IN_PROGRESS'?' now':'')+'">'+(RUN_STATE[t.status]||esc(t.status))+
+      '</span>'+(took?'<span class="took">소요 '+took+'</span>':'')+'</div>';
+    row+=dwRow({id:runId(r)},t,false);
+    if(t.status==='DONE'){
+      const ev=(t.result_log||'').trim();
+      row+=ev?'<div class="ev">\\u2192 '+esc(ev)+'</div>'
+             :'<div class="ev none">(증거 기록 없음)</div>';
+      row+=checksHtml(t);
+    }
+    return row+'</div>';
+  }).join('')+'</div>';
+}
+function runCard(r){
+  const id=runId(r),pid=esc(r.plan_id),c=r.control;
+  PHASE[id]='RUN';
+  const seenAt=clock(r.updated_at);
+  const h='<h1>실행 중 · '+pid+'</h1>'+verNote(r)+
+    '<p class="goal"><span class="lbl">목표</span>'+esc(r.goal)+'</p>'+runRows(r)+
+    (seenAt?'<p class="seen">에이전트의 마지막 보고 '+seenAt+'</p>':'');
+  // Asked for, not yet applied: say exactly that, and let it be taken back.
+  if(c)return h+'<div class="pendingctl">'+(c.action==='PAUSE'
+    ?'멈춤을 요청하셨습니다. 에이전트가 진행 중인 태스크를 보고하면 다음 태스크를 시작하지 '+
+     '않고 멈춥니다.'
+    :'의견을 전달하셨습니다. 에이전트가 진행 중인 태스크를 보고하면, 남은 태스크를 의견에 맞게 '+
+     '고쳐 다시 승인을 요청합니다.')+
+    (c.comment?'<span class="q">'+esc(c.comment)+'</span>':'')+
+    '<button class="linkbtn" type="button" onclick="control(\\''+pid+
+    '\\',\\'CLEAR\\')">요청 취소</button></div>';
+  return h+'<textarea id="c-'+esc(id)+'" placeholder="남은 태스크를 바꾸고 싶으실 때 의견을 '+
+    '입력해 주십시오 (예: 요약은 표로 정리해 주세요)"></textarea>'+
+    '<div class="row"><button class="rev" type="button" onclick="control(\\''+pid+
+    '\\',\\'NOTE\\')">의견 전달</button><button class="no" type="button" onclick="control(\\''+
+    pid+'\\',\\'PAUSE\\')">멈춤</button></div>';
+}
+function restoreRuns(){
+  RUNS.forEach(r=>{
+    const box=document.getElementById('c-'+runId(r));
+    if(box)box.value=dget(runId(r),'_all');
+  });
+}
+async function control(pid,action){
+  if(busy)return;
+  const id='run-'+pid,box=document.getElementById('c-'+id);
+  const text=box?box.value.trim():'';
+  if(action==='NOTE'&&!text){
+    if(box){box.placeholder='전달하실 의견을 먼저 입력해 주십시오';box.focus();}
+    return;
+  }
+  busy=true;
+  document.querySelectorAll('#root button').forEach(b=>b.disabled=true);
+  // Taking a request back puts its words back in the box: nothing typed is dropped.
+  const run=RUNS.find(r=>r.plan_id===pid);
+  const back=action==='CLEAR'&&run&&run.control?(run.control.comment||''):'';
+  try{
+    const r=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({plan_id:pid,action:action,comment:text})});
+    const j=await r.json();
+    if(j&&j.ok){
+      if(action==='CLEAR'){if(back)dset(id,'_all',back);}else dclear(id);
+      lastError='';
+    }else lastError='요청을 기록하지 못했습니다. 계획이 이미 다음 단계로 넘어갔을 수 있으니 '+
+      '화면을 확인해 주십시오.';
+  }catch(e){lastError='요청을 전송하지 못했습니다. 다시 시도해 주십시오.';}
+  busy=false;seen='';poll();
 }
 const DONE_LABEL={APPROVED:'승인되었습니다',REJECTED:'거절되었습니다',REVISE:'수정 요청되었습니다'};
 const HALT_DONE_LABEL={APPROVED:'초안이 승인되었습니다',REJECTED:'취소되었습니다',
@@ -1262,7 +1570,7 @@ function render(list){
   const root=document.getElementById('root');
   // Matches the static placeholder above, so the page does not flicker between two
   // different wordings when the first poll lands.
-  if(!list.length){root.innerHTML='<div class="idle">현재 대기 중인 승인 요청이 없습니다.<br>'+
+  if(!list.length&&!RUNS.length){root.innerHTML='<div class="idle">현재 대기 중인 승인 요청이 없습니다.<br>'+
     '<span style="font-size:.85rem">에이전트가 계획을 제출하면 이곳에 표시됩니다.</span></div>';return;}
   const anyChoice=list.some(d=>!d.decided&&(d.tasks||[]).some(hasChoice));
   const anyPlan=list.some(d=>!d.decided&&d.phase==='PLAN'&&(d.tasks||[]).length);
@@ -1301,8 +1609,9 @@ function render(list){
       '\\',\\'REVISE\\')">'+(perTask?revLabel(d.phase,[],false):'수정 요청')+'</button>'+
       '<button class="no" onclick="decide(\\''+esc(d.id)+
       '\\',\\'REJECTED\\')">거절</button></div>';
-  }).join('<hr style="border:0;border-top:1px solid #ccd0d5;margin:1.75rem 0">')+
-    '<p class="hint">'+(anyChoice?'선택지가 있는 태스크는 [권장]안이 기본으로 선택되어 있습니다. '+
+  }).concat(RUNS.map(runCard))
+    .join('<hr style="border:0;border-top:1px solid #ccd0d5;margin:1.75rem 0">')+
+    '<p class="hint">'+(RUNS.length?RUN_HINT:'')+(!list.length?'':(anyChoice?'선택지가 있는 태스크는 [권장]안이 기본으로 선택되어 있습니다. '+
     '다른 안을 고르면 승인 버튼에 반영 내용이 표시되고, 기타를 고르면 수정 요청으로 바뀝니다.<br>':'')+
     '태스크의 [의견] 또는 [다시 작업] 버튼을 누르면 해당 태스크에만 요청을 남기실 수 '+
     '있습니다. 완료 보고 단계에서는 지정하신 태스크만 다시 실행되며, 나머지 태스크의 결과는 '+
@@ -1310,7 +1619,7 @@ function render(list){
     (anyPlan?'[기준 추가] 또는 [수정]으로 태스크의 완료 기준을 직접 적으실 수 있습니다. '+
     '적은 기준은 승인과 함께 반영되며, 수정 요청을 거치지 않습니다.<br>':'')+
     '결정하시기 전까지 해당 에이전트는 후속 작업을 진행하지 못합니다. '+
-    '요청은 응답하실 때까지 사라지지 않으니 천천히 검토해 주시기 바랍니다.</p>';
+    '요청은 응답하실 때까지 사라지지 않으니 천천히 검토해 주시기 바랍니다.')+'</p>';
 }
 async function decide(id,dec){
   if(busy)return;busy=true;alertOff();
@@ -1415,6 +1724,10 @@ class ApprovalServer:
         takeover_interval: float = 5.0,
     ):
         self.store = store
+        # Plans that are running, and what the human asked of them (3.1.0). Beside the
+        # approval state, in the same directory, for the same reason: any process may
+        # write it and the one that owns the page reads it.
+        self.runs = RunBoard(store.state_dir)
         self.base_port = port
         self.port = port
         self.open_browser = open_browser
@@ -1523,13 +1836,23 @@ class ApprovalServer:
     def open_request(
         self, plan_id: str, goal: str, display: str, tasks: list[dict[str, Any]],
         fingerprint: str = "", phase: str = PHASE_PLAN, summary: str = "",
-        draft: bool = False,
+        draft: bool = False, origin: str = "",
     ) -> str | None:
         request_id = self.store.publish(
-            plan_id, goal, display, tasks, fingerprint, phase, summary, draft
+            plan_id, goal, display, tasks, fingerprint, phase, summary, draft, origin
         )
         self._surface()
         return request_id
+
+    # ---- the run board (3.1.0) -------------------------------------------
+    def sync_runs(self, wanted: dict[str, dict[str, Any]]) -> bool:
+        return self.runs.sync(wanted)
+
+    def take_run_control(self, plan_id: str) -> dict[str, Any] | None:
+        return self.runs.take(plan_id)
+
+    def run_control_pending(self, plan_id: str) -> dict[str, Any] | None:
+        return self.runs.pending(plan_id)
 
     def claim(self, request_id: str) -> Verdict | None:
         return self.store.claim(request_id)
@@ -1689,6 +2012,7 @@ class ApprovalServer:
                             # page treats a missing phase as "use the original form".
                             "phase": e.get("phase"),
                             "draft": bool(e.get("draft")),
+                            "origin": e.get("origin") or "",
                             "agent_note": e.get("agent_note") or "",
                             # The asking process's version; absent on an entry written
                             # by a process older than 3.0.0, and the page says so.
@@ -1704,12 +2028,32 @@ class ApprovalServer:
                             ) < AGENT_IDLE_SEC,
                         }
                         for e in server.store.peek()
+                    ], "runs": [
+                        {
+                            "plan_id": r.get("plan_id"),
+                            "goal": r.get("goal"),
+                            "tasks": r.get("tasks") or [],
+                            # Changes exactly when what the card shows changes.
+                            "rev": r.get("rev") or "",
+                            "version": r.get("server_version"),
+                            "updated_at": r.get("updated_at"),
+                            "control": (
+                                {
+                                    "id": r["control"].get("id"),
+                                    "action": r["control"].get("action"),
+                                    "comment": r["control"].get("comment") or "",
+                                }
+                                if isinstance(r.get("control"), dict) else None
+                            ),
+                        }
+                        for r in server.runs.peek()
                     ]})
                 else:
                     self.send_error(404)
 
             def do_POST(self) -> None:  # noqa: N802
-                if urlparse(self.path).path != "/api/decide":
+                route = urlparse(self.path).path
+                if route not in ("/api/decide", "/api/control"):
                     self.send_error(404)
                     return
                 length = int(self.headers.get("Content-Length") or 0)
@@ -1717,6 +2061,17 @@ class ApprovalServer:
                     body = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     self.send_error(400)
+                    return
+                if not isinstance(body, dict):
+                    self.send_error(400)
+                    return
+                if route == "/api/control":
+                    # A running plan: stop it, change what is left, or take that back.
+                    self._json({"ok": server.runs.request(
+                        str(body.get("plan_id", "")),
+                        str(body.get("action", "")).upper(),
+                        body.get("comment", ""),
+                    )})
                     return
                 ok = server.store.record_decision(
                     str(body.get("id", "")),

@@ -8,6 +8,7 @@ Run these before spending corporate-LLM turns on the behavioral matrix.
 from __future__ import annotations
 
 import datetime
+import dataclasses
 import json
 import logging
 import os
@@ -45,13 +46,26 @@ REQUIRED_FIELDS = ("ok", "plan_status", "next_action", "next_action_hint")
 class HandlerTestCase(unittest.TestCase):
     """Base: a fresh handler over a throwaway state dir."""
 
+    # False pins a class to the flow before 3.1, in which the model asks for approval
+    # with its own request_user_approval call (PLANNING_MCP_AUTO_ASK=false - still
+    # supported). The classes that set it assert that call sequence step by step; the
+    # default, where the server asks at the transition, is tests/test_gate_and_run.py.
+    AUTO_ASK = True
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.state_dir = Path(self._tmp.name)
         # Blocking approval is the production default; the unit suite drives the
         # two-phase path, so it is disabled here and exercised in TestBlockingApproval.
-        self.config = Config(state_dir=self.state_dir, blocking_approval=False)
+        self.config = Config(
+            state_dir=self.state_dir, blocking_approval=False, auto_ask=self.AUTO_ASK
+        )
         self.store = Store(self.state_dir, max_plans=self.config.max_plans)
+        self.h = PlanningHandlers(self.store, self.config)
+
+    def legacy(self) -> None:
+        """Rebuild the handler for the model-asks flow, for a single test (see AUTO_ASK)."""
+        self.config = dataclasses.replace(self.config, auto_ask=False)
         self.h = PlanningHandlers(self.store, self.config)
 
     def tearDown(self) -> None:
@@ -295,6 +309,7 @@ class TestGuardRails(HandlerTestCase):
         """1.16 (D25): a finalized task list is not reopened by the model's second
         thoughts - before, this put the plan back to DRAFTING, the lap a thinking model
         could run forever. Only the human's 'request changes' reopens it."""
+        self.legacy()
         self.think(step_number=1)
         self.think(step_number=2, need_more_thinking=False, task_list=["a", "b"])
         res = self.think(step_number=3, revises_step=2)
@@ -334,6 +349,7 @@ class TestGuardRails(HandlerTestCase):
         self.assertEqual(res["next_action"], "CALL_PLAN_AND_THINK")
 
     def test_missing_plan_summary(self):
+        self.legacy()
         self.think(need_more_thinking=False, task_list=["a", "b"])
         res = self.h.dispatch("request_user_approval", {"decision": "ASK_USER"})
         self.assertFalse(res["ok"])
@@ -357,6 +373,8 @@ class TestGuardRails(HandlerTestCase):
 
 
 class TestStateMachine(HandlerTestCase):
+    AUTO_ASK = False
+
     def test_execution_blocked_while_drafting(self):
         self.think()
         res = self.h.dispatch("update_task_progress", {"task_id": 1, "status": "IN_PROGRESS"})
@@ -654,6 +672,7 @@ class TestTaskCompletionEnforcement(HandlerTestCase):
         self.assertEqual(res["error_code"], "MISSING_RESULT_LOG")
 
     def test_last_done_awaits_human_verification(self):
+        self.legacy()
         self.approved(2)
         self.do_task(1)
         res = self.do_task(2)
@@ -1251,9 +1270,12 @@ class FakeApprovalUI:
         self.cleared = 0
         self.agent_touches = 0
         self.live: dict | None = None
+        # The run board (3.1.0): {plan_id: entry}, an entry's "control" being what the
+        # human asked of that run on the page.
+        self.runs: dict[str, dict] = {}
 
     def open_request(self, plan_id, goal, display, tasks, fingerprint="", phase="PLAN",
-                     summary="", draft=False):
+                     summary="", draft=False, origin=""):
         if not self.available:
             return None
         # Mirrors the real store's reuse rule: re-asking about an unchanged plan is the
@@ -1270,7 +1292,7 @@ class FakeApprovalUI:
             "id": f"req{len(self.opened)}", "plan_id": plan_id, "fingerprint": fingerprint,
             "decision": self.decision, "comment": self.comment, "phase": phase,
             "tasks": tasks, "display": display, "goal": goal, "summary": summary,
-            "draft": draft, "created_at": time.time(),
+            "draft": draft, "origin": origin, "created_at": time.time(),
         }
         self.opened.append(record)
         self.live = record
@@ -1358,6 +1380,34 @@ class FakeApprovalUI:
     def drop_for_plan(self, plan_id):
         if self.live is not None and self.live["plan_id"] == plan_id:
             self.live = None
+
+    # ---- the run board (3.1.0), with the real board's rules -----------------
+    def sync_runs(self, wanted):
+        """A control survives a refresh of its plan's entry and leaves with the plan."""
+        merged = {}
+        for plan_id, entry in wanted.items():
+            new = dict(entry)
+            control = (self.runs.get(plan_id) or {}).get("control")
+            if control:
+                new["control"] = control
+            merged[plan_id] = new
+        self.runs = merged
+        return True
+
+    def run_control_pending(self, plan_id):
+        return (self.runs.get(plan_id) or {}).get("control")
+
+    def take_run_control(self, plan_id):
+        return (self.runs.get(plan_id) or {}).pop("control", None)
+
+    def on_run_card(self, plan_id, action, comment=""):
+        """Simulates the human pressing a button on a running plan's card."""
+        if plan_id not in self.runs or (action == "NOTE" and not comment.strip()):
+            return False
+        self.runs[plan_id]["control"] = {
+            "id": f"ctl{len(self.opened)}", "action": action, "comment": comment.strip(),
+        }
+        return True
 
 
 class RecordingNotifier:
@@ -2272,6 +2322,7 @@ class TestMultiPlanEdges(HandlerTestCase):
         return self.h.dispatch("request_user_approval", {"decision": "APPROVED", "plan_id": pid})
 
     def test_identical_goals_route_to_the_same_plan(self):
+        self.legacy()
         first = self.think(goal="같은 목표", need_more_thinking=False, task_list=["x"])
         second = self.think(goal="같은 목표", need_more_thinking=False, task_list=["y"])
         self.assertEqual(first["plan_id"], second["plan_id"])
@@ -2548,7 +2599,8 @@ class TestApprovalStoreFailureEdges(HandlerTestCase):
                             open_browser=False)
         h = PlanningHandlers(
             Store(self.state_dir),
-            Config(state_dir=self.state_dir, blocking_approval=True, approval_timeout=1),
+            Config(state_dir=self.state_dir, blocking_approval=True, approval_timeout=1,
+                   auto_ask=False),
             approval_ui=ui,
         )
         try:
@@ -2743,11 +2795,14 @@ class TestApprovalPageSurface(HandlerTestCase):
 class TargetedRevisionFixture(HandlerTestCase):
     """Helpers for driving a plan to a per-task revision request. Holds no tests."""
 
+    AUTO_ASK = False  # its helpers ask, and read the decision off that call
+
     TASKS = ["보고서 찾기", "표 추출", "요약 작성"]
 
     def blocking(self, ui, timeout=1):
         cfg = Config(
-            state_dir=self.state_dir, blocking_approval=True, approval_timeout=timeout
+            state_dir=self.state_dir, blocking_approval=True, approval_timeout=timeout,
+            auto_ask=self.AUTO_ASK,
         )
         return PlanningHandlers(Store(self.state_dir), cfg, approval_ui=ui)
 
@@ -4033,6 +4088,7 @@ class TestAutoAdvance(HandlerTestCase):
         """Nothing is auto-started after the final task, so message said nothing at all
         - at the one step where a weak model is most likely to invent its own ending
         (1.12.1)."""
+        self.legacy()
         self.approved(2)
         self.h.dispatch("update_task_progress", {"task_id": 1, "status": "IN_PROGRESS"})
         self.finish(1)

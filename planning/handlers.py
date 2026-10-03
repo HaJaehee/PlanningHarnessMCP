@@ -23,6 +23,7 @@ from .approval import (
     PHASE_COMPLETION,
     PHASE_HALT,
     PHASE_PLAN,
+    CONTROL_NOTE,
     SCOPE_PLAN,
     SCOPE_TASKS,
     ApprovalServer,
@@ -35,6 +36,7 @@ from .config import (
     APPROVAL_MODE_TRUST_HEARTBEAT,
     FILE_CHECK_TIMEOUT_SEC,
     NO_PROGRESS_WAIT_CEILING_SEC,
+    SERVER_VERSION,
     Config,
 )
 from .choices import build_options, collect_topics, letter, validate_model_choices
@@ -67,7 +69,10 @@ from .models import (
     Approval,
     Decision,
     ErrorCode,
+    EXECUTABLE_PLAN_STATUSES,
+    HALT_USER_PAUSE,
     ORIGIN_FAILURE,
+    ORIGIN_RUN,
     Plan,
     PlanStatus,
     TERMINAL_PLAN_STATUSES,
@@ -138,6 +143,9 @@ class _CallCtx:
     # The call spent real time waiting on a human (or collected their decision). Such a
     # call is the harness working as designed, never a loop.
     waited: bool = False
+    # Seconds this call has already spent waiting on a human. One call gets one
+    # slice of the client's patience, however many requests it ends up waiting on.
+    wait_spent: float = 0.0
     # Plans that moved during this call - a finalize, a decision, a finished task.
     milestones: set = field(default_factory=set)
     # A trip decided inside a handler (a respawn, a thinking budget spent with no draft)
@@ -306,7 +314,9 @@ class PlanningHandlers:
                 self._apply_late_decision()
                 response = self._route(tool_name, clean, notes)
                 if response is not None:
-                    return self._after_call(tool_name, clean, response, notes)
+                    response = self._after_call(tool_name, clean, response, notes)
+                    self._sync_runs()
+                    return response
         except Exception as exc:  # noqa: BLE001 - nothing may escape to the model
             log.exception("Handler %s failed", tool_name)
             self.store.audit("internal_error", tool=tool_name, error=type(exc).__name__)
@@ -552,12 +562,18 @@ class PlanningHandlers:
         log.warning("Loop breaker paused %s: %s (%s)", plan.plan_id, reason, count)
         return self._ask_halt(state, plan, notes)
 
-    def _ask_halt(self, state: State, plan: Plan, notes: list[str]) -> dict[str, Any]:
+    def _ask_halt(
+        self, state: State, plan: Plan, notes: list[str], recorded: str = ""
+    ) -> dict[str, Any]:
         """Put a halted plan in front of the human, and wait like an approval does."""
         halt = plan.halt or {}
+        by_user = plan.paused_by_user()
+        code = self._halt_code(plan)
         draft = plan.halt_draft()
         on_page = self.approval_ui is not None
-        display = render_halt_for_user(plan, halt.get("text", ""), draft, on_page)
+        display = render_halt_for_user(
+            plan, halt.get("text", ""), draft, on_page, by_user=by_user
+        )
         approval_url = self.approval_ui.url if on_page else None
         if approval_url:
             display = f"{display}\n\n현재 페이지: {approval_url.rstrip('/')}"
@@ -570,15 +586,22 @@ class PlanningHandlers:
             return build(
                 plan,
                 ok=False,
-                error_code=ErrorCode.LOOP_HALTED,
+                error_code=code,
                 message="This plan is paused. The user decides how it continues.",
                 notes=notes,
                 display_to_user=display,
             )
         summary = halt.get("text", "")
-        thought = plan.last_thought().strip()
-        if thought:
-            summary = f"{summary}\n에이전트의 마지막 생각: {thought}"
+        if by_user:
+            # Their own memo, not the agent's last thought: they stopped it, and what
+            # they wrote while doing so is the context of the decision they now make.
+            memo = str(halt.get("note") or "").strip()
+            if memo:
+                summary = f"{summary}\n남기신 메모: {memo}"
+        else:
+            thought = plan.last_thought().strip()
+            if thought:
+                summary = f"{summary}\n에이전트의 마지막 생각: {thought}"
         tasks = (
             self._draft_page_tasks(plan)
             if plan.status is PlanStatus.DRAFTING
@@ -587,14 +610,14 @@ class PlanningHandlers:
         fingerprint = self._request_fingerprint(plan)
         request_id = self.approval_ui.open_request(
             plan.plan_id, plan.goal, display, tasks, fingerprint, PHASE_HALT, summary,
-            draft=bool(draft),
+            draft=bool(draft), **({"origin": "user"} if by_user else {}),
         )
         if request_id is None:
             return self._wait_unavailable(plan, notes, display)
         outcome = self._wait_on(request_id, plan, notes)
         return self._settle(
             plan.plan_id, fingerprint, outcome, notes, approval_url, display,
-            refusal=ErrorCode.LOOP_HALTED,
+            refusal=code, recorded=recorded,
         )
 
     def _draft_options(self, plan: Plan) -> dict[int, list[dict[str, str]]]:
@@ -754,6 +777,8 @@ class PlanningHandlers:
     ) -> str:
         """Apply the human's answer to a halt. Returns what happened, for the audit."""
         draft = plan.halt_draft()
+        by_user = plan.paused_by_user()
+        memo = str((plan.halt or {}).get("note") or "").strip() if by_user else ""
         plan.halt = None
         self.loop.forget(plan.plan_id)
         self._ctx().milestones.add(plan.plan_id)
@@ -779,10 +804,15 @@ class PlanningHandlers:
             plan.approval.requested_at = now_iso()
             self._mutate_approved(plan, comment, choices)
             return "draft_approved"
-        # Continue - with a direction, if the human gave one.
-        plan.guidance = (comment or "").strip() or None
+        # Continue - with a direction, if the human gave one. A plan they paused
+        # themselves falls back to what they wrote when they stopped it.
+        plan.guidance = (comment or "").strip() or memo or None
         if plan.status is PlanStatus.DRAFTING:
             plan.step_budget_end = 0  # a fresh thinking budget
+        if by_user and plan.status in EXECUTABLE_PLAN_STATUSES:
+            # The pause was applied in place of starting the next task; resuming is
+            # that start, so the model is not sent to make a call the stop swallowed.
+            self._auto_advance(plan)
         plan.touch()
         self._withdraw_approval_request(plan)
         return "resumed"
@@ -814,6 +844,215 @@ class PlanningHandlers:
             notes=notes,
             qualify=len(state.active_plans()) > 1,
             progress=plan.progress() if plan.tasks else None,
+        )
+
+    # ------------------------------------------------------------------
+    # The gate on the transition, and the run in between (3.1.0)
+    # ------------------------------------------------------------------
+    def _asks_itself(self) -> bool:
+        """Does the server put a plan in front of the human without being asked to?
+
+        Before 3.1 the model had to remember a separate request_user_approval call at
+        the two moments a plan changes hands - after its final task list, and after the
+        last task. Forgetting it, or answering the user instead, was the commonest way
+        a weak model left the lifecycle. Both moments are state transitions the server
+        already sees, so it asks at them itself.
+        """
+        return self.config.auto_ask and not self.config.autoapprove
+
+    @staticmethod
+    def _spoken(thought: str) -> str:
+        """The model's own sentence about its plan: the overview on the approval page."""
+        text = (thought or "").strip()
+        return "" if text == "(no thought text provided)" else text
+
+    @staticmethod
+    def _halt_code(plan: Plan | None) -> ErrorCode:
+        """Why a held plan refuses a call: the breaker stopped it, or the human did."""
+        if plan is not None and plan.paused_by_user():
+            return ErrorCode.PLAN_PAUSED
+        return ErrorCode.LOOP_HALTED
+
+    def _run_entry(self, plan: Plan) -> dict[str, Any]:
+        """A running plan as the page shows it."""
+        entry: dict[str, Any] = {
+            "plan_id": plan.plan_id,
+            "goal": plan.goal,
+            "tasks": plan.tasks_for_page(),
+            # Changes exactly when what the card shows changes, so the page redraws
+            # then and at no other time.
+            "rev": self._fingerprint(plan),
+            "server_version": SERVER_VERSION,
+        }
+        idle = plan.idle_seconds()
+        if idle != float("inf"):
+            # An approval that has gone cold no longer authorizes anything (see
+            # _expire_stale_approval), so its card stops being shown at that moment -
+            # without waiting for a call that may never come.
+            entry["expires_at"] = int(time.time() - idle) + self.config.approval_ttl
+        return entry
+
+    def _sync_runs(self) -> None:
+        """Make the run board show exactly the plans that are executing.
+
+        One place, called at the end of every call and before every wait, rather than a
+        publish at each of the dozen transitions that start, advance or end a run: a
+        transition added later cannot forget the board, because none of them know it
+        exists. Derived from the shared state file, so every process computes the same
+        board.
+        """
+        if self.approval_ui is None:
+            return
+        try:
+            wanted: dict[str, dict[str, Any]] = {}
+            if self.config.run_control:
+                for plan in self.store.load().plans.values():
+                    if (
+                        plan.status in EXECUTABLE_PLAN_STATUSES
+                        and not plan.halt
+                        and not plan.approval_is_stale(self.config.approval_ttl)
+                    ):
+                        wanted[plan.plan_id] = self._run_entry(plan)
+            if not self.approval_ui.sync_runs(wanted):
+                log.warning("The run board could not be saved; the page may lag behind")
+        except Exception:  # noqa: BLE001 - a view must never fail a call
+            log.debug("Could not refresh the run board", exc_info=True)
+
+    def _run_control(self, plan: Plan) -> dict[str, Any] | None:
+        """What the human has asked of this running plan on the page, if anything."""
+        if self.approval_ui is None or not self.config.run_control:
+            return None
+        try:
+            return self.approval_ui.run_control_pending(plan.plan_id)
+        except Exception:  # noqa: BLE001 - an unreadable board must not fail a call
+            log.debug("Could not read the run board", exc_info=True)
+            return None
+
+    def _consume_run_control(self, plan: Plan) -> None:
+        """Take an applied control off the board. Only ever after the plan is saved: a
+        control consumed before a write that then fails would be a stop the human asked
+        for and nobody carried out."""
+        try:
+            self.approval_ui.take_run_control(plan.plan_id)
+        except Exception:  # noqa: BLE001 - housekeeping; the sync drops it as well
+            log.debug("Could not clear the run control for %s", plan.plan_id)
+
+    @staticmethod
+    def _control_words(control: dict[str, Any]) -> str:
+        return str(control.get("comment") or "").strip()
+
+    def _apply_run_control(
+        self, state: State, plan: Plan, control: dict[str, Any], notes: list[str],
+        reported: str = "",
+    ) -> dict[str, Any]:
+        """Carry out what the human asked of a running plan (3.1.0).
+
+        Called where the agent reports a task, after that report is recorded - work that
+        was done is never thrown away to honour a stop - and before the next task
+        starts. `reported` says what this call did record, so a model answered with
+        "paused" or "the user wants a change" is not left wondering about its DONE.
+        """
+        words = self._control_words(control)
+        if control.get("action") == CONTROL_NOTE and words:
+            return self._steer(state, plan, words, notes, reported)
+        return self._pause(state, plan, words, notes, reported)
+
+    def _pause(
+        self, state: State, plan: Plan, words: str, notes: list[str], reported: str
+    ) -> dict[str, Any]:
+        """Hold a running plan because the human asked, and hand them the decision.
+
+        The breaker's halt is reused whole - the card, the wait, the three answers - so
+        a plan stopped by a person is held exactly as firmly as one stopped by the
+        server. Only the reason differs, and with it every sentence shown to anyone.
+        """
+        current = plan.current_task()
+        text = (
+            f"사용자가 실행을 멈췄습니다. 태스크 {len(plan.tasks)}개 중 "
+            f"{plan.done_count()}개가 끝났습니다."
+        )
+        if current is not None:
+            text += (
+                f" {current.task_id}번 태스크는 진행 중인 상태로 멈췄습니다."
+                if current.status == TaskStatus.IN_PROGRESS.value
+                else f" {current.task_id}번 태스크는 시작하지 않았습니다."
+            )
+        plan.halt = {
+            "id": uuid.uuid4().hex[:12],
+            "reason": HALT_USER_PAUSE,
+            "count": 0,
+            "detail": "",
+            "text": text,
+            # What they typed beside the button. Shown back on the pause card, and it
+            # becomes the direction if they resume without typing another (D22).
+            "note": words or None,
+            "at": now_iso(),
+            "asked": False,
+            "channel": "page",
+        }
+        self.loop.forget(plan.plan_id)
+        self._ctx().milestones.add(plan.plan_id)
+        plan.touch()
+        self.store.save(state)
+        self._consume_run_control(plan)
+        self.store.audit(
+            "run_paused", plan_id=plan.plan_id, comment=words or None,
+            progress=plan.progress(),
+        )
+        log.warning("The user paused %s from the approval page", plan.plan_id)
+        return self._ask_halt(
+            state, plan, notes,
+            recorded=reported + "The user paused this plan before the next task.",
+        )
+
+    def _steer(
+        self, state: State, plan: Plan, words: str, notes: list[str], reported: str
+    ) -> dict[str, Any]:
+        """Open the unfinished tasks for the change the human wrote on the run card.
+
+        The local-repair machinery of 3.0, with the human rather than a failure as its
+        origin: finished tasks are out of reach, the unfinished ones may be rewritten
+        with task_updates, and the human approves the result before anything continues.
+        Their words end up in the wording of the tasks - re-read, re-approved and
+        restated at execution - instead of in a hint the model is trusted to remember.
+        """
+        unfinished = [t for t in plan.tasks if t.status != TaskStatus.DONE.value]
+        kept = [t.task_id for t in plan.tasks if t.status == TaskStatus.DONE.value]
+        plan.pending_revision = {
+            "targets": {str(unfinished[0].task_id): words},
+            "origin": ORIGIN_RUN,
+            "open": [t.task_id for t in unfinished[1:]],
+        }
+        # The work already done survives whatever the model sends back - a whole
+        # task_list as much as task_updates (see _carry_evidence).
+        plan.rework_from_completion = True
+        plan.approval.revision_count += 1
+        plan.approval.user_comment = words
+        plan.approval.reset_request()
+        plan.step_budget_end = 0
+        plan.clear_draft()
+        plan.set_status(PlanStatus.DRAFTING)
+        self._milestone(plan)
+        self.store.save(state)
+        self._consume_run_control(plan)
+        self.store.audit(
+            "run_note_applied", plan_id=plan.plan_id, user_comment=words,
+            open=[t.task_id for t in unfinished], progress=plan.progress(),
+        )
+        return build(
+            plan,
+            message=(
+                reported + "Before you continue, the user asked for a change to the "
+                "tasks that are left. Finished tasks keep their results."
+            ),
+            notes=notes,
+            qualify=len(state.active_plans()) > 1,
+            user_comment=words,
+            revision_count=plan.approval.revision_count,
+            revision_scope=SCOPE_TASKS,
+            tasks_unchanged=kept or None,
+            tasks=plan.tasks_brief(),
+            progress=plan.progress(),
         )
 
     # ---- decision application (shared by the blocking and late paths) -------
@@ -902,6 +1141,8 @@ class PlanningHandlers:
         plan.pending_revision = None
         plan.rework_from_completion = False
         plan.clear_draft()
+        if plan.status is PlanStatus.AWAITING_COMPLETION:
+            plan.run_note = None  # shown with the report this approval answers
         self._milestone(plan)
         # Approving a completion report closes the plan; approving a draft unlocks it -
         # unless the draft is already finished work carried through a redraft, in which
@@ -1008,6 +1249,7 @@ class PlanningHandlers:
             reopened.append(task_id)
         plan.pending_revision = None
         plan.rework_from_completion = False
+        plan.run_note = None
         plan.set_status(PlanStatus.IN_EXECUTION)
         self._withdraw_approval_request(plan)
         return reopened
@@ -1029,7 +1271,14 @@ class PlanningHandlers:
         """
         # Read before the status changes. A redraft asked for from the completion report
         # must not delete the work that has already been done - see `_carry_evidence`.
-        plan.rework_from_completion = plan.status is PlanStatus.AWAITING_COMPLETION
+        # Nor must one asked for while re-approving a change made mid-run (3.1.0): the
+        # flag was raised when the human's note opened the plan, and it stays up for as
+        # long as there is finished work to keep.
+        plan.rework_from_completion = plan.status is PlanStatus.AWAITING_COMPLETION or (
+            plan.rework_from_completion
+            and any(t.status == TaskStatus.DONE.value for t in plan.tasks)
+        )
+        plan.run_note = None
         # Criteria the human typed before pressing REVISE are theirs whatever button
         # they then chose (3.0.0). A targeted revision keeps the tasks, so the criteria
         # are applied to them. A whole-plan one replaces every task, so there is
@@ -1467,7 +1716,7 @@ class PlanningHandlers:
                 notes.append(
                     "The user approved this plan under the previous goal. Check whether "
                     "the remaining tasks still serve the corrected goal - if they do "
-                    "not, re-plan and call request_user_approval again."
+                    "not, tell the user before you continue."
                 )
             return self._redirected(build(
                 plan,
@@ -1821,7 +2070,8 @@ class PlanningHandlers:
                     "the user only asked for changes to specific tasks."
                 )
             return self._apply_task_updates(
-                state, plan, task_updates, targets, notes, step_number, done_when
+                state, plan, task_updates, targets, notes, step_number, done_when,
+                thought=thought,
             )
 
         if not task_list:
@@ -1859,6 +2109,17 @@ class PlanningHandlers:
             self.store.audit(
                 "repair_ignored", plan_id=plan.plan_id, targets=sorted(targets)
             )
+            plan.pending_revision = None
+        elif targets and plan.steering():
+            # The human wrote to a running plan and the model answered with a whole new
+            # task list. Accepted; what was already done is carried onto the tasks that
+            # survive unchanged (rework_from_completion, raised by _steer).
+            notes.append(
+                "You replaced the whole task list. It was accepted: a finished task whose "
+                "wording did not change keeps its result, and the user re-approves the "
+                "plan. Next time send task_updates for the unfinished tasks only."
+            )
+            self.store.audit("steer_replanned", plan_id=plan.plan_id)
             plan.pending_revision = None
         elif targets:
             # The model was asked to change two lines and rewrote the whole plan. That is
@@ -1917,7 +2178,11 @@ class PlanningHandlers:
             criteria=[t.task_id for t in plan.tasks if t.done_when] or None,
         )
 
-        if auto_submitted and self.approval_ui is not None:
+        # A trip decided earlier in this call (a respawn) is carried out when the handler
+        # returns, and it waits on the human itself: asking here as well would hold one
+        # call for two slices, past what the client allows.
+        untripped = self._ctx().trip is None
+        if auto_submitted and self.approval_ui is not None and untripped:
             # Straight to the human. The model was not going to call this plan final on
             # its own, so it cannot be trusted to ask for approval either - and the page
             # is where the verification it kept attempting actually happens.
@@ -1928,7 +2193,17 @@ class PlanningHandlers:
             last_thought = plan.last_thought().strip()
             if last_thought:
                 budget_note += f"\n에이전트의 마지막 생각: {last_thought}"
-            return self._ask_user(state, plan, {"plan_summary": budget_note}, notes)
+            return self._ask_user(
+                state, plan, {"plan_summary": budget_note}, notes, own=True,
+                recorded=self._plan_recorded(plan),
+            )
+        if untripped and self._asks_itself():
+            # 3.1.0: every final task list goes to the human in the call that recorded
+            # it. There is no separate "now ask" step left for the model to forget.
+            return self._ask_user(
+                state, plan, {"plan_summary": self._spoken(thought)}, notes, own=True,
+                recorded=self._plan_recorded(plan),
+            )
 
         points = plan.choice_points()
         offered = (
@@ -1951,6 +2226,14 @@ class PlanningHandlers:
                 "checking - the user reviews it next. Execution is locked until they "
                 "approve." + offered
             ),
+        )
+
+    @staticmethod
+    def _plan_recorded(plan: Plan) -> str:
+        """Said when the call that recorded a plan ends before the human has decided."""
+        return (
+            f"Your plan is recorded ({len(plan.tasks)} tasks) and the user is "
+            "reviewing it."
         )
 
     def _attach_options(
@@ -2036,6 +2319,7 @@ class PlanningHandlers:
         notes: list[str],
         step_number: int,
         done_when: dict[int, str] | None = None,
+        thought: str = "",
     ) -> dict[str, Any]:
         """Rewrite only the tasks the human flagged, leaving the rest untouched.
 
@@ -2048,9 +2332,15 @@ class PlanningHandlers:
         the failure, not by a comment: the failed task must be rewritten, the unfinished
         tasks after it may be, and everything already DONE is out of reach - which is
         what lets a plan that broke at step 3 keep the work of steps 1 and 2.
+
+        And it applies a note the human wrote on a running plan (3.1.0). No task is
+        singled out there: any unfinished task may be rewritten, at least one must be,
+        and each rewritten one is marked with what they wrote.
         """
         repairing = plan.repairing()
-        allowed = set(targets) | (plan.revision_open() if repairing else set())
+        steering = plan.steering()
+        said = next(iter(targets.values()), "") if steering else ""
+        allowed = set(targets) | (plan.revision_open() if repairing or steering else set())
         # Validated in full before anything is written. A bad task_id halfway through a
         # single-pass loop would persist half a revision and leave the plan in a state
         # nobody approved.
@@ -2091,6 +2381,8 @@ class PlanningHandlers:
                 ErrorCode.REVISION_INCOMPLETE,
                 "The failed task was not rewritten."
                 if repairing
+                else "No unfinished task was rewritten."
+                if steering
                 else "None of the tasks the user commented on were rewritten.",
                 notes=notes,
                 recorded_step=step_number,
@@ -2108,6 +2400,11 @@ class PlanningHandlers:
                 )
                 if task_id in targets:
                     task.failure_note = targets[task_id]
+            elif steering:
+                task.previous_title = (
+                    task.title if title_key(title) != title_key(task.title) else None
+                )
+                task.revision_note = said
             else:
                 task.previous_title = task.title
                 task.revision_note = targets[task_id]
@@ -2131,10 +2428,11 @@ class PlanningHandlers:
             notes.append(
                 f"Ignored the change to task(s) {', '.join(str(t) for t in ignored)}: "
                 + ("finished tasks keep their results and cannot be rewritten here."
-                   if repairing
+                   if repairing or steering
                    else "the user did not ask for those to change.")
             )
-        unaddressed = [t for t in sorted(targets) if t not in applied]
+        # A note on a running plan names no task, so none can be left unaddressed.
+        unaddressed = [] if steering else [t for t in sorted(targets) if t not in applied]
         if unaddressed:
             notes.append(
                 "The user also commented on task(s) "
@@ -2149,7 +2447,7 @@ class PlanningHandlers:
         self._milestone(plan)
         self.store.save(state)
         self.store.audit(
-            "task_repaired" if repairing else "tasks_revised",
+            "task_repaired" if repairing else "tasks_steered" if steering else "tasks_revised",
             plan_id=plan.plan_id,
             applied=applied,
             ignored=ignored or None,
@@ -2157,9 +2455,18 @@ class PlanningHandlers:
             **(
                 {"kept": [t.task_id for t in plan.tasks
                           if t.status == TaskStatus.DONE.value]}
-                if repairing else {}
+                if repairing or steering else {}
             ),
         )
+        if self._ctx().trip is None and self._asks_itself():
+            # The change goes to the human in the call that made it (3.1.0).
+            return self._ask_user(
+                state, plan, {"plan_summary": self._spoken(thought)}, notes, own=True,
+                recorded=(
+                    f"Rewrote task(s) {', '.join(str(t) for t in applied)}. The user is "
+                    "reviewing the change."
+                ),
+            )
         return build(
             plan,
             recorded_step=step_number,
@@ -2173,6 +2480,10 @@ class PlanningHandlers:
                 "Finished tasks keep their results. Execution stays locked until the "
                 "user approves this change."
                 if repairing
+                else f"Rewrote task(s) {', '.join(str(t) for t in applied)} as the user "
+                "asked while you were working. Finished tasks keep their results. "
+                "Execution stays locked until the user approves this change."
+                if steering
                 else f"Rewrote task(s) {', '.join(str(t) for t in applied)} as the user "
                 "asked. Every other task is unchanged. Execution stays locked until the "
                 "user approves this version."
@@ -2297,7 +2608,15 @@ class PlanningHandlers:
         progress_token: Any = None,
         notifier: Any = None,
         cancel_event: Any = None,
+        own: bool = False,
+        recorded: str = "",
     ) -> dict[str, Any]:
+        """Put the plan, or the finished work, in front of the human and wait.
+
+        `own` (3.1.0): the server is asking by itself, at the transition - the call that
+        recorded the final task list, or the last DONE. `recorded` is what that call
+        did, said to the model if the human has not decided when the call must return.
+        """
         if plan.status in (PlanStatus.APPROVED, PlanStatus.IN_EXECUTION):
             return build(
                 plan,
@@ -2310,6 +2629,49 @@ class PlanningHandlers:
             return error(plan, ErrorCode.PLAN_CANCELLED, "This plan was cancelled.", notes=notes)
         if plan.status is PlanStatus.BLOCKED:
             return error(plan, ErrorCode.PLAN_BLOCKED, "A task failed.", notes=notes)
+        # The human may have decided between two calls - their click is collected at the
+        # top of this one (_apply_late_decision). In `return` mode that is the ordinary
+        # way a decision arrives, and with the server asking by itself (3.1.0) this call
+        # is the one that collects it. The plan is then no longer waiting to be asked
+        # about, and asking again would undo what they decided (D30): a plan they had
+        # just confirmed as finished went back to AWAITING_APPROVAL, and one they had
+        # sent back for changes was put in front of them again, unchanged, while the
+        # model never heard what they wrote.
+        if plan.status is PlanStatus.COMPLETED:
+            return build(
+                plan,
+                message="The user confirmed the work is finished. The plan is complete.",
+                notes=notes,
+                tasks=plan.tasks_brief(),
+                progress=plan.progress(),
+            )
+        if plan.status is PlanStatus.DRAFTING and plan.tasks:
+            sent_back = plan.approval.revision_count > 0
+            flagged = plan.revision_targets()
+            return build(
+                plan,
+                message=(
+                    "The user asked for changes to this plan. Re-plan with plan_and_think; "
+                    "the plan stays locked until they approve the new version."
+                    if sent_back
+                    else "This plan is still being drafted, so there is nothing to approve "
+                    "yet. Finish it with plan_and_think."
+                ),
+                notes=notes,
+                qualify=len(state.active_plans()) > 1,
+                # The same fields the reply carries when the decision is collected by
+                # the call that was waiting for it (_revise).
+                user_comment=(plan.approval.user_comment or None) if sent_back else None,
+                revision_count=plan.approval.revision_count if sent_back else None,
+                revision_scope=(SCOPE_TASKS if flagged else SCOPE_PLAN) if sent_back else None,
+                revision_targets=[
+                    {"task_id": task_id, "title": plan.get_task(task_id).title,
+                     "user_comment": body}
+                    for task_id, body in sorted(flagged.items())
+                    if plan.get_task(task_id) is not None
+                ] or None,
+                tasks=plan.tasks_brief(),
+            )
         if not plan.tasks:
             return error(
                 plan,
@@ -2318,8 +2680,22 @@ class PlanningHandlers:
                 notes=notes,
             )
 
+        # Two different questions share this tool: "may I run this plan?" before work,
+        # and "is this actually finished?" after it. The plan's status decides which,
+        # so the human always sees the right thing.
+        completion_phase = plan.status is PlanStatus.AWAITING_COMPLETION
         plan_summary = (args.get("plan_summary") or "").strip()
-        if not plan_summary:
+        # The overview is the model's to give only where the model is the one asking,
+        # and only the first time: a completion report already shows each task's
+        # evidence, a request that is still on the page keeps the overview it was
+        # opened with, and when the server asks at the transition (3.1.0) the model
+        # was never told to write one.
+        if not plan_summary and not (
+            own
+            or completion_phase
+            or self._asks_itself()
+            or self._live_request(plan) is not None
+        ):
             return error(
                 plan,
                 ErrorCode.MISSING_PLAN_SUMMARY,
@@ -2327,14 +2703,19 @@ class PlanningHandlers:
                 notes=notes,
             )
 
-        # Two different questions share this tool: "may I run this plan?" before work,
-        # and "is this actually finished?" after it. The plan's status decides which,
-        # so the human always sees the right thing.
-        completion_phase = plan.status is PlanStatus.AWAITING_COMPLETION
         if completion_phase:
             # Before the human is asked to certify the work, look once more: a file
             # that was there when the task reported DONE may have been removed since.
             self._refresh_checks(plan)
+            if plan.run_note:
+                # What they wrote on the run card arrived after the last task had
+                # finished. This report is where a change to finished work is asked
+                # for, so their words are put in front of them here (D22).
+                late = (
+                    "실행 중 남기신 의견 (전달되기 전에 모든 태스크가 끝났습니다): "
+                    + plan.run_note
+                )
+                plan_summary = f"{plan_summary}\n\n{late}" if plan_summary else late
         plan.approval.requested_at = now_iso()
         plan.approval.decision = None
         plan.approval.decided_at = None
@@ -2347,6 +2728,7 @@ class PlanningHandlers:
             "completion_verification_requested" if completion_phase else "approval_requested",
             plan_id=plan.plan_id,
             plan_summary=plan_summary,
+            by_server=own or None,
         )
         display = (
             render_completion_report(plan, plan_summary)
@@ -2378,12 +2760,16 @@ class PlanningHandlers:
                 return self._wait_unavailable(plan, notes, display)
             outcome = self._wait_on(request_id, plan, notes)
             return self._settle(
-                plan.plan_id, fingerprint, outcome, notes, approval_url, display
+                plan.plan_id, fingerprint, outcome, notes, approval_url, display,
+                recorded=recorded,
             )
 
         return build(
             plan,
-            tasks=plan.tasks_brief(),
+            message=recorded or None,
+            # Not on the last DONE: that is an execution response, which carries
+            # progress and never the task list - display_to_user has the report.
+            tasks=None if own and completion_phase else plan.tasks_brief(),
             notes=notes,
             display_to_user=display,
             approval_url=approval_url,
@@ -2473,7 +2859,7 @@ class PlanningHandlers:
         # - and must say so with a refusal, not an ok:true a weak model could read as
         # "started".
         if plan.halt:
-            refusal = ErrorCode.LOOP_HALTED
+            refusal = self._halt_code(plan)
         elif plan.status is PlanStatus.AWAITING_COMPLETION:
             refusal = ErrorCode.COMPLETION_PENDING
         else:
@@ -2499,8 +2885,10 @@ class PlanningHandlers:
             return held
         return error(
             plan,
-            ErrorCode.LOOP_HALTED,
-            "This plan is paused because a step kept repeating. Only the user can "
+            self._halt_code(plan),
+            "The user paused this plan. Only the user can resume it."
+            if plan.paused_by_user()
+            else "This plan is paused because a step kept repeating. Only the user can "
             "resume it.",
             notes=notes,
         )
@@ -2514,11 +2902,17 @@ class PlanningHandlers:
         approval_url: str | None,
         display: str,
         refusal: ErrorCode | None = None,
+        recorded: str = "",
     ) -> dict[str, Any]:
         """Turn the end of a wait into the response, for every kind of request.
 
         `refusal` is set for a call that was held rather than asked (see
         _hold_for_human): when nobody decided, it reports that code instead of ok:true.
+
+        `recorded` (3.1.0) is what the call did before it started waiting - a plan
+        recorded, a task marked DONE. It is said only when nobody decided: a call that
+        comes back "still waiting" must not leave the model unsure whether the thing it
+        sent was taken, or it sends it again.
         """
         state = self.store.load()
         plan = state.plans.get(plan_id)
@@ -2574,7 +2968,8 @@ class PlanningHandlers:
             return error(
                 plan,
                 ErrorCode.APPROVAL_PENDING,
-                "Still waiting for the user to decide on the approval page.",
+                (recorded + " " if recorded else "")
+                + "Still waiting for the user to decide on the approval page.",
                 notes=notes,
                 approval_url=approval_url,
                 waited_seconds=int(outcome.waited),
@@ -2591,13 +2986,16 @@ class PlanningHandlers:
             return error(
                 plan,
                 refusal,
-                "The user has not decided yet, so this call did nothing.",
+                # A call that was only held did nothing. One that recorded something
+                # first - a DONE, before the user's pause took hold - says what.
+                recorded or "The user has not decided yet, so this call did nothing.",
                 notes=notes,
                 display_to_user=display or None,
                 approval_url=approval_url,
             )
         return build(
             plan,
+            message=recorded or None,
             tasks=plan.tasks_brief() if plan else None,
             notes=notes,
             display_to_user=display,
@@ -2627,7 +3025,14 @@ class PlanningHandlers:
         # many calls (and, after a restart, many processes) against one budget.
         already_waited = self.approval_ui.request_age(request_id)
         timeout = self.effective_timeout(can_heartbeat, already_waited)
+        if self.config.approval_mode == APPROVAL_MODE_CHUNKED:
+            # One call, one slice. A call that has already waited once - on a request
+            # it opened itself, say - gets only what is left of the slice, so no path
+            # through a handler can hold a single call past the client's limit.
+            timeout = max(0, timeout - math.ceil(ctx.wait_spent))
         budget_left = max(0.0, self.config.approval_timeout - already_waited)
+        # The page must not show a plan as running while it shows that plan's request.
+        self._sync_runs()
 
         stop = threading.Event()
         if can_heartbeat:
@@ -2685,6 +3090,7 @@ class PlanningHandlers:
             stop.set()
 
         waited = time.monotonic() - started
+        ctx.wait_spent += waited
         total_waited = already_waited + waited
         remaining = max(0.0, self.config.approval_timeout - total_waited)
         # A call that genuinely waited on a person, or brought back their decision, is
@@ -2929,8 +3335,8 @@ class PlanningHandlers:
         return build(
             plan,
             message=(
-                "The user requested changes. Re-plan with plan_and_think, then ask for approval "
-                "again. The plan stays locked until they approve the new version."
+                "The user requested changes. Re-plan with plan_and_think. The plan stays "
+                "locked until they approve the new version."
             ),
             notes=notes,
             user_comment=comment or None,
@@ -3059,6 +3465,13 @@ class PlanningHandlers:
                 f"No task with task_id={task_id} in this plan.",
                 notes=notes,
             )
+
+        if status in (TaskStatus.IN_PROGRESS, TaskStatus.PENDING):
+            # What the human asked of this run on the page (3.1.0) is applied before a
+            # task is started. A DONE or a FAILED is recorded first - see there.
+            control = self._run_control(plan)
+            if control is not None:
+                return self._apply_run_control(state, plan, control, notes)
 
         if status is TaskStatus.IN_PROGRESS:
             return self._start_task(state, plan, task, notes)
@@ -3279,6 +3692,10 @@ class PlanningHandlers:
             )
         task.file_refusals = []
         self._milestone(plan)
+        # What the human asked of this run on the page (3.1.0). Read after the DONE is
+        # on the task: the work is kept either way, and it is the NEXT task that does
+        # not start.
+        control = self._run_control(plan)
 
         if plan.all_done():
             if self.config.completion_approval:
@@ -3293,9 +3710,13 @@ class PlanningHandlers:
                 plan.set_status(PlanStatus.COMPLETED)
                 self._withdraw_approval_request(plan)
             advanced = None
+            if control is not None and plan.status is PlanStatus.AWAITING_COMPLETION:
+                # Nothing is left to stop or to change. What they wrote still reaches
+                # them, on the completion report (see _ask_user).
+                plan.run_note = self._control_words(control) or None
         else:
             plan.set_status(PlanStatus.IN_EXECUTION)
-            advanced = self._auto_advance(plan)
+            advanced = None if control is not None else self._auto_advance(plan)
         self.store.save(state)
         self.store.audit(
             "task_done",
@@ -3310,6 +3731,27 @@ class PlanningHandlers:
                 if task.checks else {}
             ),
         )
+
+        if control is not None and plan.all_done():
+            self._consume_run_control(plan)
+            self.store.audit(
+                "run_control_moot", plan_id=plan.plan_id, action=control.get("action"),
+                comment=self._control_words(control) or None, reason="all_tasks_done",
+            )
+        elif control is not None:
+            return self._apply_run_control(
+                state, plan, control, notes, reported="That task is DONE. "
+            )
+        if plan.status is PlanStatus.AWAITING_COMPLETION and self._asks_itself():
+            # 3.1.0: the last DONE is the completion report. The human checks the
+            # results in the call that finished them.
+            return self._ask_user(
+                state, plan, {}, notes, own=True,
+                recorded=(
+                    "That task is DONE and every task in this plan is finished. The "
+                    "user is checking the results."
+                ),
+            )
 
         nxt = plan.current_task()
         if advanced is not None:
@@ -3419,22 +3861,42 @@ class PlanningHandlers:
                     if t.task_id > task.task_id and t.status != TaskStatus.DONE.value
                 ],
             }
+        # What the human asked of this run on the page (3.1.0). The failure already
+        # stops the plan and sends it back for their approval, so a stop has nothing
+        # left to do; anything they wrote goes to the model with this response, where
+        # it can shape the repair.
+        control = self._run_control(plan)
         self.store.save(state)
         self.store.audit(
             "task_failed", plan_id=plan.plan_id, task_id=task.task_id, result_log=task.result_log
         )
+        said = ""
+        if control is not None:
+            self._consume_run_control(plan)
+            said = self._control_words(control)
+            self.store.audit(
+                "run_control_moot", plan_id=plan.plan_id, action=control.get("action"),
+                comment=said or None, reason="task_failed",
+            )
         return build(
             plan,
             progress=plan.progress(),
             notes=notes,
             failed_task={"title": task.title, "result_log": task.result_log},
             tasks_unchanged=(kept or None) if self.config.local_repair else None,
+            user_comment=said or None,
             message=(
                 f"The task '{task.title}' failed. Forward progress is halted."
                 + (
                     " The finished tasks keep their results - only this task needs "
                     "another way."
                     if self.config.local_repair and kept
+                    else ""
+                )
+                + (
+                    f' While you were working the user also wrote: "{said}". Take it '
+                    "into account."
+                    if said
                     else ""
                 )
             ),

@@ -61,6 +61,9 @@ def build_protocol(config: Config, log=None) -> McpProtocol:
             done_when=config.done_when,
             file_checks=config.file_checks,
             local_repair=config.local_repair,
+            # Not under the test-only bypass: nothing is asked there, so the texts
+            # must not promise that the server asks.
+            auto_ask=config.auto_ask and not config.autoapprove,
         ),
         SERVER_NAME,
         SERVER_VERSION,

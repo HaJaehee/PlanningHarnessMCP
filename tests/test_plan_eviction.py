@@ -258,7 +258,7 @@ class TestNothingIsLostSilently(EvictionCase):
     def test_its_request_leaves_the_approval_page(self):
         """An evicted plan that kept asking would show buttons that do nothing."""
         ui = FakeApprovalUI(decision=None)
-        h = self.handler(ui)
+        h = self.handler(ui, auto_ask=False)
         first = self.new_plan(h, "승인을 기다리다 버려진 계획")["plan_id"]
         h.dispatch("request_user_approval",
                    {"decision": "ASK_USER", "plan_summary": "요약", "plan_id": first})

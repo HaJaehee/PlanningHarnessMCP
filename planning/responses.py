@@ -129,18 +129,25 @@ def render_completion_report(plan: Plan, plan_summary: str | None = None) -> str
     return "\n".join(lines)
 
 
-def render_halt_for_user(plan: Plan, reason: str, draft: list[str], on_page: bool) -> str:
-    """What the human reads when the circuit breaker has stopped an agent.
+def render_halt_for_user(
+    plan: Plan, reason: str, draft: list[str], on_page: bool, by_user: bool = False
+) -> str:
+    """What the human reads when a plan is held: the circuit breaker stopped the
+    agent, or (`by_user`, 3.1.0) they stopped it themselves from the run card.
 
     Says why it stopped, what the agent was last weighing, and what is on the table -
     so the person can decide in one read whether the draft is good enough, whether the
     agent needs a direction, or whether to stop.
     """
-    lines = ["에이전트 반복 감지 - 이 계획을 일시 정지했습니다."]
+    lines = [
+        "실행 멈춤 - 요청하신 대로 이 계획을 멈췄습니다."
+        if by_user
+        else "에이전트 반복 감지 - 이 계획을 일시 정지했습니다."
+    ]
     if plan.goal:
         lines.append(f"목표: {plan.goal}")
     lines.append(f"멈춘 이유: {reason}")
-    thought = plan.last_thought().strip()
+    thought = "" if by_user else plan.last_thought().strip()
     if thought:
         lines.append(f"에이전트의 마지막 생각: {thought}")
     if draft:

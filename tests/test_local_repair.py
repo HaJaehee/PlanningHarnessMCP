@@ -171,7 +171,7 @@ class TestAFailureOpensOneTask(RepairCase):
 
 class TestRepairing(RepairCase):
     def test_only_the_failed_task_changes(self):
-        h, _ = self.failed_at_two()
+        h, _ = self.failed_at_two(self.handler(auto_ask=False))
         res = self.repair(h, [{"task_id": 2, "title": NEW}])
         tasks = self.plan(h).tasks
         self.assertEqual(res["plan_status"], "AWAITING_APPROVAL")
@@ -367,7 +367,7 @@ class TestWhatTheHumanSees(RepairCase):
 
     def test_the_human_may_still_send_the_repair_back(self):
         ui = FakeApprovalUI(decision="APPROVED")
-        h = self.handler(ui)
+        h = self.handler(ui, auto_ask=False)
         self.think(h, task_list=list(TASKS))
         self.ask(h)
         self.progress(h, 1, "IN_PROGRESS")

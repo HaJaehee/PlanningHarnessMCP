@@ -136,7 +136,7 @@ class TestLoopRegressions(LoopCase):
 
     def test_b_a_held_rethink_returns_the_humans_decision(self):
         ui = FakeApprovalUI(decision="APPROVED")
-        h = self.handler(ui)
+        h = self.handler(ui, auto_ask=False)
         self.finalize(h)
         # The request is published undecided first, then the human clicks during the
         # model's stray call.
@@ -151,7 +151,7 @@ class TestLoopRegressions(LoopCase):
     def test_c_rethinking_after_the_last_task_keeps_every_result(self):
         """C (D26): plan_and_think during AWAITING_COMPLETION went to DRAFTING with every
         task DONE, and the next task_list deleted all their evidence."""
-        h = self.handler()
+        h = self.handler(auto_ask=False)
         self.approve(h)
         self.run_all(h)
         self.assertEqual(self.plan(h).plan_status, "AWAITING_COMPLETION")
@@ -584,7 +584,7 @@ class TestAdversarialThinkingModels(LoopCase):
         self.assertLessEqual(n, self.BOUND)
 
     def test_replans_instead_of_asking(self):
-        h = self.handler()
+        h = self.handler(auto_ask=False)
         n, _ = self.drive(h, lambda i, r: ("plan_and_think", {
             "goal": GOAL, "thought": "let me double check the plan", "step_number": i + 1,
             "total_steps": i + 1, "need_more_thinking": False,

@@ -22,8 +22,8 @@ log = logging.getLogger("planning-mcp.protocol")
 PROTOCOL_VERSION = "2024-11-05"
 
 INSTRUCTIONS = (
-    "Planning harness. Start each new user request with plan_and_think, get the user's "
-    "approval with request_user_approval, then track execution with update_task_progress. "
+    "Planning harness. Start each new user request with plan_and_think; the user approves "
+    "the plan before anything runs; then track execution with update_task_progress. "
     "Follow the next_action field in every response; ANSWER_USER means write the answer."
 )
 

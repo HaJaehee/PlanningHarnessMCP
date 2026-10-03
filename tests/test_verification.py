@@ -659,8 +659,8 @@ class TestFilesAtDone(ContractCase):
 
 
 class TestCompletionReport(ContractCase):
-    def finished(self, ui=None):
-        h = self.handler(ui, files=True)
+    def finished(self, ui=None, **cfg):
+        h = self.handler(ui, files=True, **cfg)
         self.think(h)
         self.ask(h)
         if ui is None:
@@ -674,7 +674,7 @@ class TestCompletionReport(ContractCase):
 
     def test_the_page_row_carries_criterion_evidence_and_checks(self):
         ui = FakeApprovalUI(decision="APPROVED")
-        h = self.finished(ui)
+        h = self.finished(ui, auto_ask=False)
         ui.decision = None
         self.ask(h)
         entry = ui.opened[-1]
@@ -721,7 +721,7 @@ class TestCompletionReport(ContractCase):
 
     def test_a_task_sent_back_starts_clean_but_keeps_its_criterion(self):
         ui = FakeApprovalUI(decision="APPROVED")
-        h = self.finished(ui)
+        h = self.finished(ui, auto_ask=False)
         ui.decision, ui.task_comments, ui.scope = "REVISE", {"2": "3분기가 빠졌습니다"}, "TASKS"
         self.ask(h)
         task = self.plan(h).tasks[1]
@@ -740,7 +740,7 @@ class TestTheHumanWritesTheCriterion(ContractCase):
     def test_written_and_approved_in_one_click(self):
         """No revision round trip: the task did not change, only what finished means."""
         ui = FakeApprovalUI(decision="APPROVED", criteria={"3": "요약이 정확히 5줄이다"})
-        h = self.handler(ui)
+        h = self.handler(ui, auto_ask=False)
         self.think(h)
         res = self.ask(h)
         self.assertEqual(res["plan_status"], "APPROVED")
@@ -1223,7 +1223,7 @@ class TestPageTemplate(unittest.TestCase):
             self.assertIn(line.split(" · ", 1)[1].split(" (")[0], _PAGE, state)
 
     def test_the_halt_card_shows_the_criterion_read_only(self):
-        self.assertIn("dwRow(d,t,false)+'</div>').join('')", _PAGE)
+        self.assertIn("(d.draft?optionsHtml(d,t,false):'')+dwRow(d,t,false)+", _PAGE)
 
     def test_everything_typed_is_escaped(self):
         self.assertIn("esc(t.done_when||'')", _PAGE)
@@ -1389,7 +1389,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual((cfg.done_when, cfg.max_done_when_chars, cfg.evidence_novelty,
                           cfg.artifact_roots, cfg.file_checks, cfg.local_repair),
                          (True, 200, 0.3, (), False, True))
-        self.assertEqual(SERVER_VERSION, "3.0.0")
+        self.assertEqual(SERVER_VERSION, "3.1.0")
 
     def test_from_env(self):
         with tempfile.TemporaryDirectory() as tmp:

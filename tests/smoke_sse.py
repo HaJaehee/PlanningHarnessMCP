@@ -112,7 +112,10 @@ def main() -> int:
         env = dict(os.environ, PYTHONUTF8="1", PLANNING_MCP_BLOCKING_APPROVAL="true",
                    PLANNING_MCP_APPROVAL_PORT=str(APPROVAL_PORT),
                    PLANNING_MCP_APPROVAL_OPEN_BROWSER="false",
-                   PLANNING_MCP_APPROVAL_TIMEOUT="900")
+                   PLANNING_MCP_APPROVAL_TIMEOUT="900",
+                   # The model-asks flow of 3.0 (still supported). The flow where the server asks
+                   # by itself is tests/smoke_gate_and_run.py.
+                   PLANNING_MCP_AUTO_ASK="false")
         proc = subprocess.Popen(
             [sys.executable, "-u", str(SERVER), "--transport", "sse", "--port", str(SSE_PORT),
              "--state-dir", tmp, "--log-level", "ERROR"],

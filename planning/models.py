@@ -108,6 +108,10 @@ class ErrorCode(str, Enum):
     # The plan this call names was closed by the server to make room: it was the least
     # recently used unfinished plan when the active-plan limit was reached (3.0.0).
     PLAN_EVICTED = "PLAN_EVICTED"
+    # The user stopped this plan from the approval page while it was running
+    # (3.1.0). Held like a breaker halt, but nothing went wrong: the next decision
+    # is simply theirs.
+    PLAN_PAUSED = "PLAN_PAUSED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -158,6 +162,13 @@ def duration_seconds(started_at: str | None, finished_at: str | None) -> int | N
 # on the approval page (1.10). "failure" = a task reported FAILED and the server opened
 # it for repair (3.0.0) - same machinery, different wording and different rules.
 ORIGIN_FAILURE = "failure"
+# "run" = the human wrote to the agent from the approval page while the plan was
+# running (3.1.0). Finished tasks are out of reach as in a repair, but no particular
+# task has to change - the model rewrites the unfinished ones their words affect.
+ORIGIN_RUN = "run"
+
+# plan.halt["reason"] when the human, not the circuit breaker, stopped the plan.
+HALT_USER_PAUSE = "user_pause"
 
 
 TERMINAL_PLAN_STATUSES = (PlanStatus.COMPLETED, PlanStatus.CANCELLED)
@@ -496,6 +507,10 @@ class Plan:
     # milestone, for the same reason `_rework_suffix` exists: a sentence the model saw
     # once, three turns back, is a sentence it no longer has.
     guidance: str | None = None
+    # What the human wrote on the run card that could not be delivered before the
+    # work ended (3.1.0). Shown with the completion report, which is where a change
+    # to finished work is asked for; cleared when that report is answered.
+    run_note: str | None = None
 
     # ---- serialization -------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
@@ -521,6 +536,7 @@ class Plan:
             "step_budget_end": self.step_budget_end,
             "halt": self.halt,
             "guidance": self.guidance,
+            "run_note": self.run_note,
         }
 
     @classmethod
@@ -557,6 +573,7 @@ class Plan:
             step_budget_end=_safe_int(raw.get("step_budget_end"), 0),
             halt=raw.get("halt") if isinstance(raw.get("halt"), dict) else None,
             guidance=str(raw["guidance"]) if raw.get("guidance") else None,
+            run_note=str(raw["run_note"]) if raw.get("run_note") else None,
         )
 
     # ---- queries -------------------------------------------------------
@@ -772,6 +789,13 @@ class Plan:
     def repairing(self) -> bool:
         """Is the pending revision a repair after a FAILED task, not a human's request?"""
         return (self.pending_revision or {}).get("origin") == ORIGIN_FAILURE
+
+    def steering(self) -> bool:
+        """Is the pending revision the human's note on a running plan (3.1.0)?"""
+        return (self.pending_revision or {}).get("origin") == ORIGIN_RUN
+
+    def paused_by_user(self) -> bool:
+        return bool(self.halt) and self.halt.get("reason") == HALT_USER_PAUSE
 
     def revision_open(self) -> set[int]:
         """Tasks that MAY also be rewritten in a repair: the unfinished ones after the
