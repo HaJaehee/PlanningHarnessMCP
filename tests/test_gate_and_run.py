@@ -346,6 +346,24 @@ class TestADecisionMadeBetweenTwoCalls(GateCase):
                          [{"task_id": 2, "title": TASKS[1], "user_comment": "표는 원본 그대로"}])
         self.assertIn("task_updates", res["next_action_hint"])
 
+    def test_comments_on_tasks_reach_the_model_under_a_whole_plan_revision_too(self):
+        """They name nothing to rewrite, so until 3.1 they were only in the reply of a
+        call that happened to be waiting when the human clicked."""
+        ui = ApprovalServer(ApprovalStore(self.state_dir), open_browser=False)  # real store
+        h = self.handler(ui, approval_mode="return")
+        self.submit(h)
+        request = ui.store.peek()[0]["id"]
+        self.assertTrue(ui.store.record_decision(
+            request, "REVISE", "순서를 바꿔 주세요", {"2": "표는 원본 그대로 옮겨 주세요"}, "PLAN"))
+        res = self.wait(h)
+        self.assertEqual((res["plan_status"], res["revision_scope"]), ("DRAFTING", "PLAN"))
+        self.assertEqual(res["user_comment"], "순서를 바꿔 주세요")
+        self.assertEqual(res["task_comments"], {"2": "표는 원본 그대로 옮겨 주세요"})
+        self.assertNotIn("revision_targets", res)
+        # The new list answers it; nothing of the old request is left on the plan.
+        self.submit(h, tasks=["표 추출", "보고서 찾기"])
+        self.assertIsNone(self.plan(h).pending_revision)
+
     def test_the_flow_of_3_0_had_the_same_hole(self):
         ui = FakeApprovalUI(decision=None)
         h = self.handler(ui, approval_mode="return", auto_ask=False)

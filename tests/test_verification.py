@@ -1257,6 +1257,27 @@ class TestPageTemplate(unittest.TestCase):
             self.assertIn("0 0 var(--sub)", css[at:css.index("}", at)], selector)
         self.assertNotIn("0 0 1.95em", css)  # no rule still uses the old em indent
 
+    def test_no_approve_button_while_a_comment_is_written(self):
+        """An approval carries no comment, so one typed and then approved was dropped
+        unread - and, on a completion report, a request to redo a task was lost while
+        the plan closed. The button is hidden while any comment box of the request has
+        text, and comes back when all of them are empty."""
+        self.assertIn("function hasOpinion(id){", _PAGE)
+        self.assertIn("return !!(all&&all.value.trim())||Object.keys(comments(id)).length>0;",
+                      _PAGE)
+        self.assertIn("b.hidden=PHASE[id]!=='HALT'&&hasOpinion(id);", _PAGE)
+        # Decided on every keystroke, and again whenever a card is drawn from its drafts.
+        self.assertIn("dset(id,'_all',el.value);", _PAGE)
+        self.assertIn("relabel(d.id);", _PAGE)
+
+    def test_the_revise_button_says_what_becomes_of_a_criterion(self):
+        """Applied to the tasks when only some are rewritten; handed to the agent in the
+        comment when the whole plan is, since no task is left to carry it."""
+        self.assertIn("function revLabel(phase,ids,whole,crit){", _PAGE)
+        self.assertIn("if(crit&&!done)label+=' · 태스크 완료 기준 '+crit+'건 '+(all?'전달':'반영');",
+                      _PAGE)
+        self.assertIn("Object.keys(criteriaOf(id)).length);", _PAGE)
+
     def test_the_small_row_buttons_look_like_buttons(self):
         """의견, 완료 기준 추가 and 수정 were flat grey at 65% opacity and were missed.
         They are bold and slightly raised, in both colour schemes."""

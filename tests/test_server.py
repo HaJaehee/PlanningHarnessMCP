@@ -3656,7 +3656,7 @@ class TestCompletionPageTemplate(unittest.TestCase):
     def test_one_builder_labels_the_button_everywhere(self):
         """First render and every relabel must agree, or the button lies about scope."""
         self.assertIn("function revLabel(", _PAGE)
-        self.assertIn("revLabel(PHASE[id],Object.keys(comments(id)),wholePlan(id))", _PAGE)
+        self.assertIn("revLabel(PHASE[id],Object.keys(comments(id)),wholePlan(id),", _PAGE)
         self.assertIn("revLabel(d.phase,[],false)", _PAGE)
 
     def test_the_button_asks_for_rework_not_for_a_rewrite(self):

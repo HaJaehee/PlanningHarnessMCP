@@ -502,6 +502,17 @@ where 3.1 spends its effort, in two directions: ask less of the model, give the 
 - **One left line under a task title.** The criterion row, the comment row, the options and
   the evidence lines were each indented in em of their own font size and so started a few
   pixels apart; they share one indent now (`--sub`), the title's own left edge.
+- **Each button carries what it says, and says what it carries.** While any comment box of
+  a request has text - the one for the whole plan or a task's (의견 / 다시 작업) - the
+  approve button is hidden, and it returns when every box is empty: an approval carries no
+  comment, so one typed and then approved used to be dropped unread, and on a completion
+  report a request to redo a task was lost while the plan closed. The revise button now
+  says what becomes of a criterion the human wrote: `수정 요청 · 2번만 · 태스크 완료 기준
+  1건 반영` (applied to the tasks) or `수정 요청 · 계획 전체 재작성 · 태스크 완료 기준 1건
+  전달` (handed to the agent in the comment, since the tasks are rewritten). And comments on
+  particular tasks under a whole-plan revision are kept with the plan
+  (`pending_revision.comments`), so they reach the model whichever call collects the
+  decision.
 - **Nothing typed is dropped.** A request not yet applied can be taken back and its words
   return to the box; a stop or a note that arrives after the last task is shown on the
   completion report; one that meets a failure goes to the model with the failure; a memo

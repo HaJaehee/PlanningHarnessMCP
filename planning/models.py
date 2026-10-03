@@ -797,6 +797,15 @@ class Plan:
     def paused_by_user(self) -> bool:
         return bool(self.halt) and self.halt.get("reason") == HALT_USER_PAUSE
 
+    def revision_comments(self) -> dict[str, str]:
+        """What the human wrote about particular tasks when they asked for the WHOLE plan
+        to be redone (3.1.0). It constrains nothing - every task may change - but it is
+        what they said, and the model has to be able to read it."""
+        raw = (self.pending_revision or {}).get("comments") or {}
+        if not isinstance(raw, dict):
+            return {}
+        return {str(k): str(v) for k, v in raw.items() if str(v or "").strip()}
+
     def revision_open(self) -> set[int]:
         """Tasks that MAY also be rewritten in a repair: the unfinished ones after the
         failed task. They are not required to change - only allowed to."""

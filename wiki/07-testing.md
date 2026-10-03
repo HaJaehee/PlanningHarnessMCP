@@ -1,6 +1,6 @@
 # 07 · Testing
 
-**866 unit tests + 7 end-to-end smoke tests, all passing** (as of 3.1.0; one unit test skips
+**869 unit tests + 7 end-to-end smoke tests, all passing** (as of 3.1.0; one unit test skips
 where the OS will not let it create a symlink). Standard-library
 `unittest` only. This project's defect history proves the rule: *test the seam before you
 trust it.* See [09-defects-and-lessons.md](09-defects-and-lessons.md).

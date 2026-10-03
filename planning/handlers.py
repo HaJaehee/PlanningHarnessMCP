@@ -1302,7 +1302,16 @@ class PlanningHandlers:
         targets = (
             self._revision_targets(plan, task_comments) if scope == SCOPE_TASKS else {}
         )
-        plan.pending_revision = {"targets": targets} if targets else None
+        # A whole-plan revision names no task to rewrite, but what the human typed about
+        # particular tasks is still theirs. It is kept with the plan so that it reaches
+        # the model whichever call collects the decision - until 3.1 it was only in the
+        # response of a call that happened to be waiting at that moment.
+        said = {} if targets else self._revision_targets(plan, task_comments)
+        plan.pending_revision = (
+            {"targets": targets} if targets
+            else {"targets": {}, "comments": said} if said
+            else None
+        )
         plan.set_status(PlanStatus.DRAFTING)
         self._withdraw_approval_request(plan)
         return targets
@@ -2138,6 +2147,10 @@ class PlanningHandlers:
             )
             plan.pending_revision = None
 
+        # A whole new task list answers whatever revision was pending, including the
+        # per-task comments of a whole-plan one.
+        plan.pending_revision = None
+
         if len(task_list) > self.config.max_tasks:
             notes.append(
                 f"task_list had {len(task_list)} items; kept the first {self.config.max_tasks}. "
@@ -2670,6 +2683,7 @@ class PlanningHandlers:
                     for task_id, body in sorted(flagged.items())
                     if plan.get_task(task_id) is not None
                 ] or None,
+                task_comments=plan.revision_comments() or None,
                 tasks=plan.tasks_brief(),
             )
         if not plan.tasks:

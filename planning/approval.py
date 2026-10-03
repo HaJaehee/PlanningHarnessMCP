@@ -1177,12 +1177,16 @@ function scopeOf(id){
 // The button says what it will do BEFORE it is clicked, so choosing the scope is an
 // explicit act by the human rather than something the server infers afterwards. One
 // builder for both the first render and every relabel, so the two can never drift.
-function revLabel(phase,ids,whole){
-  const done=phase==='COMPLETION';
-  if(whole||!ids.length)
-    return done?'수정 요청 · 계획 전체 다시 세우기':'수정 요청 · 계획 전체 재작성';
+function revLabel(phase,ids,whole,crit){
+  const done=phase==='COMPLETION',all=whole||!ids.length;
   const verb=done?'다시 작업 요청':'수정 요청';
-  return ids.length===1?verb+' · '+ids[0]+'번만':verb+' · '+ids.length+'개 태스크만';
+  let label=all?(done?'수정 요청 · 계획 전체 다시 세우기':'수정 요청 · 계획 전체 재작성')
+    :(ids.length===1?verb+' · '+ids[0]+'번만':verb+' · '+ids.length+'개 태스크만');
+  // A criterion the human wrote goes with this button too, and the button has to say
+  // which way: onto the tasks when only some are rewritten (반영), or to the agent as
+  // part of the comment when the whole plan is, because no task is left to carry it (전달).
+  if(crit&&!done)label+=' · 태스크 완료 기준 '+crit+'건 '+(all?'전달':'반영');
+  return label;
 }
 // The continue button on a halt card states whether it sends the agent a direction.
 function haltLabel(hasText){return hasText?'의견 전달 후 계속':'계속 진행';}
@@ -1355,11 +1359,22 @@ function triage(d){
     '개는 태스크 중에 만들거나 바꾼 파일을 서버가 확인했습니다.'+
     (rest?' 나머지 '+rest+'개는 에이전트의 보고가 근거입니다.':'')+'</div>';
 }
+// Whether anything is written in a comment box of this request: the one for the whole
+// plan, or any task's.
+function hasOpinion(id){
+  const all=document.getElementById('c-'+id);
+  return !!(all&&all.value.trim())||Object.keys(comments(id)).length>0;
+}
 function relabelOk(id){
   const b=document.getElementById('ok-'+id);
   if(!b)return;
   b.textContent=okLabel(PHASE[id],id);
   b.disabled=anyOther(id);
+  // An approval carries no comment - whatever was typed would be dropped unread. So
+  // while a comment is written there is no approve button to press by mistake: it is
+  // gone, and back as soon as every box is empty again. (Not on a halt card, whose
+  // box is the direction for "continue".)
+  b.hidden=PHASE[id]!=='HALT'&&hasOpinion(id);
 }
 function openComment(req,tid,focus){
   const ta=document.querySelector('textarea.tc[data-req="'+req+'"][data-tid="'+tid+'"]');
@@ -1391,7 +1406,8 @@ function relabel(id){
   });
   const btn=document.getElementById('rev-'+id);
   if(!btn)return;
-  btn.textContent=revLabel(PHASE[id],Object.keys(comments(id)),wholePlan(id));
+  btn.textContent=revLabel(PHASE[id],Object.keys(comments(id)),wholePlan(id),
+    Object.keys(criteriaOf(id)).length);
 }
 // The header a human needs before they can judge a task list at all: what is being
 // asked, what the goal is, and the model's own overview of how it intends to get there.
