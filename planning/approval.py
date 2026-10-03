@@ -1214,7 +1214,7 @@ function okLabel(phase,id){
   const changed=Object.entries(choicesOf(id)).filter(([k,v])=>v!==0);
   const crit=Object.keys(criteriaOf(id)).length;
   if(crit&&changed.length)return base+' · 변경 '+(changed.length+crit)+'건 반영';
-  if(crit)return base+' · 완료 기준 '+crit+'건 반영';
+  if(crit)return base+' · 태스크 완료 기준 '+crit+'건 반영';
   if(!changed.length)return base;
   if(changed.length===1)return base+' · '+changed[0][0]+'번 '+LETTERS[changed[0][1]]+'안';
   return base+' · 선택 '+changed.length+'건 반영';
@@ -1304,7 +1304,7 @@ function checksHtml(t){
   if((t.claims_withdrawn||[]).length)h+='<div class="ck warn">⚠ 처음에 '+
     esc(t.claims_withdrawn.map(baseName).join(', '))+
     ' 을(를) 결과 파일로 적었다가 뺐습니다 (서버가 찾지 못함)</div>';
-  if(t.echo)h+='<div class="ck warn">⚠ 증거가 완료 기준 문장을 거의 그대로 반복합니다</div>';
+  if(t.echo)h+='<div class="ck warn">⚠ 증거가 태스크 완료 기준 문장을 거의 그대로 반복합니다</div>';
   return h;
 }
 // Where to look first. Shown only when the server checked at least one file for this
@@ -1596,7 +1596,7 @@ function hintHtml(list){
     '태스크의 [의견] 또는 [다시 작업] 버튼을 누르면 해당 태스크에만 요청을 남기실 수 '+
     '있습니다. 완료 보고 단계에서는 지정하신 태스크만 다시 실행되며, 나머지 태스크의 결과는 '+
     '그대로 유지됩니다.<br>'+
-    (anyPlan?'[완료 기준 추가] 또는 [수정]으로 태스크의 완료 기준을 직접 적으실 수 있습니다. '+
+    (anyPlan?'[완료 기준 추가] 또는 [수정]으로 태스크 완료 기준을 직접 적으실 수 있습니다. '+
     '적은 기준은 승인과 함께 반영되며, 수정 요청을 거치지 않습니다.<br>':'')+
     '결정하시기 전까지 해당 에이전트는 후속 작업을 진행하지 못합니다. '+
     '요청은 응답하실 때까지 사라지지 않으니 천천히 검토해 주시기 바랍니다.');

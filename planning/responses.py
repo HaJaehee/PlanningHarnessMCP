@@ -105,7 +105,7 @@ def render_completion_report(plan: Plan, plan_summary: str | None = None) -> str
         # read against (3.0.0).
         if task.done_when:
             who = " (사용자 지정)" if task.done_when_by else ""
-            lines.append(f"   완료 기준{who}: {task.done_when}")
+            lines.append(f"   태스크 완료 기준{who}: {task.done_when}")
         evidence = (task.result_log or "").strip()
         lines.append(f"   -> {evidence}" if evidence else "   -> (증거 기록 없음)")
         for fact in task.checks:
@@ -209,7 +209,7 @@ def render_plan_for_user(
             lines.append(f"   ✕ 이전 시도 실패: {task.failure_note}")
         if task.done_when:
             who = " (사용자 지정)" if task.done_when_by else ""
-            lines.append(f"   완료 기준{who}: {task.done_when}")
+            lines.append(f"   태스크 완료 기준{who}: {task.done_when}")
     lines.append("")
     if revised:
         lines.append(f"↻ 표시된 {revised}개 태스크만 수정했습니다. 나머지는 그대로입니다.")

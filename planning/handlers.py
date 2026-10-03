@@ -1319,7 +1319,7 @@ class PlanningHandlers:
                 continue
             text = " ".join(str(raw or "").split())
             if task is not None and text:
-                parts.append(f"[완료 기준] {task.task_id}번 '{task.title}': {text}")
+                parts.append(f"[태스크 완료 기준] {task.task_id}번 '{task.title}': {text}")
         return " / ".join(parts)
 
     def _apply_late_decision(self) -> None:

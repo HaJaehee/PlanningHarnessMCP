@@ -415,7 +415,7 @@ shown what the server itself found after it. Server side:
 - The human writes or rewrites it **and approves in the same click**. Nothing about the task
   changed, so there is nothing for the agent to redraft and no round trip through 수정 요청 -
   the reason this is on the approve path at all. The button states it first, like every other:
-  `승인 · 완료 기준 1건 반영`, or with a choice `승인 · 변경 3건 반영`.
+  `승인 · 태스크 완료 기준 1건 반영`, or with a choice `승인 · 변경 3건 반영`.
 - What is typed is a draft like a comment: in `localStorage` (`…:dw<task_id>`), surviving a
   rebuild and a reload, mirrored across tabs (D22). Erasing a criterion is a real edit - it
   removes it - so "no draft" and "erased" are stored differently.
@@ -444,17 +444,17 @@ shown what the server itself found after it. Server side:
 3개 중 1개는 태스크 중에 만들거나 바꾼 파일을 서버가 확인했습니다. 나머지 2개는 에이전트의 보고가 근거입니다.
 
 1.  집계                                                소요 2분 14초
-    완료 기준  합계 4행 표가 생긴다
+    태스크 완료 기준  합계 4행 표가 생긴다
     → 표를 만들어 pivot.xlsx 로 저장
     ✔ pivot.xlsx · 14.2 KB · 이 태스크 중 생성/변경됨
 2.  원본 확인                                           소요 3초
     → q3.xlsx 확인
     · q3.xlsx · 900 B · 작업 전부터 있던 파일 (이 태스크에서 바뀌지 않음)
 3.  요약                                                소요 1시간 6분
-    완료 기준  요약이 5줄이다
+    태스크 완료 기준  요약이 5줄이다
     → 요약이 5줄이다
     ⚠ 처음에 summary.md 을(를) 결과 파일로 적었다가 뺐습니다 (서버가 찾지 못함)
-    ⚠ 증거가 완료 기준 문장을 거의 그대로 반복합니다
+    ⚠ 증거가 태스크 완료 기준 문장을 거의 그대로 반복합니다
 ```
 
 - The criterion sits directly above the evidence it is read against.

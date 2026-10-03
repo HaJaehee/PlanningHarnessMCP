@@ -1,6 +1,6 @@
 # 07 · Testing
 
-**860 unit tests + 7 end-to-end smoke tests, all passing** (as of 3.1.0; one unit test skips
+**861 unit tests + 7 end-to-end smoke tests, all passing** (as of 3.1.0; one unit test skips
 where the OS will not let it create a symlink). Standard-library
 `unittest` only. This project's defect history proves the rule: *test the seam before you
 trust it.* See [09-defects-and-lessons.md](09-defects-and-lessons.md).
@@ -219,7 +219,7 @@ Re-run the manual browser check if you change `_PAGE` in `approval.py`.
 
 3.0.0 was checked the same way, against a real server driven through all three requests of one
 plan: a criterion written with [완료 기준 추가] and another rewritten with [수정] relabel the button
-(`승인 · 완료 기준 2건 반영`, with a choice `승인 · 변경 3건 반영`), survive a reload, and reach
+(`승인 · 태스크 완료 기준 2건 반영`, with a choice `승인 · 변경 3건 반영`), survive a reload, and reach
 the waiting agent as `done_when_by: "user"`; the re-approval of a repaired plan shows the old
 wording, the failure reason and the kept `DONE` rows; the completion report shows criterion,
 evidence, what the server found, the duration and a withdrawn claim; `<script>` and `<b>` in a

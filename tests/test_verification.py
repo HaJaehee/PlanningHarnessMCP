@@ -410,7 +410,7 @@ class TestProposing(ContractCase):
     def test_the_chat_text_shows_it(self):
         h = self.handler()
         self.think(h)
-        self.assertIn(f"   완료 기준: {CHECK}", self.ask(h)["display_to_user"])
+        self.assertIn(f"   태스크 완료 기준: {CHECK}", self.ask(h)["display_to_user"])
 
     def test_the_page_gets_it(self):
         ui = FakeApprovalUI(decision=None)
@@ -690,7 +690,7 @@ class TestCompletionReport(ContractCase):
     def test_the_chat_report_says_what_the_server_found(self):
         h = self.finished()
         text = self.ask(h)["display_to_user"]
-        self.assertIn(f"   완료 기준: {CHECK}", text)
+        self.assertIn(f"   태스크 완료 기준: {CHECK}", text)
         self.assertIn("   서버 확인: ✔ pivot.xlsx · 4 B · 이 태스크 중 생성/변경됨", text)
 
     def test_a_file_removed_since_is_said_before_the_human_certifies(self):
@@ -859,7 +859,7 @@ class TestCriteriaTypedBeforeAskingForChanges(ContractCase):
         res = self.ask(h)
         self.assertEqual(res["revision_scope"], "PLAN")
         self.assertIn("순서를 바꿔 주세요", res["user_comment"])
-        self.assertIn(f"[완료 기준] 2번 '{TASKS[1]}': {MINE}", res["user_comment"])
+        self.assertIn(f"[태스크 완료 기준] 2번 '{TASKS[1]}': {MINE}", res["user_comment"])
 
     def test_a_rewritten_task_drops_the_models_own_criterion(self):
         """It described the old wording - like the options in 2.0."""
@@ -1214,8 +1214,19 @@ class TestPageTemplate(unittest.TestCase):
         self.assertNotIn("placeholder", row)
         self.assertNotIn("이 태스크가 끝났다고 볼 기준", _PAGE)
 
+    def test_the_criterion_has_one_name_wherever_the_user_reads_it(self):
+        """Page and chat text alike say 태스크 완료 기준. The one place the shorter form
+        stays is the button that adds one, which the user named 완료 기준 추가."""
+        import re
+        from planning import handlers, responses
+        bare = re.compile(r"(?<!태스크 )완료 기준(?! 추가)")
+        self.assertEqual(bare.findall(_PAGE), [])
+        for module in (responses, handlers):
+            source = Path(module.__file__).read_text(encoding="utf-8")
+            self.assertEqual(bare.findall(source), [], module.__name__)
+
     def test_the_approve_button_says_what_it_carries(self):
-        self.assertIn("' · 완료 기준 '+crit+'건 반영'", _PAGE)
+        self.assertIn("' · 태스크 완료 기준 '+crit+'건 반영'", _PAGE)
         self.assertIn("' · 변경 '+(changed.length+crit)+'건 반영'", _PAGE)
 
     def test_a_finished_task_gets_no_editor(self):
