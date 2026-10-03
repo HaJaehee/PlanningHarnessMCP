@@ -87,12 +87,48 @@ class StoreWriteError(OSError):
     """Raised when a mutation could not be persisted, so callers never report success."""
 
 
+# How many evicted plans are remembered by id. Enough that a conversation coming back
+# to a plan the server closed is told so; small enough to never matter to the file.
+MAX_EVICTED_REMEMBERED = 50
+
+
 class State:
     """In-memory view of the whole state file."""
 
-    def __init__(self, active_plan_id: str | None = None, plans: dict[str, Plan] | None = None):
+    def __init__(
+        self,
+        active_plan_id: str | None = None,
+        plans: dict[str, Plan] | None = None,
+        evicted: dict[str, dict[str, Any]] | None = None,
+        last_plan_id: str | None = None,
+    ):
         self.active_plan_id = active_plan_id
+        # The newest id ever handed out. Ids must never be reused: a plan that was
+        # evicted or pruned leaves a conversation holding its id, and that id coming
+        # back as a different plan would put the conversation on somebody else's.
+        self.last_plan_id = last_plan_id
         self.plans: dict[str, Plan] = plans or {}
+        # plan_id -> what is worth saying about a plan the server closed to make room
+        # (3.0.0). The plan itself is gone; without this, its id would read as one
+        # that never existed, and the model would be told to pick another plan.
+        self.evicted: dict[str, dict[str, Any]] = evicted or {}
+
+    def evict(self, plan: Plan, idle_seconds: int | None, at: str) -> dict[str, Any]:
+        """Remove an unfinished plan and remember that it was removed."""
+        self.plans.pop(plan.plan_id, None)
+        if self.active_plan_id == plan.plan_id:
+            self.active_plan_id = None
+        record = {
+            "goal": plan.goal,
+            "plan_status": plan.plan_status,
+            "progress": plan.progress() if plan.tasks else None,
+            "idle_seconds": idle_seconds,
+            "evicted_at": at,
+        }
+        self.evicted[plan.plan_id] = record
+        while len(self.evicted) > MAX_EVICTED_REMEMBERED:
+            self.evicted.pop(next(iter(self.evicted)))  # oldest first: insertion order
+        return record
 
     @property
     def active_plan(self) -> Plan | None:
@@ -198,6 +234,8 @@ class State:
             "schema_version": SCHEMA_VERSION,
             "active_plan_id": self.active_plan_id,
             "plans": {pid: p.to_dict() for pid, p in self.plans.items()},
+            "evicted": self.evicted,
+            "last_plan_id": self.last_plan_id,
         }
 
     @classmethod
@@ -209,7 +247,19 @@ class State:
             except Exception:  # one bad plan must not take down the whole file
                 log.warning("Dropping unreadable plan %s", pid)
                 continue
-        return cls(active_plan_id=raw.get("active_plan_id"), plans=plans)
+        # Absent in a file written before 3.0.0; anything malformed reads as nothing.
+        remembered = raw.get("evicted")
+        evicted = {
+            str(pid): dict(info) for pid, info in remembered.items()
+            if isinstance(info, dict) and str(pid) not in plans
+        } if isinstance(remembered, dict) else {}
+        last = raw.get("last_plan_id")
+        return cls(
+            active_plan_id=raw.get("active_plan_id"),
+            plans=plans,
+            evicted=evicted,
+            last_plan_id=last if isinstance(last, str) else None,
+        )
 
 
 class Store:
@@ -448,10 +498,22 @@ class Store:
 
     # ---- ids -----------------------------------------------------------
     def next_plan_id(self, state: State) -> str:
+        """A new id: one past the highest ever issued today. Never a reused one.
+
+        It used to be "how many of today's plans exist, plus one", which hands an id
+        out again as soon as a plan is removed. Retention pruning could already do
+        that for a finished plan; eviction (3.0.0) made it immediate and dangerous -
+        the plan that displaced an evicted one took its id, so the conversation that
+        came back for the old plan would have been handed the new one.
+        """
         day = datetime.datetime.now().strftime("%Y%m%d")
         prefix = f"plan_{day}_"
-        used = [pid for pid in state.plans if pid.startswith(prefix)]
-        seq = len(used) + 1
-        while f"{prefix}{seq:04d}" in state.plans:
-            seq += 1
-        return f"{prefix}{seq:04d}"
+
+        def seq_of(pid: Any) -> int:
+            tail = pid[len(prefix):] if isinstance(pid, str) and pid.startswith(prefix) else ""
+            return int(tail) if tail.isdigit() else 0
+
+        known = list(state.plans) + list(state.evicted) + [state.last_plan_id]
+        seq = max((seq_of(pid) for pid in known), default=0) + 1
+        state.last_plan_id = f"{prefix}{seq:04d}"
+        return state.last_plan_id

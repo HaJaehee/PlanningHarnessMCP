@@ -33,10 +33,25 @@ from .config import (
     APPROVAL_MODE_CHUNKED,
     APPROVAL_MODE_RETURN,
     APPROVAL_MODE_TRUST_HEARTBEAT,
+    FILE_CHECK_TIMEOUT_SEC,
     NO_PROGRESS_WAIT_CEILING_SEC,
     Config,
 )
 from .choices import build_options, collect_topics, letter, validate_model_choices
+from .evidence import (
+    CONFIRMED_STATES,
+    DECLARED,
+    REFUSED_STATES,
+    check_files,
+    check_mentions,
+    clean_done_when,
+    confirmed,
+    novelty,
+    produced,
+    refused,
+    repeats_criterion,
+)
+from .evidence import normalize_evidence as _normalize_evidence
 from .leniency import UNMATCHED_TITLES_KEY, normalize
 from .loopguard import (
     NO_PLAN,
@@ -52,6 +67,7 @@ from .models import (
     Approval,
     Decision,
     ErrorCode,
+    ORIGIN_FAILURE,
     Plan,
     PlanStatus,
     TERMINAL_PLAN_STATUSES,
@@ -67,7 +83,13 @@ from .responses import (
     render_halt_for_user,
     render_plan_for_user,
 )
-from .state_machine import can_start_task, choice_note, execution_guard
+from .state_machine import (
+    can_start_task,
+    choice_note,
+    done_when_note,
+    execution_guard,
+    repair_note,
+)
 from .store import State, Store, goal_key, title_key
 
 log = logging.getLogger("planning-mcp.handlers")
@@ -147,6 +169,10 @@ REPLAN_REDIRECTED = "REPLAN_REDIRECTED"
 # leniently against the plan). Never accepted from the model directly.
 _PAGE_CHOICES = "_page_choices"
 _MODEL_CHOICES = "_model_choices"
+# The done_when sentences the human wrote on the approval page (3.0.0). There is no
+# model-side counterpart: what "finished" means is the human's to change, and a relay
+# field would be one more way for the model to decide it for them (D20).
+_PAGE_CRITERIA = "_page_criteria"
 
 
 # Why the breaker stopped an agent, worded for the human who has to decide what next.
@@ -175,13 +201,6 @@ _EMPTY_CLAIMS = {
     "완료", "성공", "작업완료", "완료함", "완료했습니다", "완료되었습니다", "성공적으로완료",
     "성공적으로완료했습니다", "작업을완료했습니다", "처리완료", "끝", "됐습니다", "했습니다",
 }
-
-
-def _normalize_evidence(text: str) -> str:
-    """Lowercase and strip whitespace/punctuation so claims can be compared by content."""
-    return "".join(
-        ch for ch in (text or "").lower() if not ch.isspace() and ch not in ".,!?;:-_…。、"
-    )
 
 
 def missing_evidence_reason(result_log: str, task_title: str, min_len: int) -> str | None:
@@ -352,6 +371,10 @@ class PlanningHandlers:
             + plan.halt_draft()
             + [json.dumps([plan.draft_alternatives, plan.draft_reasons],
                           ensure_ascii=False, sort_keys=True)]
+            # Only when the draft carries criteria, so a draft without them keeps the
+            # fingerprint it had in 2.0.
+            + ([json.dumps(plan.draft_done_when, ensure_ascii=False, sort_keys=True)]
+               if plan.draft_done_when else [])
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
@@ -584,10 +607,21 @@ class PlanningHandlers:
         )
         return options
 
+    def _draft_criteria(self, plan: Plan) -> dict[int, str]:
+        """The draft's done_when sentences, validated against the draft they number into."""
+        if not self.config.done_when or not plan.draft_done_when:
+            return {}
+        items = {int(k): v for k, v in plan.draft_done_when.items() if str(k).isdigit()}
+        criteria, _ = clean_done_when(
+            list(plan.draft_tasks), items, self.config.max_done_when_chars
+        )
+        return criteria
+
     def _draft_page_tasks(self, plan: Plan) -> list[dict[str, Any]]:
-        """The draft as approval-page rows, with the choices it carries."""
+        """The draft as approval-page rows, with the choices and criteria it carries."""
         options = self._draft_options(plan)
         topics = collect_topics(list(plan.draft_alternatives), options)
+        criteria = self._draft_criteria(plan)
         rows = []
         for i, title in enumerate(plan.draft_tasks, start=1):
             row: dict[str, Any] = {
@@ -597,8 +631,82 @@ class PlanningHandlers:
                 row["options"] = options[i]
                 if i in topics:
                     row["topic"] = topics[i]
+            if i in criteria:
+                row["done_when"] = criteria[i]
             rows.append(row)
         return rows
+
+    def _attach_done_when(
+        self, plan: Plan, done_when: dict[int, str], notes: list[str],
+        only: set[int] | None = None,
+    ) -> None:
+        """Put the model's criteria on the tasks they describe (3.0.0).
+
+        `only` limits it to the tasks a task_updates call rewrote. A criterion the human
+        wrote is never replaced by the model's: what "finished" means for that task is
+        theirs to change, on the page.
+        """
+        if not done_when:
+            return
+        locked = {t.task_id for t in plan.tasks if t.status == TaskStatus.DONE.value}
+        criteria, check_notes = clean_done_when(
+            [t.title for t in plan.tasks], done_when, self.config.max_done_when_chars, locked
+        )
+        notes.extend(check_notes)
+        kept: list[int] = []
+        for task in plan.tasks:
+            if task.task_id not in criteria or (only is not None and task.task_id not in only):
+                continue
+            if task.done_when_by:
+                kept.append(task.task_id)
+                continue
+            task.set_done_when(criteria[task.task_id])
+        if kept:
+            notes.append(
+                "The user wrote the done_when for task(s) "
+                + ", ".join(str(t) for t in kept)
+                + " themselves; yours was not applied there."
+            )
+
+    def _apply_criteria(self, plan: Plan, criteria: dict[Any, str] | None) -> list[dict]:
+        """Make what the human wrote on the approval page the task's criterion (3.0.0).
+
+        An empty string removes the criterion. Finished tasks are left alone. Returns
+        what changed, for the audit - which is the only place the model's own wording
+        survives once the human has replaced it.
+        """
+        changed: list[dict] = []
+        limit = self.config.max_done_when_chars
+        for raw_id, raw in (criteria or {}).items():
+            try:
+                task = plan.get_task(int(raw_id))
+            except (TypeError, ValueError):
+                continue
+            if task is None or task.status == TaskStatus.DONE.value:
+                continue
+            text = " ".join(str(raw or "").split())
+            if limit > 0:
+                text = text[:limit].rstrip()
+            if text == (task.done_when or ""):
+                continue
+            changed.append(
+                {"task_id": task.task_id, "from": task.done_when, "to": text or None}
+            )
+            task.set_done_when(text, by_user=True)
+        if changed:
+            self.store.audit("criteria_applied", plan_id=plan.plan_id, changed=changed)
+        return changed
+
+    @staticmethod
+    def _criteria_sentence(changed: list[dict]) -> str:
+        """Told to the model once, at approval; next_task repeats each at its turn."""
+        ids = [str(c["task_id"]) for c in changed]
+        if not ids:
+            return ""
+        return (
+            f" The user set what finished means for task(s) {', '.join(ids)} - each "
+            "task's done_when is in next_task when you reach it."
+        )
 
     def _apply_choices(self, plan: Plan, choices: dict[Any, int] | None) -> list[dict]:
         """Make the human's pick the task (2.0.0). Returns what changed, for the audit.
@@ -611,6 +719,16 @@ class PlanningHandlers:
         changed: list[dict] = []
         for task in plan.tasks:
             if not task.has_choice:
+                continue
+            decided = task.chosen is not None
+            if decided and (
+                str(task.task_id) not in picks or task.status == TaskStatus.DONE.value
+            ):
+                # Picked on an earlier approval of this same plan. The page offers a
+                # choice only while it is undecided, so a re-approval - after a repair
+                # (3.0.0) or an expired approval - arrives with no pick for it, and
+                # "no pick" must not put the recommendation back over what the human
+                # chose. Work already done the chosen way is never re-decided at all.
                 continue
             index = picks.get(str(task.task_id), 0)
             if not isinstance(index, int) or not 0 <= index < len(task.options or []):
@@ -647,11 +765,12 @@ class PlanningHandlers:
             if plan.status is PlanStatus.DRAFTING:
                 options = self._draft_options(plan)
                 topics = collect_topics(list(plan.draft_alternatives), options)
+                criteria = self._draft_criteria(plan)
                 if plan.tasks:
                     plan.superseded_tasks.append([t.to_dict() for t in plan.tasks])
                 plan.tasks = [
                     Task(task_id=i, title=title, options=options.get(i),
-                         choice_topic=topics.get(i))
+                         choice_topic=topics.get(i), done_when=criteria.get(i))
                     for i, title in enumerate(draft, start=1)
                 ]
                 plan.clear_draft()
@@ -715,6 +834,19 @@ class PlanningHandlers:
                 # the page across a rolling upgrade still matches.
                 + (f"|{json.dumps(t.options, ensure_ascii=False, sort_keys=True)}|{t.chosen}"
                    if t.has_choice else "")
+                # The same rule for the contract (3.0.0): the criterion the human read,
+                # and what the server said it found, are part of what they approved.
+                # Path and state only - a file the human opens and saves while reading
+                # the report changes its size and mtime, and must not void the request.
+                + (f"|dw:{t.done_when}|{t.done_when_by or ''}" if t.done_when else "")
+                + (
+                    "|ck:" + json.dumps(
+                        [[c.get("path"), c.get("state")] for c in t.checks]
+                        + [["-", w] for w in t.claims_withdrawn],
+                        ensure_ascii=False,
+                    )
+                    if t.checks or t.claims_withdrawn else ""
+                )
                 for t in plan.tasks
             ]
         )
@@ -749,14 +881,20 @@ class PlanningHandlers:
                 log.debug("Could not withdraw the approval request for %s", plan.plan_id)
 
     def _mutate_approved(
-        self, plan: Plan, comment: str | None, choices: dict[Any, int] | None = None
-    ) -> None:
+        self, plan: Plan, comment: str | None, choices: dict[Any, int] | None = None,
+        criteria: dict[Any, str] | None = None,
+    ) -> list[dict]:
+        """Returns the criteria the human changed while approving (3.0.0), if any."""
         plan.approval.decision = Decision.APPROVED.value
         plan.approval.decided_at = now_iso()
         if comment:
             plan.approval.user_comment = comment
+        changed: list[dict] = []
         if plan.status is not PlanStatus.AWAITING_COMPLETION:
             self._apply_choices(plan, choices)
+            # In the same transaction as the approval, like the choices: what the human
+            # approved - including what they said "finished" means - is what runs.
+            changed = self._apply_criteria(plan, criteria)
         # The "you flagged this one" markers exist to guide a re-read of a revised plan.
         # Once it is approved they are answered, and leaving them would decorate the
         # completion report with stale complaints.
@@ -776,6 +914,7 @@ class PlanningHandlers:
         else:
             plan.set_status(PlanStatus.APPROVED)
         self._withdraw_approval_request(plan)
+        return changed
 
     def _mutate_rejected(self, plan: Plan, comment: str | None) -> None:
         plan.approval.decision = Decision.REJECTED.value
@@ -810,6 +949,7 @@ class PlanningHandlers:
         comment: str | None,
         task_comments: dict[str, str] | None = None,
         scope: str = SCOPE_PLAN,
+        criteria: dict[Any, str] | None = None,
     ) -> tuple[str, Any]:
         """Route the human's "no" to the mutation that actually answers it.
 
@@ -829,7 +969,7 @@ class PlanningHandlers:
                 plan, comment, {int(k): v for k, v in targets.items()}
             )
             return "REWORK", reopened
-        return "REVISE", self._mutate_revise(plan, comment, task_comments, scope)
+        return "REVISE", self._mutate_revise(plan, comment, task_comments, scope, criteria)
 
     def _mutate_rework(
         self, plan: Plan, comment: str | None, targets: dict[int, str]
@@ -862,6 +1002,9 @@ class PlanningHandlers:
             task.status = TaskStatus.PENDING.value
             task.started_at = None
             task.finished_at = None
+            # What the server found belonged to the outcome the human just sent back.
+            # The criterion stays: it is what the redo is still measured against.
+            task.clear_file_evidence()
             reopened.append(task_id)
         plan.pending_revision = None
         plan.rework_from_completion = False
@@ -875,6 +1018,7 @@ class PlanningHandlers:
         comment: str | None,
         task_comments: dict[str, str] | None = None,
         scope: str = SCOPE_PLAN,
+        criteria: dict[Any, str] | None = None,
     ) -> dict[str, str]:
         """Send a plan back for changes. Returns the per-task targets, if any.
 
@@ -886,6 +1030,16 @@ class PlanningHandlers:
         # Read before the status changes. A redraft asked for from the completion report
         # must not delete the work that has already been done - see `_carry_evidence`.
         plan.rework_from_completion = plan.status is PlanStatus.AWAITING_COMPLETION
+        # Criteria the human typed before pressing REVISE are theirs whatever button
+        # they then chose (3.0.0). A targeted revision keeps the tasks, so the criteria
+        # are applied to them. A whole-plan one replaces every task, so there is
+        # nothing to attach them to - they travel in the comment instead, where the
+        # model reads them while redrafting. Either way nothing typed is dropped (D22).
+        if criteria and not plan.rework_from_completion:
+            if scope == SCOPE_TASKS and self._revision_targets(plan, task_comments):
+                self._apply_criteria(plan, criteria)
+            else:
+                comment = self._criteria_as_comment(plan, comment, criteria)
         plan.approval.revision_count += 1
         plan.approval.user_comment = comment or ""
         plan.approval.reset_request()
@@ -903,6 +1057,21 @@ class PlanningHandlers:
         plan.set_status(PlanStatus.DRAFTING)
         self._withdraw_approval_request(plan)
         return targets
+
+    @staticmethod
+    def _criteria_as_comment(
+        plan: Plan, comment: str | None, criteria: dict[Any, str]
+    ) -> str:
+        parts = [comment.strip()] if (comment or "").strip() else []
+        for raw_id, raw in criteria.items():
+            try:
+                task = plan.get_task(int(raw_id))
+            except (TypeError, ValueError):
+                continue
+            text = " ".join(str(raw or "").split())
+            if task is not None and text:
+                parts.append(f"[완료 기준] {task.task_id}번 '{task.title}': {text}")
+        return " / ".join(parts)
 
     def _apply_late_decision(self) -> None:
         """Honour a decision the human made after the tool call had already returned.
@@ -939,12 +1108,15 @@ class PlanningHandlers:
             )
             return
         if verdict.decision == Decision.APPROVED.value:
-            self._mutate_approved(plan, verdict.comment, verdict.choices)
+            self._mutate_approved(
+                plan, verdict.comment, verdict.choices, verdict.criteria
+            )
         elif verdict.decision == Decision.REJECTED.value:
             self._mutate_rejected(plan, verdict.comment)
         else:
             self._mutate_no(
-                plan, verdict.comment, verdict.task_comments, verdict.scope
+                plan, verdict.comment, verdict.task_comments, verdict.scope,
+                verdict.criteria,
             )
         self.store.save(state)
         self.store.audit(
@@ -1000,6 +1172,108 @@ class PlanningHandlers:
             f"{len(state.active_plans())} plans are active; say which one with plan_id.",
             notes=notes,
             active_plans=self._plan_directory(state),
+        )
+
+    # ---- the active-plan limit (3.0.0) ------------------------------------
+    def _evict_for_room(self, state: State, incoming_goal: str) -> list[str]:
+        """Close least-recently-used unfinished plans until a new one fits.
+
+        Before 3.0 a full table refused every new plan until a human rejected an old
+        one on the approval page - and an abandoned conversation never comes back to do
+        that. With the limit at 20 the table fills with exactly such plans, so the
+        default is now to drop the one touched longest ago.
+
+        "Used" is the plan's last write (`updated_at`): an agent waiting on approval
+        touches its plan every wait slice and an executing one at every task, so a plan
+        idle past `evict_min_idle` has nobody on it. Anything fresher is never evicted -
+        if every active plan is in use, the new one is refused as before. That floor is
+        also what stops a model that keeps opening plans from emptying the table: its
+        own fresh plans fill the slots and cannot be evicted.
+
+        Nothing is lost silently. The audit line carries each evicted plan's tasks and
+        evidence, and the state file remembers the id (`State.evicted`), so a
+        conversation that comes back is told what happened instead of being pointed at
+        somebody else's plan.
+        """
+        if not self.config.evict_lru:
+            return []
+        limit = max(1, self.config.max_active_plans)
+        closed: list[tuple[Plan, int | None]] = []
+        # Most idle first; an unreadable timestamp counts as the most idle of all.
+        for plan in sorted(state.active_plans(), key=lambda p: (-p.idle_seconds(), p.plan_id)):
+            if len(state.active_plans()) < limit:
+                break
+            idle = plan.idle_seconds()
+            if idle < self.config.evict_min_idle:
+                break  # every plan after this one is fresher still
+            idle_field = None if idle == float("inf") else int(idle)
+            state.evict(plan, idle_field, now_iso())
+            closed.append((plan, idle_field))
+        if not closed:
+            return []
+        # State first: a duplicate audit line is harmless, a lost state write is not.
+        self.store.save(state)
+        for plan, idle_field in closed:
+            self._withdraw_approval_request(plan)
+            self.loop.forget(plan.plan_id)
+            self._last_answered.pop(plan.plan_id, None)
+            self.store.audit(
+                "plan_evicted",
+                plan_id=plan.plan_id,
+                goal=plan.goal,
+                plan_status=plan.plan_status,
+                idle_seconds=idle_field,
+                progress=plan.progress() if plan.tasks else None,
+                # The evidence the plan held, so removing it from the state file does
+                # not remove the only record of work that was done.
+                tasks=plan.tasks_brief() or None,
+                halted=bool(plan.halt) or None,
+                limit=limit,
+                made_room_for=incoming_goal or None,
+            )
+            log.warning(
+                "Evicted idle plan %s (%s, idle %s) to make room: %s active plans allowed",
+                plan.plan_id, plan.plan_status,
+                f"{idle_field}s" if idle_field is not None else "unreadable timestamp", limit,
+            )
+        return [plan.plan_id for plan, _ in closed]
+
+    @staticmethod
+    def _explicit_plan_id(plan_id: Any) -> str | None:
+        if isinstance(plan_id, str) and plan_id.strip().lower() not in (
+            "", "current", "active", "latest"
+        ):
+            return plan_id.strip()
+        return None
+
+    def _evicted(self, state: State, plan_id: Any, notes: list[str]) -> dict[str, Any] | None:
+        """The answer for a call naming a plan the server closed to make room, else None.
+
+        Without this an evicted id is just an unknown id, and the answers for those were
+        written for a mistyped one: "there is no active plan, start one", or - from
+        get_current_plan - "do not start a new plan, use one of these", followed by other
+        conversations' plans. Neither is true of a plan that existed and was closed.
+        """
+        pid = self._explicit_plan_id(plan_id)
+        if pid is None or pid in state.plans:
+            return None
+        record = state.evicted.get(pid)
+        if record is None:
+            return None
+        self.store.audit("evicted_plan_requested", plan_id=pid)
+        return build(
+            None,
+            ok=False,
+            error_code=ErrorCode.PLAN_EVICTED,
+            message=(
+                f"The plan '{record.get('goal')}' no longer exists. It had been idle, and "
+                f"the limit of {self.config.max_active_plans} active plans was reached, so "
+                "the server closed it to make room."
+            ),
+            notes=notes,
+            evicted_plan={
+                "plan_id": pid, **{k: v for k, v in record.items() if v is not None}
+            },
         )
 
     def _expire_stale_approval(self, state: State, plan: Plan | None) -> bool:
@@ -1113,6 +1387,13 @@ class PlanningHandlers:
                     tasks=finished.tasks_brief(),
                     progress=finished.progress(),
                 ))
+
+        # Continuing a plan the server closed to make room (3.0.0). Not drift: the plan
+        # is gone, and the model must be told that rather than shown the other plans.
+        if plan is None and continuing:
+            gone = self._evicted(state, pid_arg, notes)
+            if gone is not None:
+                return gone
 
         # The requested feature: no exact goal match, but the model believes it is
         # continuing. Rather than silently create a second plan (goal drift = fork),
@@ -1252,6 +1533,11 @@ class PlanningHandlers:
             ))
 
         if plan is None and len(state.active_plans()) >= self.config.max_active_plans:
+            # 3.0.0: make room rather than refuse. The slots are nearly always held by
+            # plans a conversation walked away from - nothing else ever removes those.
+            self._evict_for_room(state, goal or revised_goal)
+        if plan is None and len(state.active_plans()) >= self.config.max_active_plans:
+            # Still full: eviction is off, or every active plan is in use right now.
             return error(
                 None,
                 ErrorCode.PLAN_AMBIGUOUS,
@@ -1292,6 +1578,12 @@ class PlanningHandlers:
 
         # Start or reuse the plan.
         if plan is None:
+            if self._explicit_plan_id(pid_arg) in state.evicted:
+                notes.append(
+                    "The plan_id you sent was closed by the server after sitting idle "
+                    "(the limit on active plans was reached). This call started a new "
+                    "plan - use the plan_id in this response from now on."
+                )
             plan_id = self.store.next_plan_id(state)
             plan = Plan(plan_id=plan_id, goal=goal, plan_status=PlanStatus.DRAFTING.value)
             state.plans[plan_id] = plan
@@ -1385,6 +1677,15 @@ class PlanningHandlers:
             )
             alternatives, reasons = [], {}
 
+        # --- done_when (3.0.0) ------------------------------------------------
+        done_when: dict[int, str] = dict(args.get("done_when") or {})
+        if done_when and not self.config.done_when:
+            notes.append(
+                "done_when is turned off on this server; it was ignored. Send only "
+                "task_list."
+            )
+            done_when = {}
+
         # --- thinking budget --------------------------------------------------
         # The round's budget is fixed on its first step. A model whose habit is one
         # more check (D25) is not refused when it runs out - a refusal is one more thing
@@ -1400,9 +1701,14 @@ class PlanningHandlers:
             plan.draft_tasks = list(args["task_list"])[: self.config.max_tasks]
             plan.draft_alternatives = alternatives
             plan.draft_reasons = {str(k): v for k, v in reasons.items()}
+            plan.draft_done_when = {str(k): v for k, v in done_when.items()}
         elif need_more and (alternatives or reasons) and plan.draft_tasks:
             plan.draft_alternatives = alternatives
             plan.draft_reasons = {str(k): v for k, v in reasons.items()}
+        if need_more and done_when and plan.draft_tasks and not args.get("task_list"):
+            # Criteria sent on their own join the draft they number into, like the
+            # alternatives above.
+            plan.draft_done_when = {str(k): v for k, v in done_when.items()}
         auto_submitted = False
         if need_more and budget > 0 and step_number >= plan.step_budget_end:
             if plan.draft_tasks:
@@ -1451,6 +1757,10 @@ class PlanningHandlers:
             if not alternatives and not reasons:
                 alternatives = list(plan.draft_alternatives)
                 reasons = {int(k): v for k, v in plan.draft_reasons.items()}
+            if not done_when and self.config.done_when:
+                done_when = {
+                    int(k): v for k, v in plan.draft_done_when.items() if str(k).isdigit()
+                }
             if not auto_submitted:
                 notes.append(
                     "No task_list was sent, so your latest draft task_list was used."
@@ -1471,10 +1781,14 @@ class PlanningHandlers:
         if not task_updates and len(targets) == 1 and len(unmatched) == 1:
             only = next(iter(targets))
             task_updates = [{"task_id": only, "title": unmatched[0]}]
+            why = (
+                f"Task {only} is the one that failed"
+                if plan.repairing()
+                else f"The user commented on task {only} only"
+            )
             notes.append(
-                f"task_updates arrived with no task_id. The user commented on task {only} "
-                f"only, so it was applied there. Next time send "
-                f'[{{"task_id": {only}, "title": "..."}}].'
+                f"task_updates arrived with no task_id. {why}, so it was applied there. "
+                f'Next time send [{{"task_id": {only}, "title": "..."}}].'
             )
         elif unmatched and targets:
             notes.append(
@@ -1507,7 +1821,7 @@ class PlanningHandlers:
                     "the user only asked for changes to specific tasks."
                 )
             return self._apply_task_updates(
-                state, plan, task_updates, targets, notes, step_number
+                state, plan, task_updates, targets, notes, step_number, done_when
             )
 
         if not task_list:
@@ -1531,7 +1845,22 @@ class PlanningHandlers:
                 recorded_step=step_number,
             )
 
-        if targets:
+        if targets and plan.repairing():
+            # A task failed and the model re-planned everything instead of repairing
+            # that one task. Still allowed - sometimes the whole approach was wrong -
+            # but it is the pre-3.0 behaviour with its cost: finished work is not
+            # carried over. Said out loud and recorded, so the cost is visible.
+            notes.append(
+                f"Only task {', '.join(str(t) for t in sorted(targets))} failed, but you "
+                "replaced the whole task list. It was accepted; tasks that were already "
+                "finished must be done again and the user must re-approve every task. "
+                "Next time send task_updates for the failed task."
+            )
+            self.store.audit(
+                "repair_ignored", plan_id=plan.plan_id, targets=sorted(targets)
+            )
+            plan.pending_revision = None
+        elif targets:
             # The model was asked to change two lines and rewrote the whole plan. That is
             # wasteful rather than unsafe - the human still re-approves every task - so it
             # is accepted, told, and recorded, which is what makes the waste measurable.
@@ -1575,6 +1904,7 @@ class PlanningHandlers:
                     "evidence_carried", plan_id=plan.plan_id, tasks=carried
                 )
         self._attach_options(plan, alternatives, reasons, notes)
+        self._attach_done_when(plan, done_when, notes)
         plan.set_status(PlanStatus.AWAITING_APPROVAL)
         plan.approval.reset_request()
         plan.clear_draft()
@@ -1584,6 +1914,7 @@ class PlanningHandlers:
             "plan_finalized", plan_id=plan.plan_id, tasks=[t.title for t in plan.tasks],
             auto=auto_submitted or None,
             choice_points=plan.choice_points() or None,
+            criteria=[t.task_id for t in plan.tasks if t.done_when] or None,
         )
 
         if auto_submitted and self.approval_ui is not None:
@@ -1686,6 +2017,13 @@ class PlanningHandlers:
             task.started_at = source.started_at
             task.finished_at = source.finished_at
             task.previous_result_log = source.previous_result_log
+            # The contract the work was done under, and what the server found for it,
+            # belong to the work and travel with it (3.0.0).
+            task.done_when = source.done_when
+            task.done_when_by = source.done_when_by
+            task.files = list(source.files)
+            task.checks = [dict(c) for c in source.checks]
+            task.claims_withdrawn = list(source.claims_withdrawn)
             carried.append(task.task_id)
         return carried
 
@@ -1697,6 +2035,7 @@ class PlanningHandlers:
         targets: dict[int, str],
         notes: list[str],
         step_number: int,
+        done_when: dict[int, str] | None = None,
     ) -> dict[str, Any]:
         """Rewrite only the tasks the human flagged, leaving the rest untouched.
 
@@ -1704,7 +2043,14 @@ class PlanningHandlers:
         accepted keep their identity, their position, and - if the plan had already been
         running - their evidence. Only a flagged task is reset, because only a flagged
         task is being asked to change.
+
+        The same machinery repairs a FAILED task (3.0.0). There the flag was raised by
+        the failure, not by a comment: the failed task must be rewritten, the unfinished
+        tasks after it may be, and everything already DONE is out of reach - which is
+        what lets a plan that broke at step 3 keep the work of steps 1 and 2.
         """
+        repairing = plan.repairing()
+        allowed = set(targets) | (plan.revision_open() if repairing else set())
         # Validated in full before anything is written. A bad task_id halfway through a
         # single-pass loop would persist half a revision and leave the plan in a state
         # nobody approved.
@@ -1726,18 +2072,26 @@ class PlanningHandlers:
                     recorded_step=step_number,
                     tasks=plan.tasks_brief(),
                 )
-            if task_id not in targets or not title:
+            if task_id not in allowed or not title:
                 ignored.append(task_id)
                 continue
             planned.append((task_id, title))
 
-        if not planned:
+        # A repair that leaves the failed task as it is repairs nothing: the plan would
+        # be approved with a FAILED task in it, which nothing downstream can finish.
+        missed = (
+            [t for t in sorted(targets) if t not in {tid for tid, _ in planned}]
+            if repairing else []
+        )
+        if not planned or missed:
             plan.touch()
             self.store.save(state)
             return error(
                 plan,
                 ErrorCode.REVISION_INCOMPLETE,
-                "None of the tasks the user commented on were rewritten.",
+                "The failed task was not rewritten."
+                if repairing
+                else "None of the tasks the user commented on were rewritten.",
                 notes=notes,
                 recorded_step=step_number,
                 tasks=plan.tasks_brief(),
@@ -1746,22 +2100,39 @@ class PlanningHandlers:
         plan.superseded_tasks.append([t.to_dict() for t in plan.tasks])
         for task_id, title in planned:
             task = plan.get_task(task_id)
-            task.previous_title = task.title
+            if repairing:
+                # Trying the same thing again is a legitimate repair (the failure may
+                # have been passing); only a changed wording has a "before" to show.
+                task.previous_title = (
+                    task.title if title_key(title) != title_key(task.title) else None
+                )
+                if task_id in targets:
+                    task.failure_note = targets[task_id]
+            else:
+                task.previous_title = task.title
+                task.revision_note = targets[task_id]
             task.title = title
             task.clear_choice()  # the old options described the old wording
-            task.revision_note = targets[task_id]
+            # So did a criterion the model wrote. One the human wrote stays: it is their
+            # statement of what the result must be, whatever the wording of the task.
+            if not task.done_when_by:
+                task.set_done_when(None)
             # A rewritten task is a different task, so whatever was done for the old one
             # no longer counts. Untouched tasks keep their status and their result_log.
             task.status = TaskStatus.PENDING.value
             task.result_log = None
             task.started_at = None
             task.finished_at = None
+            task.clear_file_evidence()
 
         applied = [task_id for task_id, _ in planned]
+        self._attach_done_when(plan, done_when or {}, notes, only=set(applied))
         if ignored:
             notes.append(
                 f"Ignored the change to task(s) {', '.join(str(t) for t in ignored)}: "
-                "the user did not ask for those to change."
+                + ("finished tasks keep their results and cannot be rewritten here."
+                   if repairing
+                   else "the user did not ask for those to change.")
             )
         unaddressed = [t for t in sorted(targets) if t not in applied]
         if unaddressed:
@@ -1778,11 +2149,16 @@ class PlanningHandlers:
         self._milestone(plan)
         self.store.save(state)
         self.store.audit(
-            "tasks_revised",
+            "task_repaired" if repairing else "tasks_revised",
             plan_id=plan.plan_id,
             applied=applied,
             ignored=ignored or None,
             unaddressed=unaddressed or None,
+            **(
+                {"kept": [t.task_id for t in plan.tasks
+                          if t.status == TaskStatus.DONE.value]}
+                if repairing else {}
+            ),
         )
         return build(
             plan,
@@ -1793,9 +2169,13 @@ class PlanningHandlers:
             qualify=len(state.active_plans()) > 1,
             revised_tasks=applied,
             message=(
-                f"Rewrote task(s) {', '.join(str(t) for t in applied)} as the user asked. "
-                "Every other task is unchanged. Execution stays locked until the user "
-                "approves this version."
+                f"Rewrote task(s) {', '.join(str(t) for t in applied)} after the failure. "
+                "Finished tasks keep their results. Execution stays locked until the "
+                "user approves this change."
+                if repairing
+                else f"Rewrote task(s) {', '.join(str(t) for t in applied)} as the user "
+                "asked. Every other task is unchanged. Execution stays locked until the "
+                "user approves this version."
             ),
         )
 
@@ -1814,6 +2194,10 @@ class PlanningHandlers:
         plan = self._resolve_plan(state, args.get("plan_id"))
         if plan is self._AMBIGUOUS:
             return self._ambiguous(state, notes)
+        if plan is None:
+            gone = self._evicted(state, args.get("plan_id"), notes)
+            if gone is not None:
+                return gone
         if self._expire_stale_approval(state, plan):
             notes.append(
                 "This plan's earlier approval had expired and was revoked. Ask the user "
@@ -1947,6 +2331,10 @@ class PlanningHandlers:
         # and "is this actually finished?" after it. The plan's status decides which,
         # so the human always sees the right thing.
         completion_phase = plan.status is PlanStatus.AWAITING_COMPLETION
+        if completion_phase:
+            # Before the human is asked to certify the work, look once more: a file
+            # that was there when the task reported DONE may have been removed since.
+            self._refresh_checks(plan)
         plan.approval.requested_at = now_iso()
         plan.approval.decision = None
         plan.approval.decided_at = None
@@ -2000,6 +2388,35 @@ class PlanningHandlers:
             display_to_user=display,
             approval_url=approval_url,
         )
+
+    def _refresh_checks(self, plan: Plan) -> None:
+        """Re-look at the files already confirmed, and record the ones now gone.
+
+        Only ever downgrades. Whether a file was changed during its task was decided
+        when the task reported DONE and is not re-judged here: the human may open and
+        save a file while reading the report, and that must neither improve the file's
+        standing nor - through the fingerprint - void the request they are answering.
+        """
+        roots = self.config.artifact_roots
+        if not roots:
+            return
+        deadline = time.monotonic() + FILE_CHECK_TIMEOUT_SEC
+        for task in plan.tasks:
+            held = [c for c in task.checks if c.get("state") in CONFIRMED_STATES]
+            if not held:
+                continue
+            left = max(0.2, deadline - time.monotonic())
+            current = check_files(
+                [str(c.get("path")) for c in held], roots, task.started_at, timeout=left
+            )
+            for fact, now in zip(held, current):
+                if now.get("state") in REFUSED_STATES:
+                    fact["state"] = now["state"]
+                    fact["gone"] = True
+                    self.store.audit(
+                        "file_gone_before_completion", plan_id=plan.plan_id,
+                        task_id=task.task_id, path=fact.get("path"),
+                    )
 
     def _wait_unavailable(
         self, plan: Plan, notes: list[str], display: str
@@ -2139,6 +2556,8 @@ class PlanningHandlers:
             )
             if decided.choices:
                 forwarded[_PAGE_CHOICES] = decided.choices
+            if decided.criteria:
+                forwarded[_PAGE_CRITERIA] = decided.criteria
             if decided.decision == Decision.APPROVED.value:
                 return self._approve(state, plan, forwarded, notes)
             if decided.decision == Decision.REJECTED.value:
@@ -2404,7 +2823,9 @@ class PlanningHandlers:
             options = {t.task_id: t.options for t in plan.tasks if t.has_choice}
             choices, choice_notes = validate_model_choices(options, args[_MODEL_CHOICES])
             notes.extend(choice_notes)
-        self._mutate_approved(plan, args.get("user_comment"), choices)
+        rewritten = self._mutate_approved(
+            plan, args.get("user_comment"), choices, args.get(_PAGE_CRITERIA)
+        )
         self.store.save(state)
         self.store.audit(
             "completion_verified" if completion_phase else "approved",
@@ -2430,7 +2851,9 @@ class PlanningHandlers:
                 "The user approved this plan. Every task in it is already finished, so "
                 "report completion now instead of executing anything."
                 if plan.status is PlanStatus.AWAITING_COMPLETION
-                else "Execution is now unlocked." + self._choices_sentence(plan)
+                else "Execution is now unlocked."
+                + self._choices_sentence(plan)
+                + self._criteria_sentence(rewritten)
             ),
             notes=notes,
             qualify=len(state.active_plans()) > 1,
@@ -2460,10 +2883,14 @@ class PlanningHandlers:
             comment,
             verdict.task_comments if verdict else None,
             verdict.scope if verdict else SCOPE_PLAN,
+            verdict.criteria if verdict else None,
         )
         if kind == "REWORK":
             return self._reworked(state, plan, detail, comment, verdict, notes)
         targets = detail
+        # A whole-plan revision carries any criteria the human typed inside the comment
+        # (see _mutate_revise), so the model is told the comment as it was recorded.
+        comment = plan.approval.user_comment or comment
         self.store.save(state)
         self.store.audit(
             "revision_requested",
@@ -2576,6 +3003,10 @@ class PlanningHandlers:
         plan = self._resolve_plan(state, args.get("plan_id"))
         if plan is self._AMBIGUOUS:
             return self._ambiguous(state, notes)
+        if plan is None:
+            gone = self._evicted(state, args.get("plan_id"), notes)
+            if gone is not None:
+                return gone
         if plan is not None and plan.halt:
             return self._halted(state, plan, notes)
         if plan is not None:
@@ -2770,9 +3201,83 @@ class PlanningHandlers:
                 progress=plan.progress(),
             )
 
+        # --- the verification contract (3.0.0) ---------------------------------
+        # The two claims the server can test instead of taking on trust: a file the
+        # task says it produced, and evidence that says more than the criterion did.
+        declared = [str(p) for p in (args.get("files") or [])]
+        roots = self.config.artifact_roots
+        facts: list[dict[str, Any]] = []
+        if declared and not roots:
+            notes.append(
+                "This server does not check files, so 'files' was ignored. Say in "
+                "result_log where the output is."
+            )
+            declared = []
+        if roots:
+            facts = check_files(
+                declared, roots, task.started_at, DECLARED, FILE_CHECK_TIMEOUT_SEC
+            )
+            absent = refused(facts)
+            if absent:
+                for path in absent:
+                    if path not in task.file_refusals:
+                        task.file_refusals.append(path)
+                plan.touch()
+                self.store.save(state)
+                self.store.audit(
+                    "file_not_found", plan_id=plan.plan_id, task_id=task.task_id,
+                    files=absent, result_log=evidence,
+                )
+                looked = "; ".join(str(r) for r in roots)
+                return error(
+                    plan,
+                    ErrorCode.FILE_NOT_FOUND,
+                    "DONE refused: the server could not find "
+                    + ", ".join(f"'{p}'" for p in absent)
+                    + f" (or it is empty). It looks in: {looked}.",
+                    notes=notes,
+                    qualify=len(state.active_plans()) > 1,
+                    progress=plan.progress(),
+                )
+            facts += check_mentions(
+                evidence, declared, roots, task.started_at, FILE_CHECK_TIMEOUT_SEC
+            )
+        score = round(novelty(task.done_when, evidence), 2) if task.done_when else None
+        # A criterion said back is not evidence - unless the server has itself found
+        # what the task produced, in which case the sentence no longer has to carry it.
+        # A file that was already there before the task does not count for that.
+        if not produced(facts) and repeats_criterion(
+            task.done_when, evidence, self.config.evidence_novelty
+        ):
+            self.store.audit(
+                "done_repeats_criterion", plan_id=plan.plan_id, task_id=task.task_id,
+                result_log=evidence, novelty=score,
+            )
+            return error(
+                plan,
+                ErrorCode.MISSING_RESULT_LOG,
+                "DONE refused: result_log only repeats the done_when sentence. Say what "
+                "was actually produced - the values, the names or the path.",
+                notes=notes,
+                qualify=len(state.active_plans()) > 1,
+                progress=plan.progress(),
+            )
+
         task.status = TaskStatus.DONE.value
         task.finished_at = now_iso()
         task.result_log = evidence
+        task.files = declared
+        task.checks = facts
+        if task.file_refusals and not confirmed(facts):
+            # The model named a file, was told it is not there, and then reported DONE
+            # with nothing the server could confirm. Allowed - the task may truly have
+            # produced no file - but the human is shown that the claim was dropped.
+            task.claims_withdrawn = list(task.file_refusals)
+            self.store.audit(
+                "file_claim_withdrawn", plan_id=plan.plan_id, task_id=task.task_id,
+                files=task.claims_withdrawn,
+            )
+        task.file_refusals = []
         self._milestone(plan)
 
         if plan.all_done():
@@ -2797,6 +3302,13 @@ class PlanningHandlers:
             plan_id=plan.plan_id,
             task_id=task.task_id,
             result_log=task.result_log,
+            # Field data for tuning the contract: how far the evidence went beyond the
+            # criterion, and what the server found. Absent on a task under no contract.
+            **({"novelty": score} if score is not None else {}),
+            **(
+                {"checks": [[c.get("source"), c.get("state")] for c in task.checks]}
+                if task.checks else {}
+            ),
         )
 
         nxt = plan.current_task()
@@ -2891,6 +3403,22 @@ class PlanningHandlers:
         task.result_log = args.get("result_log") or task.result_log
         self._milestone(plan)
         plan.set_status(PlanStatus.BLOCKED)
+        kept = [t.task_id for t in plan.tasks if t.status == TaskStatus.DONE.value]
+        if self.config.local_repair:
+            # Open this one task for repair (3.0.0). Before, a failure sent the model
+            # back to draft the whole plan again, and the redraft dropped the evidence
+            # of every task that had already finished - a break at step 3 cost steps 1
+            # and 2. Now the failed task is the flagged one, exactly as if the human had
+            # commented on it, and only it (and what follows it) may change.
+            reason = (task.result_log or "").strip() or "no reason was given"
+            plan.pending_revision = {
+                "targets": {str(task.task_id): reason},
+                "origin": ORIGIN_FAILURE,
+                "open": [
+                    t.task_id for t in plan.tasks
+                    if t.task_id > task.task_id and t.status != TaskStatus.DONE.value
+                ],
+            }
         self.store.save(state)
         self.store.audit(
             "task_failed", plan_id=plan.plan_id, task_id=task.task_id, result_log=task.result_log
@@ -2900,7 +3428,16 @@ class PlanningHandlers:
             progress=plan.progress(),
             notes=notes,
             failed_task={"title": task.title, "result_log": task.result_log},
-            message=f"The task '{task.title}' failed. Forward progress is halted.",
+            tasks_unchanged=(kept or None) if self.config.local_repair else None,
+            message=(
+                f"The task '{task.title}' failed. Forward progress is halted."
+                + (
+                    " The finished tasks keep their results - only this task needs "
+                    "another way."
+                    if self.config.local_repair and kept
+                    else ""
+                )
+            ),
         )
 
     def _reset_task(
@@ -2945,6 +3482,13 @@ class PlanningHandlers:
                 ),
                 active_plans=self._plan_directory(state),
             )
+
+        if plan is None:
+            # A plan the server closed to make room (3.0.0) is neither "no plan exists"
+            # nor a mistyped id, and must not be answered with other conversations' plans.
+            gone = self._evicted(state, requested, notes)
+            if gone is not None:
+                return gone
 
         if plan is None and requested.lower() not in ("current", "active", "latest", ""):
             # An id that names nothing is NOT the same as "no plan exists". Saying the

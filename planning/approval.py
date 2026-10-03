@@ -25,6 +25,7 @@ owner exits another process takes the same port over and the open tab keeps work
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
@@ -41,6 +42,8 @@ from urllib.parse import urlparse
 from urllib.request import urlopen
 
 from .choices import validate_page_choices
+from .config import SERVER_AUTHOR, SERVER_AUTHOR_EMAIL, SERVER_VERSION
+from .evidence import validate_page_criteria
 from .filelock import exclusive
 
 log = logging.getLogger("planning-mcp.approval")
@@ -107,6 +110,9 @@ class Verdict:
     # 2.0.0 - {task_id: option index} for the tasks that offered a choice. Validated
     # against the options that were on screen before it is ever recorded.
     choices: dict[str, int] = field(default_factory=dict)
+    # 3.0.0 - {task_id: done_when} for the tasks whose criterion the human wrote or
+    # rewrote on the page. "" means they removed it. Validated the same way.
+    criteria: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +241,13 @@ class ApprovalStore:
             "task_comments": {},
             "scope": SCOPE_PLAN,
             "choices": {},
+            "criteria": {},
             "decided_at": None,
+            # Which version of the server asked. The page is served by one process and
+            # asked by any of them, and after an upgrade the two are not always the same
+            # code (a process keeps the modules it imported until it is restarted). The
+            # page shows its own version, and says so when a request came from another.
+            "server_version": SERVER_VERSION,
         }
         with exclusive(self.lock_path) as got:
             record = self.read()
@@ -282,6 +294,7 @@ class ApprovalStore:
         task_comments: Any = None,
         scope: Any = None,
         choices: Any = None,
+        criteria: Any = None,
     ) -> bool:
         """Called by the page, for one specific queued request.
 
@@ -300,6 +313,11 @@ class ApprovalStore:
         recorded: the page only ever posts an index it rendered, so anything else is a
         stale tab or a forged request, and recording it would run something nobody
         picked. They count only on an approval, and never on a completion report.
+
+        `criteria` (3.0.0) - the done_when sentences the human wrote - follow the same
+        rule: a task this request did not show an editor for refuses the whole decision.
+        They count on a plan request only, with an approval or a request for changes:
+        what the human typed about a task is theirs whichever button they then press.
         """
         if decision not in DECISIONS:
             return False
@@ -324,11 +342,19 @@ class ApprovalStore:
                             log.warning("Refused choices that were not on screen: %r", choices)
                             return False
                         picked = checked
+                    written: dict[str, str] = {}
+                    if decision in ("APPROVED", "REVISE") and entry.get("phase") == PHASE_PLAN:
+                        valid = validate_page_criteria(entry.get("tasks") or [], criteria)
+                        if valid is None:
+                            log.warning("Refused criteria for tasks not on screen: %r", criteria)
+                            return False
+                        written = valid
                     entry["decision"] = decision
                     entry["comment"] = comment or ""
                     entry["task_comments"] = cleaned
                     entry["scope"] = wanted
                     entry["choices"] = picked
+                    entry["criteria"] = written
                     entry["decided_at"] = time.time()
                     # If this cannot be saved the click did nothing; say so rather than
                     # letting the page claim the decision was recorded.
@@ -432,6 +458,12 @@ class ApprovalStore:
                 str(k): v for k, v in (entry.get("choices") or {}).items()
                 if isinstance(v, int) and not isinstance(v, bool)
             },
+            # An entry decided by an older process has none: it reads as "the human
+            # changed no criterion", which is what that page could express.
+            criteria={
+                str(k): v for k, v in (entry.get("criteria") or {}).items()
+                if isinstance(v, str)
+            } if isinstance(entry.get("criteria"), dict) else {},
         )
 
     def _take(self, match) -> Verdict | None:
@@ -536,6 +568,34 @@ button{flex:1 1 auto;min-width:140px;padding:.85rem 1rem;border:0;border-radius:
        font:inherit;font-weight:600;cursor:pointer;font-size:.95rem}
 .ok{background:#1a7f37;color:#fff}.no{background:#b42318;color:#fff}.rev{background:#8a5a00;color:#fff}
 button:disabled{opacity:.5;cursor:default}
+/* Which planning-mcp is serving this page. Small, and outside #root so no re-render can
+   remove it: after an upgrade "is the new version actually running?" is answered here. */
+.ver{max-width:720px;margin:0 auto .4rem;padding:0 .25rem;box-sizing:border-box;
+     display:flex;justify-content:flex-end;align-items:center;gap:.4rem;
+     font-size:.72rem;letter-spacing:.02em}
+.vt{opacity:.45}
+/* The information icon beside it, and the dialog it opens. Every rule here undoes the
+   page-wide `button` style, which is sized for the three decision buttons. */
+.info{flex:0 0 auto;min-width:0;width:1.1rem;height:1.1rem;padding:0;border-radius:50%;
+      border:1px solid currentColor;background:transparent;color:inherit;opacity:.5;
+      font:italic 700 .68rem/1 Georgia,"Times New Roman",serif;cursor:pointer}
+.info:hover,.info:focus-visible{opacity:1}
+dialog.about{border:0;border-radius:12px;padding:0;min-width:270px;max-width:90vw;
+             background:#fff;color:#16181d;box-shadow:0 8px 30px rgba(0,0,0,.25);
+             font-size:.92rem}
+@media(prefers-color-scheme:dark){
+  dialog.about{background:#1e2126;color:#e8eaed;border:1px solid #2c3038}
+}
+dialog.about::backdrop{background:rgba(0,0,0,.35)}
+.aboutin{padding:1.25rem 1.5rem}
+.aboutin h2{font-size:1rem;margin:0 0 .8rem}
+.aboutin p{margin:.3rem 0;line-height:1.5;word-break:break-word}
+.aboutin .k{display:inline-block;min-width:4.4em;opacity:.6}
+.aboutin button{display:block;flex:none;min-width:0;margin:1.1rem 0 0 auto;padding:.4rem 1rem;
+                font-size:.85rem;background:#e6e8eb;color:inherit}
+@media(prefers-color-scheme:dark){.aboutin button{background:#2c3038}}
+.vernote{font-size:.78rem;color:#8a5a00;margin:-.1rem 0 .7rem;line-height:1.5}
+@media(prefers-color-scheme:dark){.vernote{color:#d9a441}}
 .idle{text-align:center;opacity:.6;padding:2.5rem 0;font-size:.95rem}
 .done{text-align:center;padding:2rem 0;font-size:1.05rem;font-weight:600}
 .hint{margin-top:1rem;font-size:.82rem;opacity:.55;line-height:1.5}
@@ -590,6 +650,37 @@ textarea.tc{display:none;min-height:2.4rem;margin:.4rem 0 0 1.95em;width:calc(10
 .cnt{opacity:.55;font-size:.84rem;font-weight:400}
 .err{background:#fdecea;color:#b42318;border-radius:8px;padding:.6rem .9rem;margin:0 0 1rem;
      font-size:.9rem}
+/* 3.0.0 - the verification contract. What "finished" means for a task, as the human
+   approved it or wrote it, and what the server itself found on disk. A task with no
+   criterion shows only a small button, for the reason the comment boxes are collapsed:
+   the plan is what the human came to read. */
+.dw{display:flex;gap:.5rem;align-items:baseline;margin:.3rem 0 0 1.95em;font-size:.86rem;
+    line-height:1.5}
+.dw.hid{display:none}
+.dwl{flex:0 0 auto;font-size:.72rem;font-weight:600;letter-spacing:.04em;opacity:.5}
+.dwt{flex:1 1 auto;word-break:break-word}
+.dwby{font-size:.72rem;opacity:.6;margin-left:.35rem}
+.dwbtn{flex:0 0 auto;min-width:0;padding:.1rem .45rem;font-size:.74rem;font-weight:500;
+       border-radius:6px;background:#e6e8eb;color:inherit;opacity:.65}
+.dwbtn:hover{opacity:1}
+@media(prefers-color-scheme:dark){.dwbtn{background:#2c3038}}
+input.dwi{display:none;flex:1 1 auto;min-width:0;box-sizing:border-box;border-radius:6px;
+          padding:.3rem .5rem;border:1px solid #ccd0d5;font:inherit;font-size:.86rem;
+          background:transparent;color:inherit}
+@media(prefers-color-scheme:dark){input.dwi{border-color:#3a3f47}}
+.dw.edit input.dwi{display:block}
+.dw.edit .dwt,.dw.edit .dwbtn{display:none}
+/* An edited criterion travels with the approval, so the row has to keep saying so. */
+.dw.changed .dwl{color:#8a5a00;opacity:1}
+.tcbtn.dwadd{margin-left:auto}
+.tcbtn.dwadd+.tcbtn{margin-left:0}
+.ck{font-size:.84rem;margin:.2rem 0 0 1.95em;line-height:1.5;word-break:break-word}
+.ck.ok{color:#1a7f37}.ck.warn{color:#8a5a00}.ck.dim{opacity:.6}
+@media(prefers-color-scheme:dark){.ck.ok{color:#5dbb77}.ck.warn{color:#d9a441}}
+.took{font-size:.76rem;opacity:.5;white-space:nowrap}
+.triage{background:#f2f3f5;border-radius:8px;padding:.5rem .8rem;margin:0 0 .9rem;
+        font-size:.86rem;line-height:1.5}
+@media(prefers-color-scheme:dark){.triage{background:#15171c}}
 /* Whether an agent is still holding a call open for this request. Not a countdown:
    the request outlives any one tool call, so the honest thing to show is not how long
    is left but whether deciding right now resumes the conversation by itself. */
@@ -601,11 +692,32 @@ textarea.tc{display:none;min-height:2.4rem;margin:.4rem 0 0 1.95em;width:calc(10
   .chip.live{background:#16281c;color:#5dbb77}
   .chip.idle{background:#2a2115;color:#d9a441}
 }
-</style></head><body><div class="card" id="root">
+</style></head><body><div class="ver"><span class="vt">planning-mcp __PLANNING_MCP_VERSION__</span>
+<button class="info" id="about-open" type="button" aria-label="프로그램 정보" title="정보">i</button></div>
+<div class="card" id="root">
 <div class="idle">현재 대기 중인 승인 요청이 없습니다.<br>
 <span style="font-size:.85rem">에이전트가 계획을 제출하면 이곳에 표시됩니다.</span></div></div>
+<dialog class="about" id="about" aria-labelledby="about-title"><div class="aboutin">
+<h2 id="about-title">planning-mcp</h2>
+<p><span class="k">Author:</span> __PLANNING_MCP_AUTHOR__</p>
+<p><span class="k">Email:</span> __PLANNING_MCP_EMAIL__</p>
+<p><span class="k">Version:</span> __PLANNING_MCP_VERSION__</p>
+<button type="button" id="about-close">닫기</button>
+</div></dialog>
 <script>
 let seen='',busy=false,flash=null,pendingCount=0,lastError='';
+// The version of the server that is serving this page (filled in when it is served).
+const VERSION='__PLANNING_MCP_VERSION__';
+// A request can be asked by another planning-mcp process on the same state directory,
+// and after an upgrade that process may still be running older code. Nothing is said
+// when the versions agree - which is nearly always.
+function verNote(d){
+  if(d.version===VERSION)return '';
+  return '<p class="vernote">'+(d.version
+    ?'이 요청은 planning-mcp '+esc(d.version)+' 서버가 보냈습니다. '
+    :'이 요청을 보낸 서버는 버전을 남기지 않는 이전 버전입니다. ')+
+    '이 페이지는 '+esc(VERSION)+'입니다.</p>';
+}
 const IDLE_TITLE='planning-mcp 승인';
 // A popup can be blocked, land on another monitor, or open behind other windows.
 // So the page makes itself noticeable instead: the tab title flashes and a short tone
@@ -700,6 +812,13 @@ function restore(list){
         if(v==='other')openComment(d.id,r.getAttribute('data-ctid'),false);
       }
     });
+    // So does a criterion they wrote. "No draft" and "erased it" are different states
+    // here - erasing removes the criterion - so the raw item is read, not dget's ''.
+    dwInputs(d.id).forEach(i=>{
+      let v=null;
+      try{v=localStorage.getItem(dkey(d.id,'dw'+i.getAttribute('data-dtid')));}catch(e){}
+      if(v!==null&&v!==(i.getAttribute('data-orig')||'')){i.value=v;showCriterion(i);}
+    });
     relabel(d.id);
   });
 }
@@ -720,6 +839,12 @@ function onInput(ev){
   if(el.type==='checkbox'&&el.id.indexOf('all-')===0){
     const req=el.id.slice(4);
     dset(req,'_whole',el.checked?'1':'');
+    relabel(req);
+    return;
+  }
+  if(el.classList&&el.classList.contains('dwi')){
+    const req=el.getAttribute('data-req');
+    dset(req,'dw'+el.getAttribute('data-dtid'),el.value);
     relabel(req);
     return;
   }
@@ -751,6 +876,13 @@ function onStorage(ev){
     const r=document.querySelector('input[type=radio][data-req="'+req+'"][data-ctid="'+
       tid.slice(2)+'"][value="'+value+'"]');
     if(r){r.checked=true;if(value==='other')openComment(req,tid.slice(2),false);}
+    relabel(req);
+    return;
+  }
+  if(tid.indexOf('dw')===0){
+    const i=document.querySelector('input.dwi[data-req="'+req+'"][data-dtid="'+
+      tid.slice(2)+'"]');
+    if(i&&i!==document.activeElement){i.value=value;showCriterion(i);}
     relabel(req);
     return;
   }
@@ -877,9 +1009,112 @@ function okLabel(phase,id){
   const base=phase==='HALT'?'이 초안으로 승인':'승인';
   if(anyOther(id))return base+' · 기타는 수정 요청으로';
   const changed=Object.entries(choicesOf(id)).filter(([k,v])=>v!==0);
+  const crit=Object.keys(criteriaOf(id)).length;
+  if(crit&&changed.length)return base+' · 변경 '+(changed.length+crit)+'건 반영';
+  if(crit)return base+' · 완료 기준 '+crit+'건 반영';
   if(!changed.length)return base;
   if(changed.length===1)return base+' · '+changed[0][0]+'번 '+LETTERS[changed[0][1]]+'안';
   return base+' · 선택 '+changed.length+'건 반영';
+}
+// ---- done_when (3.0.0) -----------------------------------------------------
+// What "finished" means for a task. On a plan request the human may write or rewrite
+// it and still approve: the task itself does not change, so there is nothing for the
+// agent to redraft and no round trip is spent. The edit is a draft like any other -
+// kept in localStorage, mirrored across tabs - and only the tasks whose text differs
+// from what was shown are sent; the server refuses any task it did not show.
+function dwInputs(id){
+  return Array.from(document.querySelectorAll('input.dwi[data-req="'+id+'"]'));
+}
+function dwValue(i){return i.value.trim().replace(/\\s+/g,' ');}
+function criteriaOf(id){
+  const out={};
+  dwInputs(id).forEach(i=>{
+    const v=dwValue(i);
+    if(v!==(i.getAttribute('data-orig')||''))out[i.getAttribute('data-dtid')]=v;
+  });
+  return out;
+}
+function showCriterion(i){
+  const row=i.closest('.dw');
+  if(row){row.classList.remove('hid');row.classList.add('edit');}
+}
+function editCriterion(btn,req,tid){
+  const i=document.querySelector('input.dwi[data-req="'+req+'"][data-dtid="'+tid+'"]');
+  if(!i)return;
+  showCriterion(i);i.focus();
+}
+function dwRow(d,t,editable){
+  const has=!!t.done_when,rid=esc(d.id),tid=esc(String(t.task_id));
+  if(!has&&!editable)return '';
+  let h='<div class="dw'+(has?'':' hid')+'"><span class="dwl">완료 기준</span>'+
+    '<span class="dwt">'+esc(t.done_when||'')+
+    (t.done_when_by==='user'?'<span class="dwby">사용자 지정</span>':'')+'</span>';
+  if(editable)h+='<input class="dwi" type="text" maxlength="200" data-req="'+rid+
+    '" data-dtid="'+tid+'" data-orig="'+esc(t.done_when||'')+'" value="'+esc(t.done_when||'')+
+    '" placeholder="이 태스크가 끝났다고 볼 기준 (예: 분기별 합계 4행이 있는 표가 저장된다)" '+
+    'aria-label="'+tid+'번 완료 기준">'+
+    '<button class="dwbtn" type="button" onclick="editCriterion(this,\\''+rid+'\\',\\''+
+    tid+'\\')">수정</button>';
+  return h+'</div>';
+}
+// ---- what the server found (3.0.0) -------------------------------------------
+// On a completion report: the files a task said it produced, as the server found them.
+// Everything else on the row is the agent's word; these lines are not.
+function sizeText(n){
+  if(typeof n!=='number')return '';
+  if(n<1024)return n+' B';
+  if(n<1048576)return (n/1024).toFixed(1)+' KB';
+  return (n/1048576).toFixed(1)+' MB';
+}
+function baseName(p){
+  const s=String(p||'').replace(/\\\\/g,'/');
+  const i=s.lastIndexOf('/');
+  return i>=0?s.slice(i+1):s;
+}
+function tookText(s){
+  if(typeof s!=='number')return '';
+  if(s<60)return s+'초';
+  const m=Math.floor(s/60),r=s%60;
+  if(m<60)return m+'분'+(r?' '+r+'초':'');
+  return Math.floor(m/60)+'시간 '+(m%60)+'분';
+}
+// A file the task itself created or changed. One that was already there before the
+// task proves the file exists, not that the task did anything - it gets its own line,
+// but it does not move the task out of "the agent's word only".
+function producedCheck(c){
+  return !c.gone&&(c.state==='found'||c.state==='folder');
+}
+function checkLine(c){
+  const name=esc(baseName(c.path)),size=sizeText(c.size),det=size?' · '+size:'';
+  const open='<div title="'+esc(c.path)+'" class="ck ';
+  if(c.gone)return open+'warn">⚠ '+name+' · 보고 당시에는 있었으나 지금은 없음</div>';
+  if(c.state==='found')return open+'ok">✔ '+name+det+' · 이 태스크 중 생성/변경됨</div>';
+  if(c.state==='old')return open+'dim">· '+name+det+
+    ' · 작업 전부터 있던 파일 (이 태스크에서 바뀌지 않음)</div>';
+  if(c.state==='folder')return open+'ok">✔ '+name+' · 폴더가 있음</div>';
+  if(c.state==='empty')return open+'warn">⚠ '+name+' · 빈 파일</div>';
+  if(c.state==='missing')return open+'warn">⚠ '+name+' · 찾을 수 없음</div>';
+  if(c.state==='unknown')return open+'dim">· '+name+' · 확인하지 못함 (응답 지연)</div>';
+  return open+'dim">· '+name+' · 서버의 확인 범위 밖</div>';
+}
+function checksHtml(t){
+  let h=(t.checks||[]).map(checkLine).join('');
+  if((t.claims_withdrawn||[]).length)h+='<div class="ck warn">⚠ 처음에 '+
+    esc(t.claims_withdrawn.map(baseName).join(', '))+
+    ' 을(를) 결과 파일로 적었다가 뺐습니다 (서버가 찾지 못함)</div>';
+  if(t.echo)h+='<div class="ck warn">⚠ 증거가 완료 기준 문장을 거의 그대로 반복합니다</div>';
+  return h;
+}
+// Where to look first. Shown only when the server checked at least one file for this
+// plan - otherwise every task would be "unconfirmed" and the line would say nothing.
+function triage(d){
+  const tasks=d.tasks||[];
+  if(!tasks.some(t=>(t.checks||[]).length||(t.claims_withdrawn||[]).length))return '';
+  const seen=tasks.filter(t=>(t.checks||[]).some(producedCheck)).length;
+  const rest=tasks.length-seen;
+  return '<div class="triage">'+tasks.length+'개 중 '+seen+
+    '개는 태스크 중에 만들거나 바꾼 파일을 서버가 확인했습니다.'+
+    (rest?' 나머지 '+rest+'개는 에이전트의 보고가 근거입니다.':'')+'</div>';
 }
 function relabelOk(id){
   const b=document.getElementById('ok-'+id);
@@ -908,6 +1143,11 @@ function relabel(id){
     const task=b.closest('.task');
     if(task)task.classList.toggle('filled',!!b.value.trim());
   });
+  // And the criteria the human has changed: they travel with the approval.
+  dwInputs(id).forEach(i=>{
+    const row=i.closest('.dw');
+    if(row)row.classList.toggle('changed',dwValue(i)!==(i.getAttribute('data-orig')||''));
+  });
   const btn=document.getElementById('rev-'+id);
   if(!btn)return;
   btn.textContent=revLabel(PHASE[id],Object.keys(comments(id)),wholePlan(id));
@@ -918,7 +1158,7 @@ function relabel(id){
 // rows dropped that blob, so they are composed here from their own fields instead.
 function header(d){
   const title=d.phase==='COMPLETION'?'완료 확인':'계획 승인 요청';
-  let h='<h1>'+title+' · '+esc(d.plan_id)+'</h1>'+
+  let h='<h1>'+title+' · '+esc(d.plan_id)+'</h1>'+verNote(d)+
     '<p class="goal"><span class="lbl">목표</span>'+esc(d.goal)+'</p>';
   if(d.summary)h+='<div class="summary"><span class="lbl">개요</span>'+esc(d.summary)+'</div>';
   return h;
@@ -935,16 +1175,28 @@ function taskRows(d){
     // out, so the human can check it was done the way they picked.
     const picked=done&&hasChoice(t)&&t.chosen!=null
       ?'<span class="badge">'+(t.chosen===0?'권장안':LETTERS[t.chosen]+'안 선택')+'</span>':'';
+    // A criterion can be written for any task still to be done. Finished work keeps the
+    // one it was done under.
+    const editable=!done&&t.status!=='DONE';
+    const took=done?tookText(t.duration_sec):'';
     let row='<div class="task"><div class="tt"><span class="tn">'+esc(String(t.task_id))+
       '.</span>'+(choose?'<span>'+choiceHeading(t)+'</span>'
                         :'<span>'+esc(t.title)+'</span>')+picked+
       (badge?'<span class="badge">'+esc(t.status)+'</span>':'')+
+      (took?'<span class="took">소요 '+took+'</span>':'')+
+      (editable&&!t.done_when?'<button class="tcbtn dwadd" type="button" '+
+        'onclick="editCriterion(this,\\''+esc(d.id)+'\\',\\''+esc(String(t.task_id))+
+        '\\')">기준 추가</button>':'')+
       '<button class="tcbtn" type="button" aria-expanded="false" '+
       'onclick="toggleComment(this)">'+(done?'다시 작업':'의견')+'</button></div>';
     if(choose)row+=optionsHtml(d,t,true);
     if(t.previous_title)row+='<div class="was">'+esc(t.previous_title)+'</div>';
     if(t.revision_note)row+='<div class="note">\\u21BB 요청하신 내용: '+
       esc(t.revision_note)+'</div>';
+    // A task rewritten after it failed: why the first way did not work.
+    if(t.failure_note)row+='<div class="note">✕ 이전 시도 실패: '+
+      esc(t.failure_note)+'</div>';
+    row+=dwRow(d,t,editable);
     // What the task used to produce, for a row the human already sent back once. The
     // request alone shows what was asked; only this shows whether it was answered.
     if(done&&t.previous_result_log)
@@ -955,6 +1207,7 @@ function taskRows(d){
       const ev=(t.result_log||'').trim();
       row+=ev?'<div class="ev">\\u2192 '+esc(ev)+'</div>'
              :'<div class="ev none">(증거 기록 없음)</div>';
+      row+=checksHtml(t);
     }
     row+='<textarea class="tc" data-req="'+esc(d.id)+'" data-tid="'+esc(String(t.task_id))+
       '" placeholder="'+(done?'해당 태스크의 재작업 요청 사항을 입력해 주십시오'
@@ -979,7 +1232,7 @@ function agentNote(d){
 // review, and the button set depends on whether there is a draft to approve as it stands.
 function haltCard(d){
   const tasks=d.tasks||[];
-  let h='<h1>반복 감지 · '+esc(d.plan_id)+'</h1>'+
+  let h='<h1>반복 감지 · '+esc(d.plan_id)+'</h1>'+verNote(d)+
     '<p class="goal"><span class="lbl">목표</span>'+esc(d.goal)+'</p>'+
     '<div class="summary warn"><span class="lbl">에이전트가 멈춘 이유</span>'+esc(d.summary)+'</div>';
   if(tasks.length){
@@ -989,7 +1242,7 @@ function haltCard(d){
       (hasChoice(t)&&d.draft?'<span>'+choiceHeading(t)+'</span>'
                    :'<span>'+esc(t.title)+'</span>')+
       (t.status&&t.status!=='PENDING'?'<span class="badge">'+esc(t.status)+'</span>':'')+
-      '</div>'+(d.draft?optionsHtml(d,t,false):'')+'</div>').join('')+'</div>';
+      '</div>'+(d.draft?optionsHtml(d,t,false):'')+dwRow(d,t,false)+'</div>').join('')+'</div>';
   }
   h+=chip(d);
   h+='<textarea id="c-'+esc(d.id)+
@@ -1012,6 +1265,7 @@ function render(list){
   if(!list.length){root.innerHTML='<div class="idle">현재 대기 중인 승인 요청이 없습니다.<br>'+
     '<span style="font-size:.85rem">에이전트가 계획을 제출하면 이곳에 표시됩니다.</span></div>';return;}
   const anyChoice=list.some(d=>!d.decided&&(d.tasks||[]).some(hasChoice));
+  const anyPlan=list.some(d=>!d.decided&&d.phase==='PLAN'&&(d.tasks||[]).length);
   // 여러 세션이 동시에 승인을 기다릴 수 있으므로 큐 전체를 보여준다.
   root.innerHTML=(lastError?'<div class="err">'+esc(lastError)+'</div>':'')+list.map(d=>{
     if(d.decided){
@@ -1028,9 +1282,9 @@ function render(list){
     // The fallback path keeps the original layout on purpose: `display` already opens
     // with its own title, 목표 and summary, so composing a header above it would repeat
     // all three.
-    let html=perTask?header(d)+taskRows(d)
+    let html=perTask?header(d)+(d.phase==='COMPLETION'?triage(d):'')+taskRows(d)
       :'<h1>'+(d.phase==='COMPLETION'?'완료 확인':'승인 요청')+' · '+esc(d.plan_id)+
-       '</h1><p class="goal">'+esc(d.goal)+'</p><pre>'+esc(d.display)+'</pre>';
+       '</h1>'+verNote(d)+'<p class="goal">'+esc(d.goal)+'</p><pre>'+esc(d.display)+'</pre>';
     html+=agentNote(d);
     html+=chip(d);
     html+='<textarea id="c-'+esc(d.id)+
@@ -1053,12 +1307,17 @@ function render(list){
     '태스크의 [의견] 또는 [다시 작업] 버튼을 누르면 해당 태스크에만 요청을 남기실 수 '+
     '있습니다. 완료 보고 단계에서는 지정하신 태스크만 다시 실행되며, 나머지 태스크의 결과는 '+
     '그대로 유지됩니다.<br>'+
+    (anyPlan?'[기준 추가] 또는 [수정]으로 태스크의 완료 기준을 직접 적으실 수 있습니다. '+
+    '적은 기준은 승인과 함께 반영되며, 수정 요청을 거치지 않습니다.<br>':'')+
     '결정하시기 전까지 해당 에이전트는 후속 작업을 진행하지 못합니다. '+
     '요청은 응답하실 때까지 사라지지 않으니 천천히 검토해 주시기 바랍니다.</p>';
 }
 async function decide(id,dec){
   if(busy)return;busy=true;alertOff();
-  document.querySelectorAll('button').forEach(b=>b.disabled=true);
+  // Only the decision buttons, which the next render replaces. The information icon and
+  // its dialog live outside #root and are never rebuilt: disabled here, they would stay
+  // disabled for good.
+  document.querySelectorAll('#root button').forEach(b=>b.disabled=true);
   const box=document.getElementById('c-'+id);
   const c=box?box.value:'';
   // Task comments travel with every decision, not just a targeted one: even when the
@@ -1066,7 +1325,8 @@ async function decide(id,dec){
   try{
     const r=await fetch('/api/decide',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({id:id,decision:dec,comment:c,
-        task_comments:comments(id),scope:scopeOf(id),choices:choicesOf(id)})});
+        task_comments:comments(id),scope:scopeOf(id),choices:choicesOf(id),
+        criteria:criteriaOf(id)})});
     const j=await r.json();
     // Only once the decision is recorded. Clearing first would lose the text if it was
     // not, and this is the one copy of it.
@@ -1080,8 +1340,47 @@ async function decide(id,dec){
 document.getElementById('root').addEventListener('input',onInput);
 document.getElementById('root').addEventListener('change',onInput);
 window.addEventListener('storage',onStorage);
+// ---- information dialog -------------------------------------------------------
+// The small "i" beside the version: author, contact and version. A native <dialog>, so
+// Esc closes it and focus stays inside it; a click on the backdrop closes it too (the
+// dialog itself has no padding, so only the backdrop has it as the click target).
+function aboutOpen(){
+  const d=document.getElementById('about');
+  if(d.showModal){if(!d.open)d.showModal();}
+  else alert(d.textContent.trim().replace(/\\s*\\n\\s*/g,'\\n').replace(/\\n닫기$/,''));
+}
+function aboutClose(){const d=document.getElementById('about');if(d.open)d.close();}
+document.getElementById('about-open').addEventListener('click',aboutOpen);
+document.getElementById('about-close').addEventListener('click',aboutClose);
+document.getElementById('about').addEventListener('click',ev=>{
+  if(ev.target===ev.currentTarget)aboutClose();});
 poll();setInterval(poll,1500);
 </script></body></html>"""
+
+_VERSION_TOKEN = "__PLANNING_MCP_VERSION__"
+_AUTHOR_TOKEN = "__PLANNING_MCP_AUTHOR__"
+_EMAIL_TOKEN = "__PLANNING_MCP_EMAIL__"
+
+
+def page_html(
+    version: str = SERVER_VERSION,
+    author: str = SERVER_AUTHOR,
+    email: str = SERVER_AUTHOR_EMAIL,
+) -> str:
+    """The page as it is served: the template with this server's version filled in.
+
+    Filled in when the page is served rather than fetched by script, so the label is
+    there in the very first paint - including the idle state, before any poll - and
+    cannot be lost to a re-render. Only characters a version string can have go in: the
+    value lands inside HTML text and a JavaScript string literal. Author and email land
+    in HTML text only (the information dialog) and are escaped for it.
+    """
+    safe = "".join(ch for ch in str(version) if ch.isalnum() or ch in ".-+") or "?"
+    return (
+        _PAGE.replace(_VERSION_TOKEN, safe)
+        .replace(_AUTHOR_TOKEN, html.escape(str(author)))
+        .replace(_EMAIL_TOKEN, html.escape(str(email)))
+    )
 
 
 class _ExclusiveHTTPServer(ThreadingHTTPServer):
@@ -1366,7 +1665,7 @@ class ApprovalServer:
             def do_GET(self) -> None:  # noqa: N802
                 path = urlparse(self.path).path
                 if path == "/":
-                    self._send(200, _PAGE.encode("utf-8"), "text/html; charset=utf-8")
+                    self._send(200, page_html().encode("utf-8"), "text/html; charset=utf-8")
                 elif path == "/api/health":
                     self._json(
                         {"server": SERVER_SIGNATURE, "state_dir": str(server.store.state_dir)}
@@ -1391,6 +1690,9 @@ class ApprovalServer:
                             "phase": e.get("phase"),
                             "draft": bool(e.get("draft")),
                             "agent_note": e.get("agent_note") or "",
+                            # The asking process's version; absent on an entry written
+                            # by a process older than 3.0.0, and the page says so.
+                            "version": e.get("server_version"),
                             "decided": e.get("decision"),
                             # Whether an agent is still holding a call open for this
                             # request. Deliberately not a countdown: the request
@@ -1423,6 +1725,7 @@ class ApprovalServer:
                     body.get("task_comments"),
                     body.get("scope"),
                     body.get("choices"),
+                    body.get("criteria"),
                 )
                 self._json({"ok": ok})
 

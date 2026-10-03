@@ -1239,10 +1239,11 @@ class FakeApprovalUI:
     owns_page = True
 
     def __init__(self, decision=None, comment="", available=True,
-                 task_comments=None, scope="PLAN", choices=None):
+                 task_comments=None, scope="PLAN", choices=None, criteria=None):
         self.decision = decision
         self.comment = comment
         self.choices = choices or {}
+        self.criteria = criteria or {}
         self.available = available
         self.task_comments = task_comments or {}
         self.scope = scope
@@ -1302,12 +1303,14 @@ class FakeApprovalUI:
     def touch_agent(self, request_id):
         self.agent_touches += 1
 
-    def resolve(self, decision, comment="", choices=None):
+    def resolve(self, decision, comment="", choices=None, criteria=None):
         """Simulates the human clicking after the fact."""
         self.live["decision"] = decision
         self.live["comment"] = comment
         if choices is not None:
             self.choices = choices
+        if criteria is not None:
+            self.criteria = criteria
 
     def _verdict(self, record):
         # Both real phases may carry a per-task scope; an entry with no phase at all
@@ -1326,6 +1329,11 @@ class FakeApprovalUI:
             # Like the real store: choices only count on an approval of a plan or halt.
             choices=dict(self.choices)
             if record["decision"] == "APPROVED" and record.get("phase") in ("PLAN", "HALT")
+            else {},
+            # Like the real store: what the human wrote counts on a plan request, with
+            # an approval or a request for changes.
+            criteria=dict(self.criteria)
+            if record["decision"] in ("APPROVED", "REVISE") and record.get("phase") == "PLAN"
             else {},
         )
 

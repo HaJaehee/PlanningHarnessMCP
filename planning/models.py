@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from .evidence import echoes_criterion, produced
+
 
 def now_iso() -> str:
     """Local-time ISO8601 with offset, second precision (human-readable in the state file)."""
@@ -100,6 +102,12 @@ class ErrorCode(str, Enum):
     # The circuit breaker paused this plan: the same step kept repeating with no human
     # in between. Only the human can lift it (see handlers._trip / D25).
     LOOP_HALTED = "LOOP_HALTED"
+    # DONE named a file the task was said to have produced, and the server looked: it is
+    # not there (3.0.0). The one claim in a result_log the server can check for itself.
+    FILE_NOT_FOUND = "FILE_NOT_FOUND"
+    # The plan this call names was closed by the server to make room: it was the least
+    # recently used unfinished plan when the active-plan limit was reached (3.0.0).
+    PLAN_EVICTED = "PLAN_EVICTED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -121,6 +129,35 @@ def _safe_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _str_list(raw: Any) -> list[str]:
+    """A list of strings from a state file; anything else reads as empty."""
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw if isinstance(item, str) and item.strip()]
+
+
+def duration_seconds(started_at: str | None, finished_at: str | None) -> int | None:
+    """How long a task took, or None when either end is missing or unreadable."""
+    if not started_at or not finished_at:
+        return None
+    try:
+        start = datetime.datetime.fromisoformat(started_at)
+        end = datetime.datetime.fromisoformat(finished_at)
+    except ValueError:
+        return None
+    if start.tzinfo is None:
+        start = start.astimezone()
+    if end.tzinfo is None:
+        end = end.astimezone()
+    return max(0, int((end - start).total_seconds()))
+
+
+# pending_revision["origin"]: who asked for these tasks to change. Absent = the human,
+# on the approval page (1.10). "failure" = a task reported FAILED and the server opened
+# it for repair (3.0.0) - same machinery, different wording and different rules.
+ORIGIN_FAILURE = "failure"
 
 
 TERMINAL_PLAN_STATUSES = (PlanStatus.COMPLETED, PlanStatus.CANCELLED)
@@ -155,6 +192,25 @@ class Task:
     # What is being chosen, in a few words ("집계 방식") - the heading of the choice on
     # the page and in the chat text. Display only: it changes nothing about what runs.
     choice_topic: str | None = None
+    # 3.0.0 - the verification contract. `done_when` is one sentence saying what exists
+    # or is true when this task is finished; the human approves it with the plan and may
+    # write it themselves on the approval page (`done_when_by` == "user"). It is what
+    # the completion report is read against, instead of the task title alone.
+    done_when: str | None = None
+    done_when_by: str | None = None
+    # The files the model said this task created or changed, as it wrote them, and what
+    # the server found when it looked ({"path", "state", "size", "mtime", "source"}).
+    # The first thing in a result_log the server checks rather than takes on trust.
+    files: list[str] = field(default_factory=list)
+    checks: list[dict[str, Any]] = field(default_factory=list)
+    # Files a DONE was refused for (FILE_NOT_FOUND), and - if the model then reported
+    # DONE without any file the server could confirm - the claim it dropped. Withdrawing
+    # a claim is allowed; doing so unseen is not, so the completion page shows it.
+    file_refusals: list[str] = field(default_factory=list)
+    claims_withdrawn: list[str] = field(default_factory=list)
+    # Why this task failed last time, kept on the task that replaced it (local repair,
+    # 3.0.0) so the human re-approving it and the model redoing it both see the reason.
+    failure_note: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -170,6 +226,13 @@ class Task:
             "options": self.options,
             "chosen": self.chosen,
             "choice_topic": self.choice_topic,
+            "done_when": self.done_when,
+            "done_when_by": self.done_when_by,
+            "files": self.files,
+            "checks": self.checks,
+            "file_refusals": self.file_refusals,
+            "claims_withdrawn": self.claims_withdrawn,
+            "failure_note": self.failure_note,
         }
 
     @classmethod
@@ -187,6 +250,16 @@ class Task:
             options=_clean_options(raw.get("options")),
             chosen=raw.get("chosen") if isinstance(raw.get("chosen"), int) else None,
             choice_topic=str(raw["choice_topic"]) if raw.get("choice_topic") else None,
+            # Fields added in 3.0.0. A file written earlier has none of them, which
+            # reads as "no criterion, nothing checked, never failed" - exactly right.
+            done_when=str(raw["done_when"]) if raw.get("done_when") else None,
+            done_when_by=str(raw["done_when_by"]) if raw.get("done_when_by") else None,
+            files=_str_list(raw.get("files")),
+            checks=[c for c in (raw.get("checks") or []) if isinstance(c, dict)]
+            if isinstance(raw.get("checks"), list) else [],
+            file_refusals=_str_list(raw.get("file_refusals")),
+            claims_withdrawn=_str_list(raw.get("claims_withdrawn")),
+            failure_note=str(raw["failure_note"]) if raw.get("failure_note") else None,
         )
 
     @property
@@ -210,6 +283,22 @@ class Task:
         self.revision_note = None
         self.previous_title = None
         self.previous_result_log = None
+
+    def clear_file_evidence(self) -> None:
+        """The work is being done again (or differently): what the server found for
+        the last attempt no longer describes this task."""
+        self.files = []
+        self.checks = []
+        self.file_refusals = []
+        self.claims_withdrawn = []
+
+    def set_done_when(self, text: str | None, by_user: bool = False) -> None:
+        cleaned = (text or "").strip()
+        self.done_when = cleaned or None
+        self.done_when_by = "user" if (cleaned and by_user) else None
+
+    def duration_sec(self) -> int | None:
+        return duration_seconds(self.started_at, self.finished_at)
 
     def brief(self) -> dict[str, Any]:
         """The task as everything outside the store sees it. Evidence is NEVER truncated.
@@ -246,10 +335,19 @@ class Task:
             out["chosen_by_user"] = "recommended" if self.chosen == 0 else "alternative"
             if picked.get("reason"):
                 out["choice_reason"] = picked["reason"]
+        # The criterion as it stands now - if the human rewrote it, only their wording
+        # (3.0.0). What the server found on disk is for the human's eyes: page_brief.
+        if self.done_when:
+            out["done_when"] = self.done_when
+            if self.done_when_by:
+                out["done_when_by"] = self.done_when_by
+        if self.failure_note:
+            out["failure_note"] = self.failure_note
         return out
 
     def page_brief(self) -> dict[str, Any]:
-        """What the approval page shows: the model's view plus every option on offer."""
+        """What the approval page shows: the model's view plus every option on offer,
+        and what the server itself could confirm about the work (3.0.0)."""
         out = self.brief()
         if self.has_choice:
             out["options"] = [dict(o) for o in self.options or []]
@@ -257,6 +355,23 @@ class Task:
                 out["topic"] = self.choice_topic
             if self.chosen is not None:
                 out["chosen"] = self.chosen
+        if self.checks:
+            out["checks"] = [dict(c) for c in self.checks]
+        if self.claims_withdrawn:
+            out["claims_withdrawn"] = list(self.claims_withdrawn)
+        # Evidence that says little more than the criterion did, with no file the task
+        # produced to stand in for it. Not refused (see evidence.ECHO_FLAG) - pointed at.
+        if (
+            self.status == TaskStatus.DONE.value
+            and not produced(self.checks)
+            and echoes_criterion(self.done_when, self.result_log)
+        ):
+            out["echo"] = True
+        # How long the task was in progress. Already recorded; shown because a task
+        # "finished" in three seconds is worth a second look and costs nothing to show.
+        took = self.duration_sec()
+        if took is not None and self.status == TaskStatus.DONE.value:
+            out["duration_sec"] = took
         return out
 
 
@@ -366,6 +481,9 @@ class Plan:
     # model was torn between. Tied to draft_tasks' numbering: replaced or cleared with it.
     draft_alternatives: list[dict[str, Any]] = field(default_factory=list)
     draft_reasons: dict[str, str] = field(default_factory=dict)
+    # 3.0.0 - the done_when sentences sent with that draft ({"2": "..."}), kept and
+    # replaced with it for the same reason.
+    draft_done_when: dict[str, str] = field(default_factory=dict)
     # The step number at which this drafting round's thinking budget is spent. 0 means
     # "not started": the next thinking step opens a fresh round. Reset to 0 whenever the
     # plan re-enters DRAFTING (a human asked for changes, a task failed, a halt was lifted).
@@ -399,6 +517,7 @@ class Plan:
             "draft_tasks": self.draft_tasks,
             "draft_alternatives": self.draft_alternatives,
             "draft_reasons": self.draft_reasons,
+            "draft_done_when": self.draft_done_when,
             "step_budget_end": self.step_budget_end,
             "halt": self.halt,
             "guidance": self.guidance,
@@ -432,6 +551,9 @@ class Plan:
             draft_reasons={
                 str(k): str(v) for k, v in (raw.get("draft_reasons") or {}).items()
             } if isinstance(raw.get("draft_reasons"), dict) else {},
+            draft_done_when={
+                str(k): str(v) for k, v in (raw.get("draft_done_when") or {}).items()
+            } if isinstance(raw.get("draft_done_when"), dict) else {},
             step_budget_end=_safe_int(raw.get("step_budget_end"), 0),
             halt=raw.get("halt") if isinstance(raw.get("halt"), dict) else None,
             guidance=str(raw["guidance"]) if raw.get("guidance") else None,
@@ -586,6 +708,7 @@ class Plan:
         self.draft_tasks = []
         self.draft_alternatives = []
         self.draft_reasons = {}
+        self.draft_done_when = {}
 
     def next_task_brief(self) -> dict[str, Any] | None:
         """The one task the model may act on now - the ONLY place an id is published.
@@ -618,6 +741,14 @@ class Plan:
             out["chosen_by_user"] = "recommended" if task.chosen == 0 else "alternative"
             if picked.get("reason"):
                 out["choice_reason"] = picked["reason"]
+        # The criterion rides with the task at the moment it is handed over - a
+        # sentence approved five turns ago is one the model no longer has (D17).
+        if task.done_when:
+            out["done_when"] = task.done_when
+            if task.done_when_by:
+                out["done_when_by"] = task.done_when_by
+        if task.failure_note:
+            out["failure_note"] = task.failure_note
         return out
 
     # ---- targeted revision ---------------------------------------------
@@ -637,6 +768,23 @@ class Plan:
                 except (TypeError, ValueError):
                     continue
         return targets
+
+    def repairing(self) -> bool:
+        """Is the pending revision a repair after a FAILED task, not a human's request?"""
+        return (self.pending_revision or {}).get("origin") == ORIGIN_FAILURE
+
+    def revision_open(self) -> set[int]:
+        """Tasks that MAY also be rewritten in a repair: the unfinished ones after the
+        failed task. They are not required to change - only allowed to."""
+        raw = (self.pending_revision or {}).get("open") or []
+        out: set[int] = set()
+        if isinstance(raw, list):
+            for item in raw:
+                try:
+                    out.add(int(item))
+                except (TypeError, ValueError):
+                    continue
+        return out
 
     def clear_revision_marks(self) -> None:
         for task in self.tasks:

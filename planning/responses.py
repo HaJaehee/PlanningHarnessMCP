@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from .choices import choice_heading, letter
+from .evidence import describe_check
 from .models import ErrorCode, NextAction, Plan, PlanStatus
 from .state_machine import resolve_next_action
 
@@ -95,11 +96,31 @@ def render_completion_report(plan: Plan, plan_summary: str | None = None) -> str
         # re-reading the whole report.
         if task.revision_note:
             lines.append(f"   ↻ 요청하신 내용: {task.revision_note}")
+        if task.failure_note:
+            lines.append(f"   ✕ 이전 시도 실패: {task.failure_note}")
         previous = (task.previous_result_log or "").strip()
         if previous:
             lines.append(f"   이전 결과: {previous}")
+        # What the human agreed "finished" means, directly above the evidence it is
+        # read against (3.0.0).
+        if task.done_when:
+            who = " (사용자 지정)" if task.done_when_by else ""
+            lines.append(f"   완료 기준{who}: {task.done_when}")
         evidence = (task.result_log or "").strip()
         lines.append(f"   -> {evidence}" if evidence else "   -> (증거 기록 없음)")
+        for fact in task.checks:
+            if fact.get("gone"):
+                lines.append(
+                    f"   서버 확인: ⚠ {fact.get('path')} · 보고 당시에는 있었으나 지금은 없음"
+                )
+            else:
+                lines.append(f"   서버 확인: {describe_check(fact)}")
+        if task.claims_withdrawn:
+            lines.append(
+                "   서버 확인: ⚠ 처음에 "
+                + ", ".join(task.claims_withdrawn)
+                + " 을(를) 결과 파일로 적었다가 뺐습니다 (서버가 찾지 못함)"
+            )
     lines.append("")
     lines.append(
         f"이 에이전트는 {len(plan.tasks)}개 태스크의 완료를 보고했습니다. "
@@ -177,9 +198,19 @@ def render_plan_for_user(
         if task.revision_note:
             revised += 1
             lines.append(f"   요청하신 내용: {task.revision_note}")
+        if task.failure_note:
+            lines.append(f"   ✕ 이전 시도 실패: {task.failure_note}")
+        if task.done_when:
+            who = " (사용자 지정)" if task.done_when_by else ""
+            lines.append(f"   완료 기준{who}: {task.done_when}")
     lines.append("")
     if revised:
         lines.append(f"↻ 표시된 {revised}개 태스크만 수정했습니다. 나머지는 그대로입니다.")
+    kept = sum(1 for t in plan.tasks if t.status == "DONE")
+    if kept and any(t.failure_note for t in plan.tasks):
+        lines.append(
+            f"실패한 태스크만 다시 계획했습니다. 이미 끝난 {kept}개 태스크의 결과는 그대로 둡니다."
+        )
     if plan.choice_points():
         lines.append(
             "선택지가 있는 태스크는 승인 페이지에서 고르실 수 있습니다. 고르지 않으면 [권장]안으로 진행합니다."

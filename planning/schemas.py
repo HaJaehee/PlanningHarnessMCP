@@ -4,6 +4,17 @@ Enum values are pulled from `models.py` so the advertised schema and the runtime
 validator cannot drift apart. Descriptions are written for a weak model: every
 parameter carries a concrete Example, and every tool description states the
 protocol position ("STEP 1", "STEP 2", ...) explicitly.
+
+How the text is laid out (3.0.0 trim). All of it is sent with every request, so each
+rule is said once, and where it is said is not arbitrary:
+- a rule about *what to do* lives in the tool description. Some clients drop or
+  shorten parameter descriptions when they relay a schema (matrix E16); the tool
+  description is the part that always arrives.
+- a parameter description says only the shape of the value and gives one example. For
+  an array of objects the example is on the array - it shows the whole shape, which is
+  what a weak model copies - and the nested fields carry a few words, not a second
+  example.
+What the trim took out was repetition, never an example, an enum value or a rule.
 """
 
 from __future__ import annotations
@@ -38,6 +49,18 @@ tasks. Every other task was already accepted - leave it alone.
 
 Do not execute anything or answer the user while planning."""
 
+# Appended when local repair is on (3.0.0). A failed task is repaired where it stands,
+# through the same task_updates the per-task review already taught the model.
+_REPAIR_STANDARD = """
+
+IF A TASK FAILED:
+The server names it. Send task_updates rewriting that task with another way to do it
+(and any later task that has to change). Finished tasks keep their results."""
+
+_REPAIR_REASONING = """
+If a task failed, the server names it: send task_updates for that task with another way
+to do it. Finished tasks keep their results."""
+
 # For a model that already reasons inside its own thinking block. Asking it to think a
 # second time, out loud, one step per call - and inviting it to revise steps and raise
 # its step count - is what turned its habit of checking once more into an endless loop.
@@ -61,6 +84,25 @@ instead of task_list, rewriting only those tasks."""
 _TORN_REASONING = """
 If you are torn between two ways of doing a task, do not reconsider. Put the one you
 prefer in task_list and the other in alternatives. The user picks."""
+
+# Appended to the reasoning description when done_when is on (3.0.0). 2.0 gave the
+# model's indecision between two ways somewhere to go; this does the same for its urge
+# to check once more - the check is written down and happens when the task is done.
+_CHECK_LATER_REASONING = """
+If you want to double-check a task, do not re-check it now. Write the check in
+done_when; it is checked when the task is done."""
+
+# Appended to update_task_progress when the matching feature is on, so the description
+# never promises a check the running server does not make.
+_DONE_WHEN_EXEC = """
+
+If next_task has done_when, result_log must show it was met, with the actual values,
+names or path. Repeating the done_when sentence is refused."""
+
+_FILES_EXEC = """
+
+List the files the task created or changed in files: the server looks for each one and
+refuses DONE for a file it cannot find."""
 
 # request_user_approval reads differently in each approval mode, and a description that
 # describes the wrong one is a contradiction the model has to reason its way out of.
@@ -103,67 +145,58 @@ Report: when the user replies, call this tool again with
 {_APPROVAL_COMMON}
 Report only what the user actually said."""
 
-UPDATE_TASK_PROGRESS_DESCRIPTION = """STEP 3 - EXECUTION TRACKING.
-Handle exactly ONE task per call.
+# Each rule once (3.0.0 trim). The longer text this replaces said "one task per call"
+# three times, the FAILED rule twice, and the result_log requirement in three places -
+# a habit that grew one field failure at a time (D14, D16). The rules themselves are all
+# still here: where the task_id comes from, the three steps, FAILED, the three refusals.
+UPDATE_TASK_PROGRESS_DESCRIPTION = """STEP 3 - EXECUTION TRACKING. One task per call.
 
-ALWAYS take task_id from the next_task field of the most recent server response.
-next_task is the ONLY place the server publishes a task_id. Never reuse a task_id
-from an earlier response and never count tasks yourself - earlier responses named
-tasks that are already finished.
+Take task_id from next_task in the most recent server response. That is the ONLY place
+the server publishes one: never reuse an earlier task_id and never count tasks yourself.
 
   1. Start the FIRST task: status = "IN_PROGRESS". Then do the work.
   2. Report it: status = "DONE" + a result_log saying what you actually produced.
-  3. The server then starts the NEXT task for you and names it in next_task.
-     Do that work, then report it "DONE" the same way.
-     You do NOT send "IN_PROGRESS" again - just keep reporting DONE, one call per
-     task, until the server tells you no tasks remain.
-Use status = "FAILED" instead of "DONE" if the task did not work.
-The response carries progress ("2/5 done") but not the task list. If you have lost
-track of the plan, call get_current_plan - that is what it is for.
+  3. The server then starts the NEXT task for you and names it in next_task. Do that
+     work and report it "DONE" the same way. You do NOT send "IN_PROGRESS" again - keep
+     going, one call per task, until the server tells you no tasks remain.
+If a task did not work, send status = "FAILED" with the reason in result_log instead of
+"DONE", then follow next_action.
 
-DONE IS ENFORCED. The server REFUSES a DONE for a task that:
-  - is not the task currently in progress,
-  - skips ahead while an earlier task is unfinished,
-  - has no result_log describing the real outcome.
-Never mark a task DONE before you actually did it. You must work through EVERY task in
-order, one at a time. You are not finished until the server tells you so - keep going
-while it says tasks remain.
-If a task fails, set status = "FAILED" and explain in result_log - then follow the
-next_action the server gives you back."""
+The server REFUSES a DONE for a task that is not the one in progress, that skips an
+unfinished earlier task, or that has no result_log describing the real outcome. Never
+mark a task DONE before you actually did it.
+The response carries progress ("2/5 done"), not the task list. If you lose track of the
+plan, call get_current_plan."""
 
 # Used when PLANNING_MCP_AUTO_ADVANCE=false. The server then starts nothing on its own,
 # so the description must ask for both calls or every DONE is refused.
-UPDATE_TASK_PROGRESS_DESCRIPTION_MANUAL = """STEP 3 - EXECUTION TRACKING.
-ALWAYS take task_id from the next_task field of the most recent server response.
-next_task is the ONLY place the server publishes a task_id. Never reuse one from an
-earlier response.
+UPDATE_TASK_PROGRESS_DESCRIPTION_MANUAL = """STEP 3 - EXECUTION TRACKING. One task per call.
+
+Take task_id from next_task in the most recent server response. That is the ONLY place
+the server publishes one: never reuse an earlier task_id.
 
 Call this tool TWICE for every task:
   1. BEFORE you start the task  -> status = "IN_PROGRESS"
-  2. AFTER you finish the task  -> status = "DONE"  (or "FAILED" if it did not work)
-Handle exactly ONE task per call. Never mark a task DONE before you actually did it.
+  2. AFTER you finish the task  -> status = "DONE" + a result_log saying what you
+     actually produced
+If a task did not work, send status = "FAILED" with the reason in result_log instead of
+"DONE", then follow next_action. Keep going, in order, until the server tells you no
+tasks remain.
 
-DONE IS ENFORCED. The server REFUSES a DONE that:
-  - was never marked IN_PROGRESS first,
-  - skips ahead while an earlier task is unfinished,
-  - has no result_log describing the real outcome.
-You must therefore work through EVERY task in order, one at a time. You are not
-finished until the server tells you so - keep going while it says tasks remain.
-If a task fails, set status = "FAILED" and explain in result_log - then follow the
-next_action the server gives you back."""
+The server REFUSES a DONE that was never marked IN_PROGRESS first, that skips an
+unfinished earlier task, or that has no result_log describing the real outcome. Never
+mark a task DONE before you actually did it."""
 
-GET_CURRENT_PLAN_DESCRIPTION = """RECOVERY TOOL.
-Call this when you are unsure what the plan is, which task you were on, or after a long
-conversation. It returns YOUR plan and tells you exactly what to do next.
-It changes nothing - it is always safe to call.
+# The description and the plan_id parameter used to explain "send your own plan_id,
+# 'current' is a guess" twice over. Said once here; the parameter keeps the example.
+# The order still matters (1.15.1): the plan_id first, "current" as the fallback.
+GET_CURRENT_PLAN_DESCRIPTION = """RECOVERY TOOL. Call it when you are unsure what the plan is or which task you were on.
+It returns YOUR plan and says what to do next. It changes nothing - always safe to call.
 
-SEND YOUR OWN plan_id. Every response you have received carries a "plan_id" field -
-send that exact value here and you will always get back your own plan, even if other
-conversations are running plans at the same time.
-Only send "current" if you genuinely do not know your plan_id (for example this is your
-first call). "current" is a guess: when several plans are in flight the server cannot
-tell which one is yours, so it answers with the list of plans and you have to call
-again with the right plan_id."""
+Send the plan_id that every earlier response carried: that always returns your own plan.
+Send "current" only if you do not know it yet. "current" is a guess - with several plans
+in flight the server answers with the list of plans, and you call again with the right
+plan_id."""
 
 
 # Shared by the tools that act on an existing plan. Optional on purpose: with one plan
@@ -173,9 +206,8 @@ again with the right plan_id."""
 _PLAN_ID_PARAM: dict[str, Any] = {
     "type": "string",
     "description": (
-        "OPTIONAL. Leave this out unless the server asks for it. If several plans are "
-        "active at the same time, set it to the plan_id this conversation has been "
-        'receiving in every response. Example: "plan_20260724_0002"'
+        "OPTIONAL. Leave it out unless the server asks for it; then send the plan_id "
+        'from earlier responses. Example: "plan_20260724_0002"'
     ),
 }
 
@@ -185,21 +217,18 @@ PLAN_AND_THINK_SCHEMA: dict[str, Any] = {
         "goal": {
             "type": "string",
             "description": (
-                "One sentence restating what the user ultimately wants. Repeat the SAME goal "
-                "text on every step. Example: 'Summarize the Q3 sales report and email it to "
-                "the team lead.' If the user CORRECTS the goal, keep sending the old text here "
-                "and put the corrected one in revised_goal."
+                "What the user ultimately wants, in one sentence. Send the SAME text on every "
+                "call. Example: 'Summarize the Q3 sales report and email it to the team lead.' "
+                "If the user CORRECTS the goal, keep the old text here and put the new one in "
+                "revised_goal."
             ),
         },
         "revised_goal": {
             "type": "string",
             "description": (
-                "OPTIONAL. Use ONLY when the user says the goal itself was wrong or has "
-                "changed - for example 'no, I meant the Q4 report, not Q3'. Put the corrected "
-                "goal here and leave 'goal' as the text you have been sending, so the server "
-                "can find the plan and record the change. Do NOT use it to reword or "
-                "paraphrase the same goal. Example: 'Summarize the Q4 sales report and email "
-                "it to the team lead.'"
+                "OPTIONAL. The corrected goal, ONLY when the user says the goal itself was "
+                "wrong ('no, I meant the Q4 report, not Q3'). Do NOT use it to reword the same "
+                "goal. Example: 'Summarize the Q4 sales report and email it to the team lead.'"
             ),
         },
         "thought": {
@@ -213,15 +242,14 @@ PLAN_AND_THINK_SCHEMA: dict[str, Any] = {
             "type": "integer",
             "minimum": 1,
             "description": (
-                "Which thinking step this is. Starts at 1 and increases by exactly 1 each call. "
-                "Example: 2"
+                "Which thinking step this is: 1, then one more each call. Example: 2"
             ),
         },
         "total_steps": {
             "type": "integer",
             "minimum": 1,
             "description": (
-                "How many thinking steps you expect to need in total. Example: 3"
+                "How many thinking steps you expect in total. Example: 3"
             ),
         },
         "need_more_thinking": {
@@ -235,9 +263,9 @@ PLAN_AND_THINK_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "REQUIRED when need_more_thinking is false. A flat list of plain-text action "
-                "items, in execution order. Plain strings only - do NOT send objects, do NOT add "
-                "numbering, do NOT add status. The server assigns task_id automatically. "
+                "REQUIRED when need_more_thinking is false. Plain-text action items in "
+                "execution order. Strings only - no objects, numbering or status; the server "
+                "assigns task_id. "
                 'Example: ["Locate the Q3 sales report file", "Extract the revenue table", '
                 '"Write a 5-line summary", "Send the summary by email"]'
             ),
@@ -250,23 +278,21 @@ PLAN_AND_THINK_SCHEMA: dict[str, Any] = {
                     "task_id": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "The task the user commented on. Example: 3",
+                        "description": "The task to rewrite.",
                     },
                     "title": {
                         "type": "string",
-                        "description": (
-                            "The rewritten task, answering the user's comment. Example: "
-                            "'Copy the revenue table into the summary unchanged'"
-                        ),
+                        "description": "Its new wording.",
                     },
                 },
                 "required": ["task_id", "title"],
             },
             "description": (
-                "ONLY use this when the server told you the user commented on specific tasks. "
-                "Rewrite JUST those tasks; every task you do not list stays exactly as it is. "
-                "Do NOT send task_list at the same time, and do NOT use this to add, delete or "
-                "reorder tasks - that requires a full task_list. "
+                "ONLY use this when the server asks for it: the user commented on specific "
+                "tasks, or a task failed. "
+                "Rewrite JUST those tasks; a task you do not list stays as it is. Not together "
+                "with task_list, and not to add, delete or reorder tasks - that needs a full "
+                "task_list. "
                 'Example: [{"task_id": 3, "title": "Copy the revenue table in unchanged"}]'
             ),
         },
@@ -274,8 +300,8 @@ PLAN_AND_THINK_SCHEMA: dict[str, Any] = {
             "type": "integer",
             "minimum": 1,
             "description": (
-                "OPTIONAL - normally left out. The step_number of an earlier step that this "
-                "step replaces. Example: 2"
+                "OPTIONAL - normally left out. The step_number of an earlier step this one "
+                "replaces. Example: 2"
             ),
         },
         "plan_id": _PLAN_ID_PARAM,
@@ -327,25 +353,21 @@ def _alternatives_params(max_per_task: int, max_points: int) -> dict[str, Any]:
                     "task_id": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "The task's number in task_list (first = 1). Example: 2",
+                        "description": "The task's number in task_list (first = 1).",
                     },
                     "title": {
                         "type": "string",
-                        "description": (
-                            "Another way to do that task. Example: 'Export the table to CSV "
-                            "and total it with a script'"
-                        ),
+                        "description": "Another way to do that task.",
                     },
                     "reason": {
                         "type": "string",
-                        "description": "Its trade-off, short. Example: 'faster, loses formatting'",
+                        "description": "Its trade-off, short.",
                     },
                     "topic": {
                         "type": "string",
                         "description": (
                             "OPTIONAL. What is being chosen, in two to four words, in the "
-                            "language you use with the user - shown as the heading of the "
-                            "choice. Once per task is enough. Example: '집계 방식'"
+                            "language you use with the user. Once per task is enough."
                         ),
                     },
                 },
@@ -365,11 +387,8 @@ def _alternatives_params(max_per_task: int, max_points: int) -> dict[str, Any]:
             "items": {
                 "type": "object",
                 "properties": {
-                    "task_id": {"type": "integer", "minimum": 1, "description": "Example: 2"},
-                    "reason": {
-                        "type": "string",
-                        "description": "Example: 'keeps the report formatting'",
-                    },
+                    "task_id": {"type": "integer", "minimum": 1},
+                    "reason": {"type": "string"},
                 },
                 "required": ["task_id", "reason"],
             },
@@ -380,6 +399,41 @@ def _alternatives_params(max_per_task: int, max_points: int) -> dict[str, Any]:
             ),
         },
     }
+
+
+# The optional plan_and_think field of 3.0.0, in the {task_id, ...} shape task_updates
+# already taught the model. Kept short on purpose: every word here is sent with every
+# request (docs/context-budget-analysis.md), so the example carries the instruction.
+_DONE_WHEN_PARAM: dict[str, Any] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "integer", "minimum": 1},
+            "check": {
+                "type": "string",
+                "description": "The result, not the method. One short sentence.",
+            },
+        },
+        "required": ["task_id", "check"],
+    },
+    "description": (
+        "OPTIONAL. What will exist or be true when a task is finished, for tasks whose "
+        "result can be checked. The user sees it with the plan, and your result_log for "
+        'that task must show it was met. Example: [{"task_id": 2, "check": "A table with '
+        'one revenue total per quarter (4 rows) exists"}]'
+    ),
+}
+
+
+_FILES_PARAM: dict[str, Any] = {
+    "type": "array",
+    "items": {"type": "string"},
+    "description": (
+        "OPTIONAL, with DONE. The files this task created or changed. Leave it out if "
+        'there are none. Example: ["D:/reports/q4_pivot.xlsx"]'
+    ),
+}
 
 
 _CHOICES_PARAM: dict[str, Any] = {
@@ -401,9 +455,8 @@ def _decision_param(chat: bool) -> dict[str, Any]:
         )
     else:
         text = (
-            "Send ASK_USER. The user answers on the approval page, and the server refuses "
-            "APPROVED / REJECTED / REVISE from you while their question is open. "
-            'Example: "ASK_USER"'
+            'Send "ASK_USER". The user answers on the approval page, and the server refuses '
+            "the other values from you while their question is open."
         )
     return {"type": "string", "enum": [d.value for d in Decision], "description": text}
 
@@ -415,17 +468,16 @@ REQUEST_USER_APPROVAL_SCHEMA: dict[str, Any] = {
         "plan_summary": {
             "type": "string",
             "description": (
-                "REQUIRED when decision is ASK_USER. A short human-readable summary of the plan "
-                "you want approval for, written for a non-technical reader. Example: 'I will (1) "
-                "find the Q3 report, (2) extract the revenue table, (3) write a 5-line summary, "
-                "(4) email it to the team lead.'"
+                "REQUIRED with ASK_USER. A short summary of the plan for a non-technical "
+                "reader. Example: 'I will (1) find the Q3 report, (2) extract the revenue "
+                "table, (3) write a 5-line summary, (4) email it to the team lead.'"
             ),
         },
         "user_comment": {
             "type": "string",
             "description": (
-                "OPTIONAL. Copy the user's exact words here when decision is REVISE or REJECTED. "
-                "Example: 'Do not send the email, just show me the summary.'"
+                "OPTIONAL. The user's exact words, with REVISE or REJECTED. Example: 'Do not "
+                "send the email, just show me the summary.'"
             ),
         },
         "plan_id": _PLAN_ID_PARAM,
@@ -440,25 +492,24 @@ UPDATE_TASK_PROGRESS_SCHEMA: dict[str, Any] = {
             "type": "integer",
             "minimum": 1,
             "description": (
-                "Copy this from next_task.task_id in the server's most recent response. That "
-                "is the only task you may act on. One task per call. Example: 1"
+                "Copy next_task.task_id from the server's most recent response - the only "
+                "task you may act on. Example: 1"
             ),
         },
         "status": {
             "type": "string",
             "enum": [s.value for s in TaskStatus],
             "description": (
-                "IN_PROGRESS = starting now. DONE = finished successfully. FAILED = could not "
-                'finish. PENDING = reset back to not-started. Example: "IN_PROGRESS"'
+                "IN_PROGRESS = starting now. DONE = finished. FAILED = could not finish. "
+                'PENDING = reset to not-started. Example: "IN_PROGRESS"'
             ),
         },
         "result_log": {
             "type": "string",
             "description": (
-                "REQUIRED when status is DONE - the server rejects DONE without it. Write one "
-                "or two sentences stating the CONCRETE outcome of the work you just did: what "
-                "you found, where you saved it, or what you produced. 'done' / 'ok' / 'completed' "
-                "is not acceptable. Example: 'Found the file at /reports/q3_sales.xlsx.'  or  "
+                "REQUIRED with DONE. One or two sentences on the CONCRETE outcome: what you "
+                "found, what you produced, or where you saved it. 'done' / 'ok' / 'completed' "
+                "is refused. Example: 'Found the file at /reports/q3_sales.xlsx.'  or  "
                 "'FAILED: no file matching q3 was found in /reports.'"
             ),
         },
@@ -474,12 +525,9 @@ GET_CURRENT_PLAN_SCHEMA: dict[str, Any] = {
             "type": "string",
             "default": "current",
             "description": (
-                "The plan you want. Send the plan_id YOUR conversation has been receiving in "
-                'every response - that is how you get your own plan back. Example: '
-                '"plan_20260724_0002". It also reads a plan that is already finished or '
-                'cancelled. Send the exact text "current" ONLY if you do not know your '
-                "plan_id yet; the server then guesses, and with several plans in flight it "
-                "cannot guess and returns the list of plans instead."
+                "The plan_id from an earlier response - a finished or cancelled plan can be "
+                'read too. Example: "plan_20260724_0002". Send "current" only if you do not '
+                "know it yet."
             ),
         },
     },
@@ -497,6 +545,9 @@ def build_tool_definitions(
     alternatives: bool = True,
     max_alternatives: int = 3,
     max_choice_points: int = 3,
+    done_when: bool = True,
+    file_checks: bool = False,
+    local_repair: bool = True,
 ) -> list[dict[str, Any]]:
     """The advertised tool list for a given configuration.
 
@@ -528,6 +579,41 @@ def build_tool_definitions(
         }
         if reasoning:
             plan_text += _TORN_REASONING
+    if local_repair and reasoning:
+        plan_text += _REPAIR_REASONING
+    elif local_repair:
+        # Beside the other "if the server names a task" case, ahead of the closing line.
+        closing = "\n\nDo not execute anything or answer the user while planning."
+        plan_text = plan_text.replace(closing, _REPAIR_STANDARD + closing)
+    else:
+        # Without repair a task_updates call can only answer the user's comments, and
+        # the description must not offer a use the server would refuse.
+        updates = dict(plan_schema["properties"]["task_updates"])
+        updates["description"] = updates["description"].replace(
+            "the server asks for it: the user commented on specific tasks, or a task "
+            "failed. ",
+            "the server told you the user commented on specific tasks. ",
+        )
+        plan_schema["properties"] = {**plan_schema["properties"], "task_updates": updates}
+    update_text = (
+        UPDATE_TASK_PROGRESS_DESCRIPTION if auto_advance
+        else UPDATE_TASK_PROGRESS_DESCRIPTION_MANUAL
+    )
+    update_schema = dict(UPDATE_TASK_PROGRESS_SCHEMA)
+    if done_when:
+        plan_schema["properties"] = {
+            **plan_schema["properties"], "done_when": _DONE_WHEN_PARAM
+        }
+        if reasoning:
+            plan_text += _CHECK_LATER_REASONING
+        update_text += _DONE_WHEN_EXEC
+    if file_checks:
+        # Offered only where the server will actually look. A field the model fills in
+        # and nothing reads is a promise of verification that is not kept.
+        update_schema["properties"] = {
+            **UPDATE_TASK_PROGRESS_SCHEMA["properties"], "files": _FILES_PARAM
+        }
+        update_text += _FILES_EXEC
     return [
         {
             "name": "plan_and_think",
@@ -541,10 +627,8 @@ def build_tool_definitions(
         },
         {
             "name": "update_task_progress",
-            "description": UPDATE_TASK_PROGRESS_DESCRIPTION
-            if auto_advance
-            else UPDATE_TASK_PROGRESS_DESCRIPTION_MANUAL,
-            "inputSchema": UPDATE_TASK_PROGRESS_SCHEMA,
+            "description": update_text,
+            "inputSchema": update_schema,
         },
         {
             "name": "get_current_plan",

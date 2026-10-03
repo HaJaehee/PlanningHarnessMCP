@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SERVER_NAME = "planning-mcp"
-SERVER_VERSION = "2.0.0"
+SERVER_VERSION = "3.0.0"
+# Shown in the approval page's information dialog (the small "i" beside the version).
+SERVER_AUTHOR = "Ha, Jaehee"
+SERVER_AUTHOR_EMAIL = "lovesm135@naver.com"
 
 # The state dir is resolved from this file, NOT from the working directory.
 # AnythingLLM spawns the server with its own CWD, which is why plans "disappear"
@@ -41,6 +44,35 @@ def _env_choice(name: str, allowed: tuple[str, ...], default: str) -> str:
         )
         return default
     return raw
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value == value else default  # NaN is not a setting
+
+
+def _env_dirs(name: str) -> tuple[Path, ...]:
+    """Folders from a ';'-separated list. Unreadable entries are dropped with a warning:
+    a typo here must narrow what the server looks at, never widen it."""
+    out: list[Path] = []
+    for part in (os.environ.get(name) or "").replace(chr(10), ";").split(";"):
+        text = part.strip().strip('"')
+        if not text:
+            continue
+        try:
+            folder = Path(text).expanduser().resolve()
+        except (OSError, RuntimeError, ValueError):
+            print(f"[WARN] {name}: cannot read {text!r}; skipped", file=sys.stderr)
+            continue
+        if folder not in out:
+            out.append(folder)
+    return tuple(out)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -112,6 +144,12 @@ MODEL_PROFILES = (MODEL_PROFILE_STANDARD, MODEL_PROFILE_REASONING)
 # rarely need more than four; two for a reasoning model (record, refine once).
 DEFAULT_THINKING_STEPS = {MODEL_PROFILE_STANDARD: 8, MODEL_PROFILE_REASONING: 2}
 
+# How long all of one task's file checks may take together. A folder on a network share
+# that has gone away can hold a stat for tens of seconds, and the check runs inside the
+# state lock - so it is bounded, and a check that does not come back is reported as
+# "could not be checked", never as missing.
+FILE_CHECK_TIMEOUT_SEC = 3.0
+
 
 @dataclass
 class Config:
@@ -130,6 +168,16 @@ class Config:
     approval_open_browser: bool = True
     approval_ttl: int = 1800
     max_active_plans: int = 20
+    # What happens when max_active_plans is reached and a new plan is asked for (3.0.0).
+    # true  - close the least recently used unfinished plan to make room (LRU). With the
+    #         limit at 20, the plans holding the slots are almost always ones a
+    #         conversation walked away from; nothing else ever removes them.
+    # false - refuse the new plan, as before 3.0.
+    evict_lru: bool = True
+    # A plan touched more recently than this many seconds is in use - an agent waiting
+    # on approval touches it every wait slice, an executing one at every task - and is
+    # never evicted. If every active plan is that fresh, the new plan is refused.
+    evict_min_idle: int = 300
     completion_approval: bool = True
     min_result_log: int = 8
     # Put the next task straight into IN_PROGRESS when one is reported DONE. Halves the
@@ -162,6 +210,26 @@ class Config:
     alternatives: bool = True
     max_alternatives: int = 3    # per task (so 2-4 options with the recommendation)
     max_choice_points: int = 3   # tasks per plan that may offer a choice
+    # --- verification contract (3.0.0) --------------------------------------
+    # The model may say, per task, what exists or is true when it is finished; the
+    # human approves it with the plan and may write it themselves on the approval page.
+    # off = the field is not advertised and is ignored if sent anyway.
+    done_when: bool = True
+    max_done_when_chars: int = 200
+    # A DONE whose result_log adds less than this share of new text to the task's
+    # done_when sentence is refused as a repeat of it. 0 = never refuse on this.
+    evidence_novelty: float = 0.3
+    # The only folders the server will look inside to confirm a file a task says it
+    # produced. Empty = no file checks at all, and `files` is not advertised.
+    artifact_roots: tuple = ()
+    # A FAILED task is repaired in place - the model rewrites that task (and, if it
+    # must, the unfinished ones after it) while finished tasks keep their results.
+    # off = the pre-3.0 behaviour: re-plan the whole task list.
+    local_repair: bool = True
+
+    @property
+    def file_checks(self) -> bool:
+        return bool(self.artifact_roots)
 
     @property
     def thinking_budget(self) -> int:
@@ -197,6 +265,8 @@ class Config:
             approval_open_browser=_env_bool("PLANNING_MCP_APPROVAL_OPEN_BROWSER", True),
             approval_ttl=_env_int("PLANNING_MCP_APPROVAL_TTL", 1800),
             max_active_plans=_env_int("PLANNING_MCP_MAX_ACTIVE_PLANS", 20),
+            evict_lru=_env_bool("PLANNING_MCP_EVICT_LRU", True),
+            evict_min_idle=_env_int("PLANNING_MCP_EVICT_MIN_IDLE", 300),
             completion_approval=_env_bool("PLANNING_MCP_COMPLETION_APPROVAL", True),
             min_result_log=_env_int("PLANNING_MCP_MIN_RESULT_LOG", 8),
             auto_advance=_env_bool("PLANNING_MCP_AUTO_ADVANCE", True),
@@ -215,6 +285,11 @@ class Config:
             alternatives=_env_bool("PLANNING_MCP_ALTERNATIVES", True),
             max_alternatives=_env_int("PLANNING_MCP_MAX_ALTERNATIVES", 3),
             max_choice_points=_env_int("PLANNING_MCP_MAX_CHOICE_POINTS", 3),
+            done_when=_env_bool("PLANNING_MCP_DONE_WHEN", True),
+            max_done_when_chars=_env_int("PLANNING_MCP_MAX_DONE_WHEN_CHARS", 200),
+            evidence_novelty=_env_float("PLANNING_MCP_EVIDENCE_NOVELTY", 0.3),
+            artifact_roots=_env_dirs("PLANNING_MCP_ARTIFACT_ROOTS"),
+            local_repair=_env_bool("PLANNING_MCP_LOCAL_REPAIR", True),
         )
 
 

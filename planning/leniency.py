@@ -28,9 +28,10 @@ _ALLOWED_KEYS: dict[str, set[str]] = {
         "plan_id",
         "alternatives",
         "recommended_reasons",
+        "done_when",
     },
     "request_user_approval": {"decision", "plan_summary", "user_comment", "plan_id", "choices"},
-    "update_task_progress": {"task_id", "status", "result_log", "plan_id"},
+    "update_task_progress": {"task_id", "status", "result_log", "plan_id", "files"},
     "get_current_plan": {"plan_id"},
 }
 
@@ -345,6 +346,75 @@ def _coerce_reasons(value: Any) -> dict[int, str]:
     return out
 
 
+# ---- verification contract (3.0.0) --------------------------------------------
+_CHECK_KEYS = (
+    "check", "done_when", "criterion", "criteria", "acceptance", "done", "condition",
+    "expect", "expected", "text", "title", "reason",
+)
+
+
+def _coerce_done_when(value: Any) -> dict[int, str]:
+    """Into {task_id: criterion}. The first criterion for a task wins.
+
+    Same shapes as the other {task_id, ...} fields: the list of objects the schema
+    asks for, {"2": "..."}, and "2: ..." lines. An entry with no task number is dropped
+    - which task a criterion belongs to is never guessed.
+    """
+    out: dict[int, str] = {}
+    for item in _as_items(value):
+        if isinstance(item, str):
+            m = _ID_PREFIX.match(item)
+            if not m:
+                continue
+            item = {"task_id": m.group(1), "check": m.group(2)}
+        if not isinstance(item, dict):
+            continue
+        raw_id = next((item[k] for k in _ALT_ID_KEYS if item.get(k) is not None), None)
+        tid = _coerce_int(raw_id) if not isinstance(raw_id, str) or raw_id.strip().isdigit() \
+            else None
+        check = _first_text(item, _CHECK_KEYS)
+        if tid and tid > 0 and check and tid not in out:
+            out[tid] = check
+    return out
+
+
+_FILE_KEYS = ("path", "file", "filename", "name")
+
+
+def _coerce_files(value: Any) -> list[str] | None:
+    """Into a list of path strings. None = unreadable.
+
+    Split on newlines and semicolons only: a comma or a space can be part of a file
+    name, and cutting a path in two would report a file that was never claimed.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            try:
+                return _coerce_files(json.loads(text))
+            except ValueError:
+                pass
+        items: list[Any] = [part for part in re.split(r"[\n;]+", text)]
+    elif isinstance(value, list):
+        items = value
+    elif isinstance(value, dict):
+        items = [value]
+    else:
+        return None
+    out: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            item = _first_text(item, _FILE_KEYS)
+        if not isinstance(item, str):
+            continue
+        path = item.strip().strip("\"'")
+        if path and path not in out:
+            out.append(path)
+    return out
+
+
 _RECOMMENDED_WORDS = {"recommended", "default", "권장", "권장안", "기본"}
 
 
@@ -443,6 +513,16 @@ def normalize(tool_name: str, args: Any) -> tuple[dict[str, Any], list[str]]:
             "comment": "user_comment",
             "log": "result_log",
             "result": "result_log",
+            "donewhen": "done_when",
+            "criteria": "done_when",
+            "acceptance": "done_when",
+            "acceptancecriteria": "done_when",
+            "donecriteria": "done_when",
+            "file": "files",
+            "paths": "files",
+            "artifacts": "files",
+            "outputs": "files",
+            "outputfiles": "files",
         }.get(lowered.replace("_", ""), remap_direct(lowered, allowed))
         if remap and remap in allowed and remap not in clean:
             clean[remap] = value
@@ -523,6 +603,32 @@ def normalize(tool_name: str, args: Any) -> tuple[dict[str, Any], list[str]]:
                 notes.append(
                     "Could not read 'recommended_reasons'; ignored it. Expected "
                     '[{"task_id": 2, "reason": "why you recommend it"}].'
+                )
+
+    if "done_when" in clean:
+        raw = clean["done_when"]
+        coerced_checks = _coerce_done_when(raw)
+        if coerced_checks:
+            clean["done_when"] = coerced_checks
+        else:
+            clean.pop("done_when")
+            if raw:
+                notes.append(
+                    "Could not read 'done_when'; ignored it. Expected "
+                    '[{"task_id": 2, "check": "what exists or is true when it is done"}].'
+                )
+
+    if "files" in clean:
+        raw = clean["files"]
+        coerced_files = _coerce_files(raw)
+        if coerced_files:
+            clean["files"] = coerced_files
+        else:
+            clean.pop("files")
+            if raw and coerced_files is None:
+                notes.append(
+                    "Could not read 'files'; ignored it. Expected a list of paths, e.g. "
+                    '["D:/reports/q4.xlsx"].'
                 )
 
     if "choices" in clean:

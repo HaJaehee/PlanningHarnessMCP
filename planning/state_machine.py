@@ -32,6 +32,74 @@ def choice_note(task) -> str:
     )
 
 
+def done_when_note(task) -> str:
+    """The task's criterion, restated at the moment the task is handed over (3.0.0).
+
+    Approved once, several turns ago, it would be a sentence the model has lost by the
+    time it matters (D17). Said here, it is the last thing read before the work.
+    """
+    if task is None or not task.done_when:
+        return ""
+    who = "The user set what finished means" if task.done_when_by else "It is finished when"
+    return (
+        f' {who}: "{task.done_when}". Your result_log must show that with the actual '
+        "values, names or path - not the sentence repeated."
+    )
+
+
+def _clip(text: str, limit: int = 200) -> str:
+    """A failure reason as quoted in a hint. The stored text is never shortened - only
+    its echo here, which is repeated on every response until the task is done."""
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def repair_note(task) -> str:
+    """Why this task reads differently from the one that failed (local repair, 3.0.0)."""
+    if task is None or not task.failure_note:
+        return ""
+    return (
+        f' The earlier attempt at this step failed ("{_clip(task.failure_note)}"), and '
+        "the user approved this way of doing it instead."
+    )
+
+
+def _repair_hint(plan: Plan) -> str:
+    """What to send after a task FAILED: a new way to do that one task.
+
+    Like the targeted-revision hint, it hands over the literal argument - a weak model
+    copies a hint far more reliably than it composes one - and says what must be left
+    alone, because the cheapest reading of "a task failed" is "start over".
+    """
+    targets = plan.revision_targets()
+    listed = "; ".join(
+        f"Task {tid} ('{plan.get_task(tid).title}') failed: \"{_clip(reason)}\""
+        for tid, reason in sorted(targets.items())
+        if plan.get_task(tid) is not None
+    )
+    example = ", ".join(
+        '{"task_id": %d, "title": "<another way to do this task>"}' % tid
+        for tid in sorted(targets)
+    )
+    done = [t.task_id for t in plan.tasks if t.status == TaskStatus.DONE.value]
+    kept = (
+        f" Task(s) {', '.join(str(t) for t in done)} are finished and keep their "
+        "results - do NOT redo or resend them."
+        if done
+        else ""
+    )
+    later = (
+        " You may also rewrite a later task that has to change."
+        if plan.revision_open()
+        else ""
+    )
+    return (
+        f"{listed}. Call plan_and_think with need_more_thinking=false and "
+        f"task_updates=[{example}] - do NOT send task_list unless the whole plan has to "
+        f"change.{kept}{later} The user approves the change before you continue."
+    )
+
+
 def _halt_action(plan: Plan) -> tuple[str, str]:
     """What a model does while the circuit breaker holds its plan.
 
@@ -77,6 +145,18 @@ def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
             "repeat it. Show display_to_user to the user and end your turn - the user "
             "will tell you how to continue.",
         )
+    if code is ErrorCode.PLAN_EVICTED:
+        # ANSWER_USER, not a tool: the plan is gone, and only the user knows whether
+        # they still want it. Starting it again unasked would be a plan nobody
+        # requested - and pointing at the remaining plans would hand this conversation
+        # one that belongs to another.
+        return (
+            NextAction.ANSWER_USER.value,
+            "That plan no longer exists: the server closed it because it had been idle "
+            "and the limit on active plans was reached. Nothing more of it will run. Tell "
+            "the user so, and ask whether to do it again - only then start a new plan "
+            "with plan_and_think. Do not use another plan in its place.",
+        )
     if code is ErrorCode.PLAN_NOT_APPROVED:
         return (
             NextAction.CALL_REQUEST_USER_APPROVAL.value,
@@ -114,6 +194,11 @@ def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
             "plan_and_think with need_more_thinking=false and a non-empty task_list first.",
         )
     if code is ErrorCode.PLAN_BLOCKED:
+        if plan is not None and plan.repairing() and plan.revision_targets():
+            return (
+                NextAction.CALL_PLAN_AND_THINK.value,
+                "You may NOT continue to another task: " + _repair_hint(plan),
+            )
         failed = plan.first_failed_task() if plan else None
         which = f"The task '{failed.title}' failed. " if failed else ""
         return (
@@ -212,6 +297,14 @@ def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
             "stating the concrete outcome - for example what you found, where you saved "
             "it, or what you produced. 'done' or 'ok' is not acceptable evidence.",
         )
+    if code is ErrorCode.FILE_NOT_FOUND:
+        return (
+            NextAction.CALL_UPDATE_TASK_PROGRESS.value,
+            "DONE was refused because a file you listed in files is not there. Save the "
+            "file first, or correct its path, then send the same call again. If this "
+            "task did not create that file, send DONE again without it in files - and "
+            "say in result_log what the task actually produced.",
+        )
     if code is ErrorCode.REWORK_NOT_DONE:
         task = plan.current_task() if plan else None
         asked = f' They said: "{task.revision_note}".' if task and task.revision_note else ""
@@ -239,6 +332,11 @@ def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
             "If you are re-planning, send a full task_list instead.",
         )
     if code is ErrorCode.REVISION_INCOMPLETE:
+        if plan is not None and plan.repairing() and plan.revision_targets():
+            return (
+                NextAction.CALL_PLAN_AND_THINK.value,
+                "The failed task itself has to be rewritten. " + _repair_hint(plan),
+            )
         targets = plan.revision_targets() if plan else {}
         which = ", ".join(str(t) for t in sorted(targets)) or "the flagged tasks"
         return (
@@ -338,6 +436,8 @@ def _status_action_inner(plan: Plan | None) -> tuple[str, str]:
         # alone. Handing a weak model the literal argument to send is what makes this
         # usable at all; it copies the hint far more reliably than it composes one.
         targets = plan.revision_targets()
+        if targets and plan.repairing():
+            return NextAction.CALL_PLAN_AND_THINK.value, _repair_hint(plan)
         if targets:
             listed = "; ".join(
                 f"task {tid}: \"{comment}\"" for tid, comment in sorted(targets.items())
@@ -426,15 +526,19 @@ def _status_action_inner(plan: Plan | None) -> tuple[str, str]:
                 NextAction.CALL_UPDATE_TASK_PROGRESS.value,
                 f"The task in next_task below ('{task.title}') is in progress."
                 + choice_note(task)
+                + repair_note(task)
                 + " When it is finished, call update_task_progress with its task_id, "
                 "status='DONE' and a result_log describing what you actually did."
+                + done_when_note(task)
                 + outstanding,
             )
         return (
             NextAction.CALL_UPDATE_TASK_PROGRESS.value,
             f"Next task is '{task.title}' - next_task below holds its task_id."
             + choice_note(task)
+            + repair_note(task)
             + " Call update_task_progress with that task_id and status='IN_PROGRESS'."
+            + done_when_note(task)
             + outstanding,
         )
 
