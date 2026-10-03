@@ -46,6 +46,7 @@
 | `tools/*.py` | 패키징 및 사내 환경 검증 스크립트 |
 | `docs/*.md` | Phase 1~4 설계 아키텍처 문서 및 본 배포 매뉴얼 |
 | `README.md`, `.gitignore` | 프로젝트 개요 및 형상 관리 설정 파일 |
+| `agents.md` | 에이전트 시스템 프롬프트 원본. AnythingLLM에 붙여 넣는 파일입니다 (3.0.0부터 포함) |
 | `anythingllm_mcp_servers.example.json` | AnythingLLM MCP 서버 등록 예시 설정 |
 | `MANIFEST.txt` | 파일별 SHA-256 무결성 해시 목록 (패키징 시 자동 생성) |
 | `runtime/` | **`--with-python` 옵션 사용 시에만 포함.** python.org 공식 임베디드 배포판 zip(원본 그대로) 및 출처 명시용 `RUNTIME.md` |
@@ -86,6 +87,8 @@ python tests/smoke_stdio.py
 ```bash
 python tools/make_package.py
 ```
+
+PowerShell에서는 저장소 루트의 `package_source.ps1`을 써도 됩니다. Python 실행 파일을 찾아 위 명령을 실행하고 인자를 그대로 전달합니다 (`.\package_source.ps1`, `.\package_source.ps1 --with-python <zip 경로>`). 스크립트 실행이 정책으로 막혀 있으면 `powershell -ExecutionPolicy Bypass -File .\package_source.ps1`로 실행하십시오.
 
 실행 시 `dist/planning-mcp-3.0.0-<날짜>.zip` 압축 파일과 루트 경로의 `MANIFEST.txt`가 생성되며, 콘솔 마지막 줄에 패키지 전체의 SHA-256 체크섬이 출력됩니다.
 
@@ -382,7 +385,7 @@ JSON 설정 작성 시 필수 주의 사항 (가장 빈번한 오류 발생 구�
 
 ### 6-5. AnythingLLM 워크스페이스 에이전트 환경 설정
 
-1. `docs/phase3-anythingllm-agent-prompt.md`의 **Variant A (영문 시스템 프롬프트)**를 워크스페이스 에이전트 시스템 프롬프트 입력창에 붙여넣기
+1. `agents.md`의 내용 전체(`docs/phase3-anythingllm-agent-prompt.md`의 **Variant A (영문 시스템 프롬프트)**와 동일합니다)를 워크스페이스 에이전트 시스템 프롬프트 입력창에 붙여넣기
 2. 에이전트 온도를 **temperature ≤ 0.3**으로 설정 (온도값이 높을 경우 모델이 임의의 잘못된 매개변수명을 생성할 확률이 급격히 증가합니다)
 3. web-search, web-scraping 등 **외부 인터넷 기반 기본 에이전트 스킬 전면 비활성화** (에이전트에게 노출되는 도구 수가 적을수록 소형 모델의 도구 선택 오류가 급감하며, 폐쇄망 환경에서는 인터넷 조회가 어차피 불가능합니다)
 

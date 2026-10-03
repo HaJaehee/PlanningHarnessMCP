@@ -426,13 +426,17 @@ when a repair made second approvals routine. Found by the browser check, not by 
   [05](05-concurrency-and-sessions.md).
 - **Plan ids are never reused** ([D29](09-defects-and-lessons.md#d29)): found by the eviction
   tests, where the plan that displaced an evicted one was handed its id.
+- **Packaging**: `agents.md` is shipped (the README names it as the file to paste, and the
+  package did not contain it); the repository's `MANIFEST.txt` no longer names the bundled
+  runtime, so `--with-python` can be built in any order (the open item of
+  [11](11-status-and-next-steps.md)). `package_source.ps1` runs it on Windows.
 - New module `planning/evidence.py` (pure). One new error code (`FILE_NOT_FOUND`); no new plan
   status, task status or `next_action`.
 - Major version: the plan model (`done_when`, `files`, `checks`, `failure_note`,
   `pending_revision.origin`) and the approval protocol (`criteria`) changed.
 
-204 new tests (`tests/test_verification.py` 135, `tests/test_local_repair.py` 34,
-`tests/test_plan_eviction.py` 32, three in `TestPromptHygiene`). No existing test changed expectation - including the ones that pin
+212 new tests (`tests/test_verification.py` 135, `tests/test_local_repair.py` 34,
+`tests/test_plan_eviction.py` 32, `tests/test_packaging.py` 8, three in `TestPromptHygiene`). No existing test changed expectation - including the ones that pin
 tool-description wording - except two that follow a decision: `agents.md` must now stay
 under 2,600 characters (was 4,200), and the README is required to point at `agents.md`
 rather than to contain it.

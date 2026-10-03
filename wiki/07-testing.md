@@ -1,6 +1,6 @@
 # 07 · Testing
 
-**732 unit tests + 6 end-to-end smoke tests, all passing** (as of 3.0.0; one unit test skips
+**740 unit tests + 6 end-to-end smoke tests, all passing** (as of 3.0.0; one unit test skips
 where the OS will not let it create a symlink). Standard-library
 `unittest` only. This project's defect history proves the rule: *test the seam before you
 trust it.* See [09-defects-and-lessons.md](09-defects-and-lessons.md).
@@ -138,6 +138,14 @@ use is never evicted; nothing is lost silently; an id is never reused.*
 | `TestNothingIsLostSilently` | the audit line carries tasks and `result_log`; the request leaves the approval page; the state file remembers the id, capped at 50; a hand-edited record cannot wedge the file |
 | `TestComingBackToAnEvictedPlan` | all four tools answer `PLAN_EVICTED` → `ANSWER_USER` with no `active_plans`; the same goal started again is a new plan; an id that never existed is still just unknown; survives a restart; a repeated request is stopped by the breaker |
 | `TestAnIdIsNeverReused` | [D29](09-defects-and-lessons.md#d29): after an eviction, after many, after the remembered list is gone, after retention pruning, and from a pre-3.0 state file |
+
+## Packaging suite (`tests/test_packaging.py`, 3.0.0)
+
+8 tests. The package is the only thing that reaches the corporate PC, so: every file the
+README links to is in it (`agents.md` was not, after the prompt moved out of the README),
+every module and test is in it, nothing private is (`state/`, `dist/`, `runtime/`,
+`CLAUDE.md`); and the repository's manifest never names the bundled runtime while the
+archive's does.
 
 ## Smoke tests (real subprocesses, real HTTP)
 

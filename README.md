@@ -106,6 +106,7 @@ planning/
 state/                    런타임 데이터: plan_state.json, audit.jsonl (.gitignore 대상)
 tests/                    단위 테스트 스위트 및 stdio 종단 간 스모크 테스트
 tools/                    패키징·설치 검증 도구, loop_report.py (감사 로그 루프 분석)
+package_source.ps1        tools/make_package.py 실행 래퍼 (Windows)
 agents.md                 에이전트 시스템 프롬프트 원본 (AnythingLLM에 붙여 넣는 파일)
 docs/                     Phase 1~4 문서: 스키마, 아키텍처, 에이전트 프롬프트, 테스트 매트릭스
 ```
@@ -204,6 +205,13 @@ approval_requested → approved → task_started → task_done → task_failed
 
 ```bash
 python tools/make_package.py
+```
+
+Windows에서는 저장소 루트의 `package_source.ps1`로 같은 작업을 실행할 수 있습니다. Python 실행 파일을 찾아 `tools/make_package.py`를 실행하고, 인자를 그대로 전달합니다.
+
+```powershell
+.\package_source.ps1
+.\package_source.ps1 --with-python C:\dl\python-3.12.10-embed-amd64.zip
 ```
 
 위 명령을 실행하면 `dist/planning-mcp-<버전>-<날짜>.zip` 파일(약 90 KB, 순수 텍스트 파일 구성)과 파일별 SHA-256 해시 목록이 기록된 `MANIFEST.txt`가 생성됩니다.

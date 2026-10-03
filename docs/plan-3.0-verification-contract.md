@@ -303,8 +303,8 @@ AnythingLLM 내장 스킬은 이 경로를 지나지 않습니다.
 ## 9. 구현·검증 결과
 
 - 신규 모듈 `planning/evidence.py`(순수 함수: 기준 검증, 반복 검사, 경로 추출, 폴더 제한 파일 확인).
-- 단위 테스트 **732개**(신규 204개: `tests/test_verification.py` 135개, `tests/test_local_repair.py` 34개,
-  `tests/test_plan_eviction.py` 32개, `TestPromptHygiene`에 3개)와 smoke
+- 단위 테스트 **740개**(신규 212개: `tests/test_verification.py` 135개, `tests/test_local_repair.py` 34개,
+  `tests/test_plan_eviction.py` 32개, `tests/test_packaging.py` 8개, `TestPromptHygiene`에 3개)와 smoke
   테스트 6개가 모두 통과했습니다. 기존 테스트 528개는 기대값을 바꾸지 않았고, 도구 설명 문구를
   고정하던 테스트도 요약 후 그대로 통과합니다. 기존 테스트 파일의 변경은 두 가지입니다: 테스트용 승인 UI
   대역(`FakeApprovalUI`)에 `criteria`를 더했고, `agents.md` 길이 상한을 4,200자에서 2,600자로 조였으며,
@@ -357,7 +357,8 @@ AnythingLLM 내장 스킬은 이 경로를 지나지 않습니다.
 
 ## 10. 남은 일
 
-1. 패키징(`package_source.ps1`, `MANIFEST.txt`)과 푸시는 사용자 확인 후 진행합니다.
+1. 패키징은 `.\package_source.ps1`로 합니다(`MANIFEST.txt` 재생성). 패키지에는 이제 `agents.md`가 들어가고,
+   `--with-python` 빌드가 저장소의 `MANIFEST.txt`를 망가뜨리지 않습니다. 푸시는 사용자 확인 후 진행합니다.
 2. 배포 시 새 프롬프트(`agents.md`)를 다시 붙여 넣어야 합니다. 서버만 바꾸면 모델은 `done_when`·`files`·실패 후
    `task_updates` 규칙을 모릅니다.
 3. 파일 확인을 쓰려면 `PLANNING_MCP_ARTIFACT_ROOTS`에 작업 폴더를 지정합니다.

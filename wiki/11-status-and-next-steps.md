@@ -10,11 +10,12 @@
   server found. A `FAILED` task is repaired in place with `task_updates`; finished tasks keep
   their results. Plan, research and decisions:
   [`docs/plan-3.0-verification-contract.md`](../docs/plan-3.0-verification-contract.md).
-- **Tests:** 732 unit + 6 smoke, all passing (`tests/test_verification.py`,
-  `tests/test_local_repair.py`, `tests/test_plan_eviction.py` are new; one unit test skips where symlinks cannot be created).
-- **Committed on `develop` (code, prompt, docs); not packaged or pushed.** `MANIFEST.txt`
-  is still the 1.15.1 one, so `verify_install.py` reports NO-GO on integrity until
-  `make_package.py` is rerun.
+- **Tests:** 740 unit + 6 smoke, all passing (`tests/test_verification.py`,
+  `tests/test_local_repair.py`, `tests/test_plan_eviction.py`, `tests/test_packaging.py` are new; one unit test skips where symlinks cannot be created).
+- **Committed on `develop` (code, prompt, docs); not pushed.** Package with
+  `.\package_source.ps1` (or `python tools/make_package.py`); it regenerates `MANIFEST.txt`,
+  which is not tracked. The package now ships `agents.md` - the README points at it since
+  3.0.0, and a package without it sent the operator to a file that was not there.
 - **Repaste the prompt when deploying.** `agents.md` was rewritten for 3.0: shorter (31 lines,
   down from 46), with a line each for `done_when` and `files`. An agent on the 2.0 prompt
   will never send those fields, and carries rules the tool descriptions now say on their own.
@@ -144,7 +145,10 @@ The loop could not be reproduced here, so whether 1.16 fixes it is a field quest
 
 ## Known open items
 
-1. **`make_package --with-python` clobbers the repo's `MANIFEST.txt`.** It appends a
+1. **~~`make_package --with-python` clobbers the repo's `MANIFEST.txt`.~~ Resolved in 3.0.0:**
+   the repository's manifest and the archive's are now written separately
+   (`manifest_text`), and only the archive's names the bundled runtime. Either variant can
+   be built in any order and `verify_install.py` still passes in the repo. Original note: It appends a
    `runtime/python-3.x-embed-amd64.zip` line, which is correct *inside that archive* but names a
    path the repo working tree does not have — so a later `verify_install.py` in the repo reports
    `[FAIL] missing: runtime/...`. Workaround: build the `--with-python` variant **first** and the
