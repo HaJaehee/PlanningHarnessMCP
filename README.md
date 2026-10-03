@@ -1,6 +1,6 @@
 # planning-mcp (PlanningHarnessMCP)
 
-**버전: 2.0.0** · MCP 서버 이름: `planning-mcp` · 버전 단일 출처: `planning/config.py`의 `SERVER_VERSION` (MCP `initialize` 응답의 `serverInfo.version`으로 보고됩니다)
+**버전: 3.0.0** · MCP 서버 이름: `planning-mcp` · 버전 단일 출처: `planning/config.py`의 `SERVER_VERSION` (MCP `initialize` 응답의 `serverInfo.version`으로 보고됩니다)
 
 AnythingLLM Agent Mode용 경량 **계획·작업 관리 MCP 서버입니다**. 폐쇄망 환경에서 성능이 제한적인 사내 LLM이 기억에만 의존하여 즉각 답변하는 대신, `계획 → 사람 승인 → 실행 → 보고`의 생애주기를 준수하도록 하네스(Harness)를 제공합니다.
 
@@ -57,57 +57,17 @@ python tools/setup_runtime.py
 
 MCP 도구는 Agent Mode에서만 노출되므로, 워크스페이스의 기본 모드가 에이전트 모드가 아닌 경우에는 입력 메시지를 `@agent`로 시작해야 합니다. 보다 상세한 배포 절차는 [docs/deployment-airgap-manual.md](docs/deployment-airgap-manual.md) 6절에 기술되어 있습니다.
 
-마지막으로 아래 [시스템 프롬프트](#시스템-프롬프트)(`agents.md`와 동일)를 워크스페이스 에이전트 설정에 입력하고, **temperature를 0.3 이하**로 설정합니다. 단, CoT(thinking) 모델은 예외입니다. 낮은 temperature는 thinking 모델의 끝없는 반복을 유발할 수 있으므로 모델 카드의 권장값을 따르고, `PLANNING_MCP_MODEL_PROFILE=reasoning`을 설정해 주십시오([docs/thinking-model-hosts.md](docs/thinking-model-hosts.md) 참조). 초기 안정화 기간에는 다른 기본 에이전트 스킬을 비활성화하는 것을 권장합니다. 노출되는 도구 수가 적을수록 모델의 잘못된 도구 호출 확률이 대폭 감소합니다.
+마지막으로 [agents.md](agents.md)의 내용을 워크스페이스 에이전트 설정의 시스템 프롬프트에 입력하고, **temperature를 0.3 이하**로 설정합니다. 단, CoT(thinking) 모델은 예외입니다. 낮은 temperature는 thinking 모델의 끝없는 반복을 유발할 수 있으므로 모델 카드의 권장값을 따르고, `PLANNING_MCP_MODEL_PROFILE=reasoning`을 설정해 주십시오([docs/thinking-model-hosts.md](docs/thinking-model-hosts.md) 참조). 초기 안정화 기간에는 다른 기본 에이전트 스킬을 비활성화하는 것을 권장합니다. 노출되는 도구 수가 적을수록 모델의 잘못된 도구 호출 확률이 대폭 감소합니다.
 
 ---
 
 ## 시스템 프롬프트
 
-```
-<system_directive>
-<role>
-You complete user requests with tools. A planning server tracks every request:
-plan -> user approval -> execution -> user check of the results.
-</role>
-<rules>
-1. Every tool response has next_action and next_action_hint. Do what they say. They come before your own plans.
-2. Start each new user request with plan_and_think. When next_action is ANSWER_USER, write the answer - that is not a new request.
-3. When your task list is ready, send it with need_more_thinking=false. It does not need to be perfect: the user reviews it before anything runs.
-4. Then call request_user_approval with decision="ASK_USER" and a short plan_summary.
-5. Only the user approves, rejects or asks for changes. Do not send APPROVED, REJECTED or REVISE unless the tool description tells you to report the user's chat reply.
-6. After approval, do the tasks one at a time and report each with update_task_progress.
-7. After the last task, call request_user_approval with decision="ASK_USER" again so the user can check the results.
-</rules>
-<responses>
-- error_code APPROVAL_PENDING: the user is still deciding. Call request_user_approval again at once with decision="ASK_USER" and the same plan_summary. Write nothing in between.
-- display_to_user: show it to the user and end your turn.
-- error_code LOOP_HALTED: the server paused the plan because a step kept repeating. Do not retry that call. Follow next_action - the user decides how to continue.
-- Any other ok=false: fix the one thing next_action_hint names, then retry.
-</responses>
-<tool name="plan_and_think">
-- Send the same goal text on every call. If the user corrects the goal itself, send the old text as goal and the new text as revised_goal.
-- If the server says the user commented on specific tasks, send task_updates (not task_list) for only those tasks. next_action_hint has the exact argument.
-- Do not execute anything or answer the user while planning.
-- If plan_and_think has an alternatives field: when a task could be done in two ways and the choice depends on the user's preference (not on facts you can check), put the way you recommend in task_list, the other way in alternatives with a 2-4 word topic naming what is chosen (e.g. "집계 방식"), and why you recommend yours in recommended_reasons. The user picks; then do each task the way next_task describes.
-</tool>
-<tool name="update_task_progress">
-- task_id: copy it from next_task in the most recent response.
-- Send IN_PROGRESS when next_action_hint asks for it. Do the work, then send DONE.
-- DONE needs a result_log with the concrete outcome: what you produced, found or saved. "done", "ok" or "완료" is refused.
-- One task per call, in order. Do not mark a task DONE that you did not do.
-- If a task fails, send FAILED with the reason in result_log, then follow next_action.
-- A task with revision_note was sent back by the user. Redo only that task so it answers their note. Do not call plan_and_think for it and do not resend previous_result_log.
-</tool>
-<tool name="get_current_plan">
-- Call it with your plan_id (from any earlier response) whenever you lose track. It changes nothing.
-- If it returns an active_plans list, call again with your own plan_id. Do not start a new plan.
-</tool>
-<output>
-- Tool calls: plain JSON with double quotes.
-- Answer the user in Korean.
-</output>
-</system_directive>
-```
+에이전트 시스템 프롬프트는 [agents.md](agents.md) 파일입니다. 이 문서에는 사본을 두지 않습니다.
+
+- `agents.md`의 내용 전체를 AnythingLLM 워크스페이스의 에이전트 시스템 프롬프트에 그대로 붙여 넣으십시오.
+- 서버 버전이 바뀌면 `agents.md`도 함께 바뀔 수 있습니다. 서버를 업그레이드한 뒤에는 프롬프트를 다시 붙여 넣어야 합니다.
+- 한국어 번역본과 AnythingLLM 적용 시 주의사항은 [docs/phase3-anythingllm-agent-prompt.md](docs/phase3-anythingllm-agent-prompt.md)에 있습니다.
 
 ---
 
@@ -115,9 +75,9 @@ plan -> user approval -> execution -> user check of the results.
 
 | 도구 | 역할 |
 |---|---|
-| `plan_and_think` | 새 요청의 진입점입니다. 1회 호출당 1단계의 추론을 수행하며, 마지막 호출에서 `task_list`를 제출합니다(`reasoning` 프로필에서는 한 번의 호출로 기록). 특정 작업 수정 요청 시에는 `task_updates`를 전달하고, 사용자가 목표 자체를 수정한 경우에는 `revised_goal`을 사용합니다. 사고 단계에는 상한이 있으며, 상한에 도달하면 서버가 마지막 초안을 사용자에게 제출합니다. 확정된 계획은 사용자의 수정 요청 없이는 다시 열리지 않습니다. 사용자의 선호에 따라 방법이 갈리는 태스크는 `alternatives`로 대안을 함께 제시할 수 있으며, `task_list` 쪽이 권장안입니다(2.0.0). |
-| `request_user_approval` | HITL(Human-In-The-Loop) 승인 게이트입니다. `ASK_USER` 요청 후 대기하며, 이후 `APPROVED` / `REJECTED` / `REVISE` 결과를 반영합니다. 대안이 있는 태스크는 사용자가 승인 페이지에서 고른 안이 그대로 태스크가 됩니다(채팅 모드에서는 모델이 `choices`로 전달). |
-| `update_task_progress` | 작업 진행 상태를 갱신합니다. 최초 작업만 `IN_PROGRESS`로 설정하고, 이후 작업은 작업당 `DONE` 또는 `FAILED`를 1회씩 보고합니다 (다음 작업은 서버가 자동으로 시작합니다). 사용자 미승인 상태에서는 호출이 거부됩니다. |
+| `plan_and_think` | 새 요청의 진입점입니다. 1회 호출당 1단계의 추론을 수행하며, 마지막 호출에서 `task_list`를 제출합니다(`reasoning` 프로필에서는 한 번의 호출로 기록). 특정 작업 수정 요청 시에는 `task_updates`를 전달하고, 사용자가 목표 자체를 수정한 경우에는 `revised_goal`을 사용합니다. 사고 단계에는 상한이 있으며, 상한에 도달하면 서버가 마지막 초안을 사용자에게 제출합니다. 확정된 계획은 사용자의 수정 요청 없이는 다시 열리지 않습니다. 사용자의 선호에 따라 방법이 갈리는 태스크는 `alternatives`로 대안을 함께 제시할 수 있으며, `task_list` 쪽이 권장안입니다(2.0.0). 결과를 확인할 수 있는 태스크에는 `done_when`으로 완료 기준(끝났을 때 무엇이 있거나 참이 되는지)을 붙일 수 있고, 사용자는 이를 계획과 함께 승인합니다. 태스크가 실패하면 서버가 그 태스크를 지목하며, 모델은 `task_updates`로 그 태스크만 다른 방법으로 다시 씁니다. 이미 끝난 태스크의 결과는 유지됩니다(3.0.0). |
+| `request_user_approval` | HITL(Human-In-The-Loop) 승인 게이트입니다. 승인 페이지 위쪽에는 서버 버전이 작게 표시되고, 옆의 `i` 아이콘을 누르면 작성자·연락처·버전이 나옵니다. `ASK_USER` 요청 후 대기하며, 이후 `APPROVED` / `REJECTED` / `REVISE` 결과를 반영합니다. 대안이 있는 태스크는 사용자가 승인 페이지에서 고른 안이 그대로 태스크가 됩니다(채팅 모드에서는 모델이 `choices`로 전달). 사용자는 승인 페이지에서 태스크의 완료 기준을 직접 추가하거나 고친 뒤 그대로 승인할 수 있습니다. 수정 요청을 거치지 않습니다(3.0.0). |
+| `update_task_progress` | 작업 진행 상태를 갱신합니다. 최초 작업만 `IN_PROGRESS`로 설정하고, 이후 작업은 작업당 `DONE` 또는 `FAILED`를 1회씩 보고합니다 (다음 작업은 서버가 자동으로 시작합니다). 사용자 미승인 상태에서는 호출이 거부됩니다. 완료 기준이 있는 태스크는 `result_log`가 기준 문장을 그대로 반복하면 반려됩니다. `PLANNING_MCP_ARTIFACT_ROOTS`가 설정된 서버에서는 태스크가 만들거나 바꾼 파일을 `files`로 보고하며, 서버가 허용된 폴더 안에서 파일이 실제로 있는지 확인합니다. 없으면 `DONE`이 반려됩니다(3.0.0). |
 | `get_current_plan` | 컨텍스트가 단절되었을 때 계획 상태를 복구합니다. 언제든 안전하게 호출할 수 있으며, 현재 세션의 `plan_id`를 전달하면 해당 계획 정보를 안정적으로 조회할 수 있습니다. |
 
 상세 스키마 및 응답 명세는 [docs/phase1-tool-schema-blueprint.md](docs/phase1-tool-schema-blueprint.md)에서 확인하실 수 있습니다.
@@ -142,10 +102,11 @@ planning/
   transport.py            stdio(기본) 및 SSE(선택, 루프백 전용) 전송 계층
   loopguard.py            서킷 브레이커 카운터 (1.16.0)
   choices.py              태스크별 대안 검증 (2.0.0)
+  evidence.py             완료 기준 검증, 증거 반복 검사, 허용 폴더 안 파일 확인 (3.0.0)
 state/                    런타임 데이터: plan_state.json, audit.jsonl (.gitignore 대상)
 tests/                    단위 테스트 스위트 및 stdio 종단 간 스모크 테스트
 tools/                    패키징·설치 검증 도구, loop_report.py (감사 로그 루프 분석)
-agents.md                 에이전트 시스템 프롬프트 원본 (README·Phase 3 문서와 동일)
+agents.md                 에이전트 시스템 프롬프트 원본 (AnythingLLM에 붙여 넣는 파일)
 docs/                     Phase 1~4 문서: 스키마, 아키텍처, 에이전트 프롬프트, 테스트 매트릭스
 ```
 
@@ -171,6 +132,8 @@ docs/                     Phase 1~4 문서: 스키마, 아키텍처, 에이전�
 | `PLANNING_MCP_APPROVAL_OPEN_BROWSER` | `true` | 승인 요청 발생 시 승인 페이지 브라우저 탭을 자동으로 엽니다. |
 | `PLANNING_MCP_APPROVAL_TTL` | `1800` | 승인의 유효 유지 시간(초)입니다. 해당 시간 동안 방치된 계획은 승인이 만료되어 재승인 절차를 거쳐야 합니다. |
 | `PLANNING_MCP_MAX_ACTIVE_PLANS` | `20` | 동시에 활성화(진행)할 수 있는 계획의 최대 허용 수입니다 (1.16.0부터 20, 이전 5). |
+| `PLANNING_MCP_EVICT_LRU` | `true` | 3.0.0. 활성 계획 수가 한도에 도달했을 때 새 계획을 거절하지 않고, 가장 오래 쓰이지 않은(LRU) 미완료 계획을 자동으로 삭제해 자리를 만듭니다. 삭제된 계획의 태스크와 증거는 `audit.jsonl`의 `plan_evicted` 항목에 남고, 해당 대화가 다시 돌아오면 계획이 정리되었다는 안내(`PLAN_EVICTED`)를 받습니다. `false`이면 이전처럼 새 계획을 거절합니다. |
+| `PLANNING_MCP_EVICT_MIN_IDLE` | `300` | 마지막으로 갱신된 지 이 시간(초)이 지나지 않은 계획은 사용 중으로 보고 삭제하지 않습니다. 모든 활성 계획이 사용 중이면 새 계획은 이전처럼 거절됩니다. |
 | `PLANNING_MCP_COMPLETION_APPROVAL` | `true` | 마지막 작업이 완료(DONE)되어도 즉시 종료되지 않고, 사용자가 각 작업별 수행 결과를 최종 확인해야 전체 계획을 완료(COMPLETED) 처리합니다. |
 | `PLANNING_MCP_MIN_RESULT_LOG` | `8` | 작업 완료(DONE) 보고 시 요구되는 최소 증빙 내용의 길이(공백 및 문장부호 제외)입니다. "완료", "done" 등 단순 상투어구는 길이와 관계없이 반려됩니다. |
 | `PLANNING_MCP_AUTO_ADVANCE` | `true` | 작업 완료(DONE) 보고 시 서버가 다음 작업을 `IN_PROGRESS` 상태로 자동 시작합니다. 이를 통해 5개 작업 기준 실행 단계의 호출 횟수를 10회에서 6회로 단축합니다. `false`로 설정하면 매 작업마다 모델이 `IN_PROGRESS`를 직접 호출해야 합니다. |
@@ -185,6 +148,11 @@ docs/                     Phase 1~4 문서: 스키마, 아키텍처, 에이전�
 | `PLANNING_MCP_ALTERNATIVES` | `true` | 2.0.0. 모델이 태스크별 대안(`alternatives`)과 권장 이유(`recommended_reasons`)를 제시하고, 사용자가 승인 페이지에서 고를 수 있게 합니다. `false`(또는 `off`)이면 필드를 광고하지 않고, 보내 와도 무시합니다. |
 | `PLANNING_MCP_MAX_ALTERNATIVES` | `3` | 태스크당 허용되는 대안 수입니다(권장안 포함 선택지 2~4개). |
 | `PLANNING_MCP_MAX_CHOICE_POINTS` | `3` | 계획당 선택지를 둘 수 있는 태스크 수입니다. |
+| `PLANNING_MCP_DONE_WHEN` | `true` | 3.0.0. 모델이 태스크별 완료 기준(`done_when`)을 제시할 수 있게 합니다. `false`(또는 `off`)이면 필드를 광고하지 않고, 보내 와도 무시합니다. 이때에도 사용자는 승인 페이지에서 기준을 직접 적을 수 있습니다. |
+| `PLANNING_MCP_MAX_DONE_WHEN_CHARS` | `200` | 완료 기준 한 건의 최대 길이입니다. 넘으면 잘라냅니다. |
+| `PLANNING_MCP_EVIDENCE_NOVELTY` | `0.3` | 완료 기준이 있는 태스크에서, `result_log`가 기준 문장에 더한 새 내용의 비율이 이 값보다 낮으면 기준을 반복했을 뿐인 것으로 보고 `DONE`을 반려합니다. `0`이면 이 검사를 끕니다. |
+| `PLANNING_MCP_ARTIFACT_ROOTS` | (비어 있음) | 3.0.0. 서버가 파일 존재를 확인해도 되는 폴더 목록입니다(`;`로 구분). 비어 있으면 파일을 확인하지 않고 `files` 필드도 광고하지 않습니다. 이 폴더 밖의 경로는 확인하지도, 반려하지도 않습니다. 에이전트의 도구가 결과물을 저장하는 폴더를 지정하십시오. |
+| `PLANNING_MCP_LOCAL_REPAIR` | `true` | 3.0.0. 태스크가 실패하면 그 태스크만 다시 계획합니다. `false`이면 2.0처럼 계획 전체를 다시 세웁니다. |
 | `PLANNING_MCP_AUTOAPPROVE` | `false` | **테스트 전용 옵션**입니다. HITL 승인 게이트를 건너뜁니다. 호출 시마다 경고 로그가 기록됩니다. |
 
 CLI 옵션 지원: `--transport stdio|sse`, `--host`, `--port`, `--state-dir`, `--log-level`

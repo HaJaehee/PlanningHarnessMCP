@@ -727,7 +727,60 @@ class TestPromptHygiene(unittest.TestCase):
 
     def test_agents_md_is_short_and_calm(self):
         self.assertLessEqual(len(_EMPHATIC.findall(AGENTS_MD)), 6)
-        self.assertLess(len(AGENTS_MD), 4200)
+        # 4200 until 3.0.0. The target is a mid-sized model, and a long prompt lowers how
+        # much of it such a model follows: the prompt was cut to what no tool description
+        # and no next_action_hint can say for it (2,275 characters when this was set).
+        self.assertLess(len(AGENTS_MD), 2600)
+
+    def test_agents_md_keeps_what_only_the_prompt_can_say(self):
+        """The lifecycle, the precedence of next_action, the exits, and how to answer.
+
+        Everything else was moved out on purpose (3.0.0): a rule that a tool description
+        states, or that the server's hint gives at the moment it applies, is said there
+        and not a second time here.
+        """
+        for needed in ("next_action and next_action_hint", "They come before your own plans",
+                       "plan_and_think", "ANSWER_USER", "does not need to be perfect",
+                       'decision="ASK_USER"', "Only the user approves",
+                       "Do not mark a task DONE that you did not do", "get_current_plan",
+                       "APPROVAL_PENDING", "Write nothing in between", "display_to_user",
+                       "do what next_action_hint says", "Answer the user in Korean"):
+            self.assertIn(needed, AGENTS_MD, needed)
+        # Optional fields are named only as "if the tool has it": the prompt must not
+        # promise a field the running configuration does not advertise.
+        for field in ("alternatives", "done_when", "files"):
+            self.assertIn(f"- {field} (if ", AGENTS_MD, field)
+        # Said by the tool descriptions and the hints, and no longer here.
+        for moved in ("LOOP_HALTED", "revision_note", "active_plans", "task_updates",
+                      "IN_PROGRESS", "revised_goal"):
+            self.assertNotIn(moved, AGENTS_MD, moved)
+
+    def test_every_rule_that_left_the_prompt_is_still_said_somewhere(self):
+        """Moved, not dropped: each one is in a tool description or a server hint."""
+        tools = {t["name"]: t for t in build_tool_definitions(file_checks=True)}
+        plan, update = tools["plan_and_think"], tools["update_task_progress"]
+        self.assertIn("task_updates", plan["description"])
+        self.assertIn("IF A TASK FAILED", plan["description"])
+        self.assertIn("revised_goal", plan["inputSchema"]["properties"]["goal"]["description"])
+        self.assertIn("recommendation",
+                      plan["inputSchema"]["properties"]["alternatives"]["description"])
+        self.assertIn("Take task_id from next_task", update["description"])
+        self.assertIn('"IN_PROGRESS"', update["description"])
+        self.assertIn("Repeating the done_when sentence is refused", update["description"])
+        self.assertIn("is refused",
+                      update["inputSchema"]["properties"]["result_log"]["description"])
+        self.assertIn("list of plans", tools["get_current_plan"]["description"])
+        # The rest arrives as a hint at the moment it applies.
+        halted = Plan(plan_id="p", goal="g", plan_status="DRAFTING",
+                      halt={"id": "h", "asked": False})
+        self.assertIn("Do not retry the call you just made", resolve_next_action(halted)[1])
+        from planning.models import Task
+        rework = Plan(plan_id="p", goal="g", plan_status="IN_EXECUTION", tasks=[
+            Task(1, "a", status="DONE", result_log="r"),
+            Task(2, "b", revision_note="3분기가 빠졌습니다", previous_result_log="old")])
+        hint = resolve_next_action(rework)[1]
+        self.assertIn("Do not re-plan", hint)
+        self.assertIn("Redo ONLY that task", hint)
 
     def test_every_drafting_hint_names_one_tool(self):
         tools = ("plan_and_think", "request_user_approval", "update_task_progress",
@@ -749,14 +802,20 @@ class TestPromptHygiene(unittest.TestCase):
         self.assertIn("ANSWER_USER", AGENTS_MD)
         self.assertIn("ANSWER_USER", INSTRUCTIONS)
 
-    def test_the_three_copies_of_the_prompt_agree(self):
-        """agents.md is canonical; README and the Phase 3 manual embed it verbatim."""
+    def test_the_copies_of_the_prompt_agree(self):
+        """agents.md is canonical; the Phase 3 manual embeds it verbatim (Variant A)."""
         body = AGENTS_MD.strip()
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
         phase3 = (ROOT / "docs" / "phase3-anythingllm-agent-prompt.md").read_text(
             encoding="utf-8")
-        self.assertIn(body, readme)
         self.assertIn(body, phase3)
+
+    def test_the_readme_points_at_agents_md_instead_of_copying_it(self):
+        """The README carried a third copy until 3.0.0. A copy is a thing that can go
+        stale; the file itself cannot, so the README names the file and nothing more."""
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("[agents.md](agents.md)", readme)
+        self.assertNotIn("<system_directive>", readme)
+        self.assertNotIn("next_action_hint. Do what they say", readme)
 
 
 # ---------------------------------------------------------------------------
