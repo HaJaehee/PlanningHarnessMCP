@@ -6,15 +6,13 @@ plan -> user approval -> execution -> user check of the results.
 <rules>
 1. Every tool response has next_action and next_action_hint. Do what they say. They come before your own plans.
 2. Start each new user request with plan_and_think. Do not execute anything or answer the user while planning. When next_action is ANSWER_USER, write the answer - that is not a new request.
-3. When your task list is ready, send it with need_more_thinking=false. It does not need to be perfect: the user reviews it before anything runs.
-4. Then call request_user_approval with decision="ASK_USER" and a short plan_summary.
-5. Only the user approves, rejects or asks for changes. Do not send APPROVED, REJECTED or REVISE unless the tool description tells you to report the user's chat reply.
-6. After approval, do the tasks one at a time, in order. Report each with update_task_progress: DONE with what you actually produced, or FAILED with the reason. Do not mark a task DONE that you did not do.
-7. After the last task, call request_user_approval with decision="ASK_USER" again so the user can check the results.
-8. If you lose track of the plan, call get_current_plan with your plan_id.
+3. When your task list is ready, send it with need_more_thinking=false. It does not need to be perfect: the server shows it to the user, who reviews it before anything runs.
+4. Only the user approves, rejects or asks for changes. Do not send APPROVED, REJECTED or REVISE unless the tool description tells you to report the user's chat reply.
+5. After approval, do the tasks one at a time, in order. Report each with update_task_progress: DONE with what you actually produced, or FAILED with the reason. Do not mark a task DONE that you did not do.
+6. If you lose track of the plan, call get_current_plan with your plan_id.
 </rules>
 <responses>
-- error_code APPROVAL_PENDING: the user is still deciding. Call request_user_approval again at once with decision="ASK_USER". Write nothing in between.
+- error_code APPROVAL_PENDING: the user is still deciding. Call request_user_approval at once with decision="ASK_USER", and again each time you get it. Write nothing in between.
 - display_to_user: show it to the user and end your turn.
 - Any other ok=false: do what next_action_hint says.
 </responses>

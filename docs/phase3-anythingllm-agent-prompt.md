@@ -50,6 +50,25 @@ as a fallback if the model's Korean output quality degrades under English instru
 > `TestPromptHygiene` pins both sides: what the prompt must still say, and that each rule
 > which left it is still said somewhere. **Not measured on the corporate model** - if a
 > behaviour in the table regresses, put that one line back rather than the whole prompt.
+>
+> **3.1.0 - two rules fewer.** The target model already thinks and remembers on its own;
+> what it lacks, on a host with no approval step, is the gate. So the server now asks the
+> user itself at the two moments a plan changes hands - when the final task list arrives,
+> and when the last task is DONE - and the two rules that told the model to ask
+> ("then call `request_user_approval` ..." and "after the last task, call it again") are
+> gone, with `plan_summary`. Eight rules became six, 2,275 characters 2,126.
+> `request_user_approval` is left with one job, named in `<responses>`: wait while the
+> user decides.
+>
+> | left the prompt | now done by |
+> |---|---|
+> | "Then call `request_user_approval` with `decision="ASK_USER"` and a short `plan_summary`" | the server, in the call that recorded the final task list; the model's own sentence (`thought`) is the overview on the page |
+> | "After the last task, call `request_user_approval` again" | the server, in the call that reported the last task `DONE` |
+>
+> The same prompt is used with `PLANNING_MCP_AUTO_ASK=false` (the flow of 3.0): there the
+> server's `next_action` says `CALL_REQUEST_USER_APPROVAL` at both moments and the tool
+> description asks for the `plan_summary`, so rule 1 carries it.
+> `tests/test_gate_and_run.py` (`TestThePrompt`) pins this.
 
 ---
 
@@ -64,15 +83,13 @@ plan -> user approval -> execution -> user check of the results.
 <rules>
 1. Every tool response has next_action and next_action_hint. Do what they say. They come before your own plans.
 2. Start each new user request with plan_and_think. Do not execute anything or answer the user while planning. When next_action is ANSWER_USER, write the answer - that is not a new request.
-3. When your task list is ready, send it with need_more_thinking=false. It does not need to be perfect: the user reviews it before anything runs.
-4. Then call request_user_approval with decision="ASK_USER" and a short plan_summary.
-5. Only the user approves, rejects or asks for changes. Do not send APPROVED, REJECTED or REVISE unless the tool description tells you to report the user's chat reply.
-6. After approval, do the tasks one at a time, in order. Report each with update_task_progress: DONE with what you actually produced, or FAILED with the reason. Do not mark a task DONE that you did not do.
-7. After the last task, call request_user_approval with decision="ASK_USER" again so the user can check the results.
-8. If you lose track of the plan, call get_current_plan with your plan_id.
+3. When your task list is ready, send it with need_more_thinking=false. It does not need to be perfect: the server shows it to the user, who reviews it before anything runs.
+4. Only the user approves, rejects or asks for changes. Do not send APPROVED, REJECTED or REVISE unless the tool description tells you to report the user's chat reply.
+5. After approval, do the tasks one at a time, in order. Report each with update_task_progress: DONE with what you actually produced, or FAILED with the reason. Do not mark a task DONE that you did not do.
+6. If you lose track of the plan, call get_current_plan with your plan_id.
 </rules>
 <responses>
-- error_code APPROVAL_PENDING: the user is still deciding. Call request_user_approval again at once with decision="ASK_USER". Write nothing in between.
+- error_code APPROVAL_PENDING: the user is still deciding. Call request_user_approval at once with decision="ASK_USER", and again each time you get it. Write nothing in between.
 - display_to_user: show it to the user and end your turn.
 - Any other ok=false: do what next_action_hint says.
 </responses>
@@ -94,7 +111,7 @@ plan -> user approval -> execution -> user check of the results.
 ## Variant B — Korean (fallback)
 
 Variant A를 그대로 번역한 것입니다. 도구 이름, 필드 이름, 열거형 값은 영어 그대로 둡니다.
-3.0.0에서 Variant A와 함께 요약했습니다.
+3.0.0에서 Variant A와 함께 요약했고, 3.1.0에서 승인 요청 규칙 두 개를 함께 뺐습니다.
 
 ```text
 <system_directive>
@@ -105,15 +122,13 @@ Variant A를 그대로 번역한 것입니다. 도구 이름, 필드 이름, 열
 <rules>
 1. 모든 도구 응답에는 next_action과 next_action_hint가 있습니다. 그 지시대로 하십시오. 스스로 세운 계획보다 우선합니다.
 2. 새 사용자 요청은 plan_and_think로 시작합니다. 계획하는 동안에는 아무것도 실행하지 말고 사용자에게 답하지 마십시오. next_action이 ANSWER_USER이면 답변을 작성하십시오. 그것은 새 요청이 아닙니다.
-3. 태스크 목록이 준비되면 need_more_thinking=false로 보내십시오. 완벽할 필요는 없습니다. 실행 전에 사용자가 검토합니다.
-4. 그다음 request_user_approval을 decision="ASK_USER"와 짧은 plan_summary로 호출합니다.
-5. 승인, 거절, 수정 요청은 사용자만 할 수 있습니다. 도구 설명이 사용자의 채팅 답변을 보고하라고 안내하는 경우가 아니면 APPROVED, REJECTED, REVISE를 보내지 마십시오.
-6. 승인 후에는 태스크를 순서대로 하나씩 수행합니다. 태스크마다 update_task_progress로 보고하십시오: 실제로 만든 결과와 함께 DONE, 또는 이유와 함께 FAILED. 하지 않은 태스크를 DONE으로 표시하지 마십시오.
-7. 마지막 태스크가 끝나면 사용자가 결과를 확인하도록 request_user_approval을 decision="ASK_USER"로 다시 호출합니다.
-8. 계획의 진행 상황을 놓치면 자신의 plan_id로 get_current_plan을 호출하십시오.
+3. 태스크 목록이 준비되면 need_more_thinking=false로 보내십시오. 완벽할 필요는 없습니다. 서버가 사용자에게 보여 주고, 실행 전에 사용자가 검토합니다.
+4. 승인, 거절, 수정 요청은 사용자만 할 수 있습니다. 도구 설명이 사용자의 채팅 답변을 보고하라고 안내하는 경우가 아니면 APPROVED, REJECTED, REVISE를 보내지 마십시오.
+5. 승인 후에는 태스크를 순서대로 하나씩 수행합니다. 태스크마다 update_task_progress로 보고하십시오: 실제로 만든 결과와 함께 DONE, 또는 이유와 함께 FAILED. 하지 않은 태스크를 DONE으로 표시하지 마십시오.
+6. 계획의 진행 상황을 놓치면 자신의 plan_id로 get_current_plan을 호출하십시오.
 </rules>
 <responses>
-- error_code APPROVAL_PENDING: 사용자가 아직 결정 중입니다. request_user_approval을 decision="ASK_USER"로 즉시 다시 호출하십시오. 그 사이에는 아무것도 쓰지 마십시오.
+- error_code APPROVAL_PENDING: 사용자가 아직 결정 중입니다. request_user_approval을 decision="ASK_USER"로 즉시 호출하고, 이 응답을 받을 때마다 다시 호출하십시오. 그 사이에는 아무것도 쓰지 마십시오.
 - display_to_user: 사용자에게 보여주고 차례를 마치십시오.
 - 그 밖의 ok=false: next_action_hint가 말하는 대로 하십시오.
 </responses>
@@ -161,8 +176,8 @@ Variant A를 그대로 번역한 것입니다. 도구 이름, 필드 이름, 열
    recommendation.** DeepSeek-R1- and Qwen3-family cards warn that greedy / very low
    temperature decoding causes endless repetition — the in-block half of D25. See
    [thinking-model-hosts.md](thinking-model-hosts.md).
-5. **Context window:** the prompt above is about 600 tokens; the four tool schemas add roughly
-   3,500 more as of 3.0.0 ([context-budget-analysis.md](context-budget-analysis.md) has the
+5. **Context window:** the prompt above is about 550 tokens; the four tool schemas add roughly
+   3,400 more as of 3.1.0 ([context-budget-analysis.md](context-budget-analysis.md) has the
    method; 3,200 with `PLANNING_MCP_DONE_WHEN=off` and `PLANNING_MCP_LOCAL_REPAIR=false`). No
    trimming needed at 16k and above; at 8k that leaves about 3,900 tokens for the work itself.
 6. If the model still answers directly without planning, add a one-line reinforcement to the
