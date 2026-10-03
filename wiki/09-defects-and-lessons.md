@@ -598,6 +598,34 @@ empty, retention pruning, and a pre-3.0 state file.
 **Lesson:** an identifier derived from the *current contents* of a collection is unique only
 until something is removed. The moment a feature deletes, re-read every place that counts.
 
+## D30 — a decision made between two calls was undone by the call that collected it (3.1.0)
+
+**Symptom:** found by the first test of the new flow that waited, got `APPROVAL_PENDING`,
+had the human confirm, and called `request_user_approval(ASK_USER)` to pick the decision
+up: the plan came back `AWAITING_APPROVAL` instead of `COMPLETED`, with a fresh *plan*
+request on the page for work the human had just certified. Reproduced on 3.0.0 unchanged -
+in `return` mode it is what happens every time the human answers a completion report. Its
+twin: a plan sent back for changes between two calls was shown again, unchanged, and the
+response carried neither `DRAFTING` nor the user's comment - the model never learned it had
+been asked to change anything, and the human was asked the question they had just answered.
+**Root cause:** `_apply_late_decision` runs at the top of every call and applies whatever the
+human clicked since the last one. `_ask_user` then ran as if nothing had happened. It
+answered `APPROVED` / `IN_EXECUTION` ("already approved"), `CANCELLED` and `BLOCKED`, and
+treated every other status as "a plan to ask about" - so `COMPLETED` and `DRAFTING` fell
+through to `set_status(AWAITING_APPROVAL)` and a new request. In `chunked` mode the window is
+the gap between two slices; in `return` mode it is the design ("when the user writes to you
+again, call this tool again: that collects their decision").
+**Fix:** `_ask_user` answers a `COMPLETED` plan with the confirmation, and a `DRAFTING` plan
+that has tasks with what the human asked for - `user_comment`, `revision_scope`,
+`revision_targets`, the fields `_revise` returns when the waiting call itself collects the
+decision. Neither opens a request. `TestADecisionMadeBetweenTwoCalls`, including the 3.0
+flow.
+**Lesson:** "collect, then carry on as before" is only safe if *as before* re-reads the state
+the collection just changed. A handler that runs after a mutation it did not make has to
+answer every status on purpose; a fall-through there is a transition nobody designed. And a
+path that is rare under the default (`chunked`) but ordinary under another mode (`return`)
+needs its own test in that mode - the default suite will never walk it.
+
 [typescript-sdk#849]: https://github.com/modelcontextprotocol/typescript-sdk/pull/849
 
 ## Where the next bug probably is
@@ -613,6 +641,12 @@ areas still are:
   allowed folder is on a share that disappears mid-plan (the check is bounded and reports
   `unknown`, but only the unit path is tested, not a real stalled share); `claims_withdrawn`
   when the model corrects a path rather than dropping it.
+- **The run card meeting other features (3.1.0)**: a stop or a note asked while a rework
+  from the completion report is in flight; a note on a plan whose remaining tasks offer a
+  choice (a rewritten task drops its options); two server processes syncing the board at
+  once (each derives it from the same state file, but only the single-process path is
+  tested); `_sync_runs` reads the plan state once more per call, so it shares the
+  transient-read weakness below.
 - **`Store.load` treats a read error like a corrupt file.** A transient `OSError` (a sharing
   violation on Windows) quarantines a state file that may be perfectly good. Seen once as a
   one-off test failure during 3.0 and not reproduced; not fixed here.

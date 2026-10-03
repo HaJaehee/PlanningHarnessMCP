@@ -218,6 +218,18 @@
       "env": "PLANNING_MCP_LOCAL_REPAIR",
       "default": true,
       "purpose": "3.0.0. A FAILED task is repaired in place: the model rewrites that task (and, if it must, the unfinished ones after it) with task_updates, and finished tasks keep their results. false = the 2.0 behaviour: re-plan the whole list."
+    },
+    {
+      "field": "auto_ask",
+      "env": "PLANNING_MCP_AUTO_ASK",
+      "default": true,
+      "purpose": "3.1.0. The server asks the human itself at the two moments a plan changes hands: the final plan_and_think call opens the plan request and waits, and the last DONE opens the completion report and waits. request_user_approval is then only the call that keeps waiting (or, with no page, reports the user's reply) and is advertised without plan_summary. false = the 3.0 flow: the model asks with request_user_approval(ASK_USER, plan_summary). Not applied under autoapprove."
+    },
+    {
+      "field": "run_control",
+      "env": "PLANNING_MCP_RUN_CONTROL",
+      "default": true,
+      "purpose": "3.1.0. Executing plans are shown on the approval page (state/runs.json), each with a stop and a note. Both are requests applied when the agent next reports a task: a stop holds the plan (halt reason user_pause, error PLAN_PAUSED) after the DONE is recorded and before the next task starts; a note opens the unfinished tasks for task_updates (pending_revision.origin = run) and the human re-approves the change. false = no run card, and nothing asked on one is applied."
     }
   ],
   "cli": {

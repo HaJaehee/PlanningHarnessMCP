@@ -3,6 +3,14 @@
 Server name: `planning-mcp` (single unified server, 4 tools only)
 Transport: stdio or SSE on `localhost` (AnythingLLM custom MCP)
 
+> **3.1.0.** By default the server now opens the approval request itself - in the final
+> `plan_and_think` call and in the last `DONE` - so `request_user_approval` is advertised as
+> the call that *waits* (`decision: "ASK_USER"`, no `plan_summary`) and execution is STEP 2.
+> The schemas and example responses in this blueprint are those of the model-asks flow,
+> which `PLANNING_MCP_AUTO_ASK=false` still gives. The text as advertised today, for every
+> configuration, is generated in [`wiki/data/tool-schemas.json`](../wiki/data/tool-schemas.json);
+> the reasons are in [`wiki/06-human-in-the-loop.md`](../wiki/06-human-in-the-loop.md#the-gate-on-the-transition-310).
+
 ---
 
 ## 0. Design Rules (why the schema looks like this)

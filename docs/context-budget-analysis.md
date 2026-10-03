@@ -270,6 +270,12 @@ f"Call update_task_progress with task_id={task.task_id} and status='IN_PROGRESS'
 > 막아 왔다는 점 - 은 여전히 유효하고, 요약은 현장에서 검증되지 않았습니다. 상세와 표는
 > [plan-3.0-verification-contract.md](plan-3.0-verification-contract.md) §4.7, 고정 테스트는 `TestToolTextIsLean`입니다.
 > §3의 3,072토큰은 v1.14.0 시점의 값입니다.
+>
+> **3.1.0 (2026-10-03).** 승인 요청을 서버가 직접 열게 되면서 도구 정의가 다시 줄었습니다. 기본 설정 3,486 → 3,406토큰,
+> `reasoning` 프로필 3,325 → 3,237토큰입니다. `request_user_approval`의 `plan_summary` 매개변수와 "계획 확정 뒤, 마지막 태스크 뒤에
+> 호출하라"는 설명이 없어졌고, 에이전트 프롬프트도 규칙 8개에서 6개(2,275 → 2,126자)로 줄었습니다. 요청 한 건의 호출 수도
+> 승인 요청 2회만큼 줄어듭니다(사용자가 한 대기 구간 안에 결정하는 경우). 고정 테스트는 `tests/test_gate_and_run.py`의
+> `TestToolTextSaysWhatIsTrue`입니다. `PLANNING_MCP_AUTO_ASK=false`이면 3.0.0의 문구와 크기 그대로입니다.
 
 ### 제안 6 — 컨텍스트 창 포화 사전 감지 및 로깅 (효과: 진단 및 모니터링)
 

@@ -58,6 +58,7 @@
     "LOOP_HALTED",
     "FILE_NOT_FOUND",
     "PLAN_EVICTED",
+    "PLAN_PAUSED",
     "INTERNAL_ERROR"
   ]
 }

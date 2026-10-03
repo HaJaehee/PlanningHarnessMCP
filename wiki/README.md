@@ -9,7 +9,7 @@ it forces a `PLAN → HUMAN APPROVAL → EXECUTE → REPORT` lifecycle and physi
 agent loop until a human approves. **Zero third-party dependencies** — Python 3.9+ standard
 library only, because the deployment target has no package index.
 
-Current version: **3.0.0** · 740 unit tests + 6 end-to-end smoke tests, all passing.
+Current version: **3.1.0** · 851 unit tests + 7 end-to-end smoke tests, all passing.
 
 ---
 
@@ -27,6 +27,7 @@ Current version: **3.0.0** · 740 unit tests + 6 end-to-end smoke tests, all pas
 | How tests are organised and run | [07-testing.md](07-testing.md) |
 | What changed in each version and why | [08-changelog.md](08-changelog.md) + [data/versions.json](data/versions.json) |
 | **Known failure modes and their root causes** | [09-defects-and-lessons.md](09-defects-and-lessons.md) |
+| **Who asks for approval, and what the human can do while a plan runs: the gate on the transition, the run card, stop and note (3.1)** | [06-human-in-the-loop.md#the-gate-on-the-transition-310](06-human-in-the-loop.md#the-gate-on-the-transition-310) + [06-human-in-the-loop.md#the-run-card-310](06-human-in-the-loop.md#the-run-card-310) |
 | **What "done" means and what the server checks: `done_when`, file checks, the human writing the criterion (3.0)** | [04-state-machine.md#the-verification-contract-300](04-state-machine.md#the-verification-contract-300) + [06-human-in-the-loop.md#the-contract-on-the-page-300](06-human-in-the-loop.md#the-contract-on-the-page-300) + [../docs/plan-3.0-verification-contract.md](../docs/plan-3.0-verification-contract.md) |
 | **A failed task repaired in place, finished work kept (3.0)** | [04-state-machine.md#local-repair-300](04-state-machine.md#local-repair-300) + [09-defects-and-lessons.md#d28](09-defects-and-lessons.md#d28) |
 | **Per-task alternatives: the model proposes, the human picks (2.0)** | [03-tool-contract.md](03-tool-contract.md) + [06-human-in-the-loop.md#choosing-between-alternatives-200](06-human-in-the-loop.md#choosing-between-alternatives-200) + [../docs/plan-2.0-task-alternatives.md](../docs/plan-2.0-task-alternatives.md) |

@@ -4,6 +4,16 @@ Target: one Python process on the user's Windows PC, launched by AnythingLLM ove
 No network, no database, no external service. Everything the corporate LLM needs to behave
 like a state machine lives in one JSON file.
 
+> **3.1.0.** Two things below are no longer the whole picture. (1) The HITL breakpoint is
+> opened by the server, not by a `request_user_approval(ASK_USER)` the model has to remember:
+> the call that finalizes the plan and the call that reports the last task `DONE` publish
+> the request and wait. The diagrams that start with `model ── request_user_approval(ASK_USER)`
+> describe the wait itself, which is unchanged, and the flow `PLANNING_MCP_AUTO_ASK=false`
+> still gives. (2) Between approval and completion the page shows the running plan from a
+> second shared file, `state/runs.json`, and the human can stop the plan or change what is
+> left; both are applied when the agent next reports a task. See
+> [`wiki/06-human-in-the-loop.md`](../wiki/06-human-in-the-loop.md#the-gate-on-the-transition-310).
+
 ---
 
 ## 0. Architectural rules

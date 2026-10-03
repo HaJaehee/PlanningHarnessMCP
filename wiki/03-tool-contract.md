@@ -157,7 +157,17 @@ Optional: `task_list` (required when finalizing), `task_updates`, `revised_goal`
 ## 2. `request_user_approval` — the HITL gate
 
 Required: `decision` ∈ {`ASK_USER`,`APPROVED`,`REJECTED`,`REVISE`}.
-Optional: `plan_summary` (required for `ASK_USER`), `user_comment`, `plan_id`.
+Optional: `plan_summary` (the 3.0 flow only - see below), `user_comment`, `plan_id`.
+
+**Since 3.1.0 the model does not open the request** (`PLANNING_MCP_AUTO_ASK`, default on):
+the server does, in the final `plan_and_think` call and in the last `DONE`, and that call
+waits. With a page this tool is then advertised as *WAITING FOR THE USER* - 
+`decision: "ASK_USER"` and nothing else, called when a response says `APPROVAL_PENDING` -
+and `plan_summary` is not in its schema. Without a page it is *REPORT THE USER'S REPLY*.
+What follows describes what each decision does whenever it is called, in either flow. In
+the 3.0 flow (`PLANNING_MCP_AUTO_ASK=false`) the model calls `ASK_USER` itself, after
+planning and after the last task, and `plan_summary` is required the first time a plan is
+asked about.
 
 - **`ASK_USER`**: publishes the plan to the approval page and, in blocking mode, **holds the
   tool call open until a human decides** (see [06](06-human-in-the-loop.md)). Returns
@@ -193,6 +203,11 @@ Optional: `plan_summary` (required for `ASK_USER`), `user_comment`, `plan_id`.
   `IN_EXECUTION` **without re-approval** — the task list never changed. `_mutate_no` is the
   single place that reading is chosen. See [06](06-human-in-the-loop.md#rework-1130) and
   [D17](09-defects-and-lessons.md#d17).
+- **Asked about a plan that is no longer waiting (3.1.0, D30).** A decision the human made
+  between two calls is applied at the top of this one. `ASK_USER` then answers with it
+  instead of asking again: `COMPLETED` → the confirmation; `DRAFTING` with tasks → the
+  message that changes were asked for, with `user_comment`, `revision_scope` and
+  `revision_targets`, exactly as when the decision is collected by the waiting call.
 - **Approval binds to the exact version shown** (goal + task-title fingerprint). Approving a
   plan version the human never saw → `APPROVAL_NOT_REQUESTED`. An approval left idle past
   `approval_ttl` → `APPROVAL_EXPIRED`. A decision sent while the request is still open on the
@@ -239,6 +254,24 @@ Optional: `result_log`, `plan_id`, `files` (3.0.0, only where the server checks 
   failed task alone, not a re-plan. Attempting another task while `BLOCKED` → `PLAN_BLOCKED`,
   with the same hint.
 - All tasks `DONE` → `COMPLETED`, `next_action: ANSWER_USER`.
+
+**The last `DONE` is the completion report (3.1.0).** With `PLANNING_MCP_AUTO_ASK` on, the
+call that finishes the last task opens the completion request and waits. Its response is
+the human's answer - `COMPLETED` (`ANSWER_USER`), a rework (`reopened_tasks`, `next_task`)
+- or `APPROVAL_PENDING` with "That task is DONE and every task in this plan is finished".
+It carries no `tasks`, like every execution response.
+
+**Requests from the run card (3.1.0).** A stop or a note the human left on the approval
+page is applied by this tool, where the agent reports a task: after a `DONE` is recorded
+and before the next task starts, or before an `IN_PROGRESS` takes effect.
+- A stop answers `ok:false` with `PLAN_PAUSED` (or `APPROVAL_PENDING` while a slice of the
+  wait remains) and the message "That task is DONE. The user paused this plan before the
+  next task." Until the human continues or cancels, every tool but `get_current_plan`
+  answers `PLAN_PAUSED`.
+- A note answers `ok:true`, `plan_status: DRAFTING`, `user_comment`, `tasks_unchanged`,
+  and a hint with the exact `task_updates` argument for the first unfinished task.
+- After the last task, or together with a `FAILED`, there is nothing to apply: see
+  [06](06-human-in-the-loop.md#the-run-card-310).
 
 ## 4. `get_current_plan` — always-safe recovery
 
@@ -293,6 +326,7 @@ Every error maps to a `next_action` that tells the model how to recover. Full li
 | `FILE_NOT_FOUND` | `DONE` listed a file the server looked for and did not find (3.0.0) | `CALL_UPDATE_TASK_PROGRESS` (save it, fix the path, or drop the claim) |
 | `REVISION_INCOMPLETE` | no flagged task was rewritten - or, in a repair, the failed task was not | `CALL_PLAN_AND_THINK` (with the exact `task_updates` argument) |
 | `LOOP_HALTED` | the circuit breaker paused this plan (or, with no plan, stopped a repeating call) | `CALL_REQUEST_USER_APPROVAL` (`ASK_USER`) before the human has been shown the halt; `STOP_AND_WAIT_FOR_USER` after |
+| `PLAN_PAUSED` | the user stopped this plan from its run card (3.1.0); held exactly like a breaker halt | `CALL_REQUEST_USER_APPROVAL` (`ASK_USER`) until the pause card has been shown; `STOP_AND_WAIT_FOR_USER` after |
 | `INTERNAL_ERROR` | something unexpected | `CALL_GET_CURRENT_PLAN` (resync) |
 
 ## Input leniency (invisible to the model)

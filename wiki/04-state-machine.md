@@ -304,6 +304,30 @@ repair text from the tool descriptions.
 Out of scope, as since 1.10: adding, deleting or reordering tasks in a repair. One step replaced
 by two still needs the whole-plan path.
 
+## The gate on the transition, and the run in between (3.1.0)
+
+No new status. Two transitions gained a side effect, and a running plan gained two ways to
+be interrupted. Prose and reasons:
+[06](06-human-in-the-loop.md#the-gate-on-the-transition-310).
+
+- **Finalizing asks.** `DRAFTING → AWAITING_APPROVAL` (a final `task_list`, a `task_updates`
+  rewrite, an auto-submitted draft) opens the plan request in the same call and waits; the
+  response is the human's decision, or `APPROVAL_PENDING`. Likewise
+  `IN_EXECUTION → AWAITING_COMPLETION` on the last `DONE`. Off with
+  `PLANNING_MCP_AUTO_ASK=false`.
+- **A stop from the page** is the halt overlay with `reason: user_pause`: same status, every
+  tool refused with `PLAN_PAUSED` (not `LOOP_HALTED`), lifted only by the human. It is set
+  where the agent reports a task - after a `DONE` is recorded, in place of auto-advance, or
+  before an `IN_PROGRESS` takes effect. Lifting it starts the held task.
+- **A note from the page** is `IN_EXECUTION → DRAFTING` with
+  `pending_revision.origin = "run"`. A repair's rules apply (finished tasks out of reach,
+  `task_updates` expected) except that no particular task must change - one unfinished task
+  at least, `REVISION_INCOMPLETE` otherwise. A whole `task_list` is accepted and carries the
+  finished work onto unchanged titles (`steer_replanned`).
+- **Asking about a plan that is no longer waiting** ([D30](09-defects-and-lessons.md#d30)):
+  `request_user_approval(ASK_USER)` on a `COMPLETED` plan answers with the confirmation, and
+  on a `DRAFTING` plan that has tasks with what the human asked for. Neither opens a request.
+
 ## Two time-based / version-based guards (added after real bugs)
 
 - **Approval expiry** (1.4.0): an `APPROVED`/`IN_EXECUTION` plan left idle past `approval_ttl`

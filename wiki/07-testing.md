@@ -1,6 +1,6 @@
 # 07 · Testing
 
-**740 unit tests + 6 end-to-end smoke tests, all passing** (as of 3.0.0; one unit test skips
+**851 unit tests + 7 end-to-end smoke tests, all passing** (as of 3.1.0; one unit test skips
 where the OS will not let it create a symlink). Standard-library
 `unittest` only. This project's defect history proves the rule: *test the seam before you
 trust it.* See [09-defects-and-lessons.md](09-defects-and-lessons.md).
@@ -15,11 +15,12 @@ python tests/smoke_shared_approval.py    # one page across 2 processes
 python tests/smoke_multi_plan.py         # concurrent plans, 2 processes
 python tests/smoke_sse.py                # SSE transport end-to-end
 python tests/smoke_chunked_approval.py   # chunked approval wait (default mode)
+python tests/smoke_gate_and_run.py       # 3.1: the server asks; stop and note from the page
 ```
 
 Set `PYTHONUTF8=1` on Windows.
 
-`python tools/verify_install.py` runs the unit suite **and five of the six smoke tests** as part
+`python tools/verify_install.py` runs the unit suite **and six of the seven smoke tests** as part
 of the GO/NO-GO acceptance check on the target machine. `smoke_chunked_approval` is *not* in that
 list, even though chunked waiting has been the **default** approval mode since 1.14.0 — so the
 acceptance check does not exercise the path the target machine will actually take.
@@ -139,6 +140,30 @@ use is never evicted; nothing is lost silently; an id is never reused.*
 | `TestComingBackToAnEvictedPlan` | all four tools answer `PLAN_EVICTED` → `ANSWER_USER` with no `active_plans`; the same goal started again is a new plan; an id that never existed is still just unknown; survives a restart; a repeated request is stopped by the breaker |
 | `TestAnIdIsNeverReused` | [D29](09-defects-and-lessons.md#d29): after an eviction, after many, after the remembered list is gone, after retention pruning, and from a pre-3.0 state file |
 
+## Gate and run suite (`tests/test_gate_and_run.py`, 3.1.0)
+
+111 tests on the default configuration, in the order the feature is argued:
+- **The final task list is the request** / **the last DONE is the completion report**: the
+  request opens in that call; an approval, a revision, a rejection and a rework are each the
+  answer to it; choices and criteria are applied there; a slice that ends undecided says what
+  was recorded; the whole lifecycle is N + 2 calls with no `request_user_approval` in it.
+- **Waiting is all that is left of the approval tool**: no `plan_summary`, the same request
+  across calls, a model-made decision still refused, one call waits one slice, a loop stopped
+  in the same call is asked about once.
+- **A decision made between two calls** ([D30](09-defects-and-lessons.md#d30)) - both flows.
+- **Without a page**; **what the tools and the prompt say** in every mode, that the text got
+  shorter, that no hint asks for a summary, that the bypass promises nothing.
+- **The run board** as a store (what survives a refresh, what a failed write means), **what
+  the page shows of a run**, **pause** (15 tests) and **note** (12), then the page template
+  and the two endpoints over real HTTP on an ephemeral port.
+
+**Which flow the older suites run.** They run on the new default wherever that changes
+nothing. The classes and tests that assert the model-asks call sequence step by step are
+pinned to it - `AUTO_ASK = False` on `TestStateMachine` and `TargetedRevisionFixture` (and
+so its five subclasses), `self.legacy()` or `auto_ask=False` on individual tests elsewhere -
+so the 3.0 flow keeps the coverage it had. Three smoke tests set `PLANNING_MCP_AUTO_ASK=false`
+for the same reason; `smoke_gate_and_run` is the default flow end to end.
+
 ## Packaging suite (`tests/test_packaging.py`, 3.0.0)
 
 8 tests. The package is the only thing that reaches the corporate PC, so: every file the
@@ -152,6 +177,10 @@ archive's does.
 These spawn `server.py` exactly as AnythingLLM does and speak JSON-RPC over the pipe. They
 catch things unit tests cannot (threading, real ports, cross-process locks):
 
+- **smoke_gate_and_run** (3.1.0) — a real stdio server and its real page: the plan call
+  answered by a click made while it waits; the run card; a stop that keeps the DONE and
+  holds the next task; continue; a note, the rewrite and its re-approval; the last DONE
+  answered by the confirmation. 24 checks.
 - **smoke_stdio** — full lifecycle + sloppy-input recovery + Korean round-trip + restart persistence.
 - **smoke_blocking_approval** — 6 scenarios: tool blocks, heartbeat with token, click→APPROVED,
   every call returns inside the client's 60 s limit, the request survives a spent budget and a

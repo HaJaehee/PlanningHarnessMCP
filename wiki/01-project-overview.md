@@ -39,6 +39,9 @@ response tells it exactly what to do next.
 
 - **`plan_and_think`** — mandatory entry point; one thinking step per call, final call carries `task_list`.
 - **`request_user_approval`** — the HITL gate: `ASK_USER` → (blocking wait) → `APPROVED`/`REJECTED`/`REVISE`.
+  Since 3.1.0 the server opens the request itself (in the final `plan_and_think` call and in
+  the last `DONE`), so the model calls this tool only to keep waiting on a decision that has
+  not come yet.
 - **`update_task_progress`** — `IN_PROGRESS` before each task, `DONE`/`FAILED` after; refuses to run unapproved.
 - **`get_current_plan`** — always-safe recovery after context truncation.
 

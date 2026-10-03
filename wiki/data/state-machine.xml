@@ -55,6 +55,13 @@
     <transition from="halted"            call="human: REJECTED (cancel)"                to="CANCELLED"/>
     <transition from="any unfinished, least recently used, idle >= evict_min_idle" call="(another conversation starts a plan while max_active_plans are active)" to="(removed)" note="3.0.0 LRU eviction, PLANNING_MCP_EVICT_LRU: the plan is removed, its id remembered in state.evicted, its tasks and evidence written to the audit log (plan_evicted), its request withdrawn from the page. Every active plan in use -> the new plan is refused (PLAN_AMBIGUOUS), as before 3.0"/>
     <transition from="any"               call="get_current_plan"                        to="(unchanged)" note="never fails; reports halted / draft_tasks / thinking_steps_left"/>
+    <transition from="DRAFTING"          call="plan_and_think(final task_list / task_updates)" to="AWAITING_APPROVAL, request open" note="3.1.0 PLANNING_MCP_AUTO_ASK: the server opens the plan request in this call and waits; the response is the human's decision, or APPROVAL_PENDING saying the plan was recorded. Not under autoapprove; suppressed when a loop trip was decided in the same call"/>
+    <transition from="IN_EXECUTION"      call="update_task_progress(DONE, last task)"    to="AWAITING_COMPLETION, request open" note="3.1.0: the server opens the completion report in this call and waits; COMPLETED / rework / APPROVAL_PENDING is the answer to the DONE"/>
+    <transition from="APPROVED/IN_EXECUTION, stop asked on the run card" call="update_task_progress(DONE, not the last) / (IN_PROGRESS)" to="(same status)+halt reason=user_pause" note="3.1.0: the DONE is recorded, the next task is NOT started; every tool refuses with PLAN_PAUSED; pause card (HALT, origin user) on the page"/>
+    <transition from="halted (user_pause)" call="human: REVISE (continue)"                to="IN_EXECUTION" note="3.1.0: the held task is started (auto-advance); what the human typed - or their memo from the stop - leads the next hint"/>
+    <transition from="APPROVED/IN_EXECUTION, note asked on the run card" call="update_task_progress(DONE, not the last) / (IN_PROGRESS)" to="DRAFTING" note="3.1.0: the DONE is recorded; pending_revision {targets: first unfinished task, origin: run, open: the other unfinished tasks}; rework_from_completion set so finished work survives a whole task_list too"/>
+    <transition from="DRAFTING + run marker" call="plan_and_think(final, task_updates for unfinished tasks)" to="AWAITING_APPROVAL, request open" note="3.1.0: each rewritten task carries the note (revision_note) and its previous wording; DONE tasks untouched; audited tasks_steered"/>
+    <transition from="COMPLETED / DRAFTING with tasks" call="request_user_approval(ASK_USER)" to="(unchanged)" note="3.1.0 (D30): a plan that is no longer waiting is not asked about again - the answer is the confirmation, or what the human asked to change"/>
   </transitions>
 
   <guards>
@@ -74,6 +81,8 @@
     <guard call="update_task_progress(any)" whenState="AWAITING_COMPLETION" error="COMPLETION_PENDING"/>
     <guard call="any except get_current_plan" whenState="halted" error="LOOP_HALTED" note="1.16.0; waits instead when the halt card is open on the page"/>
     <guard call="request_user_approval(APPROVED/REJECTED/REVISE)" whenState="halted, card open on the page" error="APPROVAL_PENDING" note="D20 applied to halts: only the human lifts a halt"/>
+    <guard call="any except get_current_plan" whenState="halted, reason user_pause" error="PLAN_PAUSED" note="3.1.0: the human stopped the plan from its run card; same hold as LOOP_HALTED under other words"/>
+    <guard call="plan_and_think(task_updates naming only finished tasks)" whenState="run marker pending" error="REVISION_INCOMPLETE" note="3.1.0: at least one unfinished task must be rewritten; nothing is written"/>
   </guards>
 
   <leniencies note="rejecting these would strand a weak model">

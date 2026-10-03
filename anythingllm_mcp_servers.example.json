@@ -1,6 +1,6 @@
 {
   "_README": [
-    "AnythingLLM MCP 서버 등록 예시. (planning-mcp 3.0.0 기준)",
+    "AnythingLLM MCP 서버 등록 예시. (planning-mcp 3.1.0 기준)",
     "서버 버전은 config.py 의 SERVER_VERSION 이며, MCP initialize 의 serverInfo.version 으로 보고됩니다.",
     "",
     "1. AnythingLLM의 Agent Skills -> MCP Servers 화면에서 설정 파일의 실제 경로를 확인합니다.",
@@ -16,7 +16,11 @@
     "",
     "3.0.0: 서버가 결과 파일의 존재를 확인하게 하려면 env 에 PLANNING_MCP_ARTIFACT_ROOTS 를 추가하고,",
     "에이전트의 도구가 파일을 저장하는 폴더를 ; 로 구분해 적으십시오. 예: D:/work;D:/reports",
-    "비워 두면 파일을 확인하지 않습니다. 이 폴더 밖은 어떤 경우에도 확인하지 않습니다."
+    "비워 두면 파일을 확인하지 않습니다. 이 폴더 밖은 어떤 경우에도 확인하지 않습니다.",
+    "",
+    "3.1.0: 승인 요청은 서버가 직접 엽니다. 따로 설정할 것은 없습니다.",
+    "이전처럼 모델이 request_user_approval 로 승인을 요청하게 하려면 env 에 PLANNING_MCP_AUTO_ASK=false 를,",
+    "승인 페이지에 실행 중인 계획을 표시하지 않으려면 PLANNING_MCP_RUN_CONTROL=false 를 추가하십시오."
   ],
 
   "mcpServers": {

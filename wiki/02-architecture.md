@@ -10,6 +10,7 @@ python server.py                         MCP server "planning-mcp"
       │
       ├── state/plan_state.json           active + archived plans (source of truth)
       ├── state/approval.json             the human-approval queue (shared across processes)
+      ├── state/runs.json                 (3.1.0) the plans that are executing, and what the human asked of them on the page
       ├── state/audit.jsonl               append-only event log
       ├── state/.txnlock                  cross-process lock for plan writes
       └── state/.approvallock             cross-process lock for approval writes

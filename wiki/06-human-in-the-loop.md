@@ -502,8 +502,114 @@ Verified in a real browser: the label on the idle screen and above a plan and a 
 request; the two mismatch lines; the dialog's three lines; closing by button and by Esc; the
 icon still working after a decision; no console error.
 
+## The gate on the transition (3.1.0)
+
+Until 3.1 the gate was a tool the model had to remember: finalize the plan, *then* call
+`request_user_approval`; finish the last task, *then* call it again. The enforcement half
+never depended on that - execution stays locked either way - but the lifecycle did: a model
+that answered the user instead of asking left a plan nobody was ever shown.
+
+Both moments are state transitions the server already sees, so it asks at them itself
+(`_asks_itself`; `PLANNING_MCP_AUTO_ASK`, default on):
+
+| the model's call | what the server does in that call |
+|---|---|
+| `plan_and_think` with the final `task_list` (or `task_updates`) | records the plan, opens the PLAN request, waits |
+| `update_task_progress` `DONE` on the last task | records it, opens the COMPLETION request, waits |
+
+The wait is the one `request_user_approval` always did - same slices, same request reuse,
+same fingerprint check (`_ask_user(own=True)` → `_wait_on` → `_settle`). A decision made
+during it is the answer to that call. If the slice ends first the response is
+`APPROVAL_PENDING` and says what the call did record ("Your plan is recorded (3 tasks) ...",
+"That task is DONE and every task in this plan is finished ...") so the model does not send
+it again; `request_user_approval(ASK_USER)` then keeps waiting. With a page that is the only
+thing the tool is still for; without one it reports the user's reply.
+
+Consequences:
+
+- **No `plan_summary`.** The model never opens the request, so it has no overview to write.
+  The page's 개요 is the `thought` of the call that recorded the plan (nothing, if it sent
+  none). In the 3.0 flow `plan_summary` is still required the first time a plan is asked
+  about, and nowhere else: a completion report shows each task's evidence, and a request
+  already on the page keeps the overview it was opened with.
+- **One call, one slice.** `_CallCtx.wait_spent` is subtracted from every later wait in the
+  same call. A loop trip decided earlier in the call (a respawn) suppresses the plan request;
+  the halt card, which shows the same task list, asks instead.
+- **Modes.** `chunked`: as above. `return`: the call returns `display_to_user` at once and
+  the model ends its turn. No page: the call returns `display_to_user`, and the model reports
+  the reply - `APPROVED` is accepted with no `ASK_USER` in between, because the plan *was*
+  shown. `PLANNING_MCP_AUTOAPPROVE`: nothing is asked, and the tool texts are the 3.0 ones.
+- **An agent still on the 3.0 prompt keeps working**: its `request_user_approval(ASK_USER)`
+  joins the request that is already open.
+- **A decision made between two calls** is collected at the top of the next one. When that
+  call is the waiting call itself the plan is no longer waiting to be asked about, and it is
+  not asked about again ([D30](09-defects-and-lessons.md#d30)).
+
+## The run card (3.1.0)
+
+Between the plan approval and the completion report the page used to be empty, and the host
+this server is written for asks nothing before it runs a tool. The human could neither see
+the work nor stop it.
+
+`state/runs.json` (`approval.RunBoard`) lists the plans that are executing: goal, tasks with
+status, the evidence and file checks of the finished ones, and when the entry last changed
+("에이전트의 마지막 보고"). It is derived, never edited by a handler: `_sync_runs` rebuilds it
+from the plan state at the end of every call and before every wait, so a plan is on it
+exactly while it is `APPROVED` / `IN_EXECUTION`, not halted, and its approval has not gone
+cold (`expires_at`). Its own file rather than a list in `approval.json`: an older process on
+the same state directory rewrites that file whole, and would drop a stop without anyone
+noticing.
+
+A run card is not a question - no alarm, no title flash. It carries one text box and two
+buttons. Both are recorded as a *request* on the board (`POST /api/control`) and applied by
+the server when the agent next reports a task:
+
+- **멈춤 (`PAUSE`).** The `DONE` is recorded first; the next task is not started; the plan is
+  held with `halt.reason = "user_pause"`. The halt machinery of 1.16 is reused whole - card,
+  wait, three answers - under other words: 실행 멈춤, 멈춘 이유, [계속 진행] / [의견 전달 후
+  계속] / [계획 취소], error code `PLAN_PAUSED`, and a hint that says the user paused the plan
+  and nothing about repeating. Continuing starts the task the stop held back
+  (`_auto_advance`), and what the human typed leads the next hint (`plan.guidance`).
+- **의견 전달 (`NOTE`).** The unfinished tasks are opened through local repair with a third
+  origin: `pending_revision = {targets: {first unfinished: note}, origin: "run", open: [the
+  rest]}`. The model answers with `task_updates` for the tasks the note changes (at least
+  one; a finished task is ignored), each rewritten task carries the note and its previous
+  wording, and the change goes back to the human in that call. Their words end up in the task
+  text - re-read, re-approved, restated at execution - not in a hint the model is trusted to
+  remember.
+
+What the page says about timing is exactly what is true: the request is shown as *asked*
+("멈춤을 요청하셨습니다 ...") until the agent reports, it can be taken back with [요청 취소]
+(the words return to the box), and "이미 실행 중인 도구는 중단되지 않습니다".
+
+Edges, each decided so that nothing typed is lost:
+
+- applied before a task is started (`IN_PROGRESS`) as well as after a `DONE`;
+- a `DONE` that is refused does not spend the request - it applies when the `DONE` is accepted;
+- after the **last** task there is nothing left to stop or change: the completion report is
+  asked and shows the words ("실행 중 남기신 의견 ..."; `plan.run_note`, cleared when the
+  report is answered);
+- with a **`FAILED`** the failure stops the plan anyway: the words go to the model in that
+  response ("the user also wrote ...") where they can shape the repair;
+- a memo typed beside 멈춤 is shown on the pause card and becomes the direction if the human
+  resumes without typing another;
+- consumed only after the plan is saved (`_consume_run_control`), so a write that fails
+  leaves the request on the page instead of dropping it.
+
+The card redraws each time the agent reports a task. What is typed is a draft like any other
+and survives the redraw; the caret is put back (`focusKey` / `refocus`).
+
+`PLANNING_MCP_RUN_CONTROL=false` turns the card and both controls off.
+
+Verified in a real browser against a real server: the request opened by the plan call (with
+the model's sentence as 개요), the run card appearing on approval and following each task, a
+stop asked mid-task (shown as asked, applied on the next report, task kept), continue, a note
+(text and caret surviving a redraw; the re-approval card marking the rewritten task), and the
+completion report opened by the last DONE.
+
 ## Config knobs
 
 `PLANNING_MCP_BLOCKING_APPROVAL` (default true), `_APPROVAL_PORT` (8765), `_APPROVAL_TIMEOUT`
-(900), `_APPROVAL_OPEN_BROWSER` (true), `_APPROVAL_TTL` (1800). Full list:
+(900), `_APPROVAL_OPEN_BROWSER` (true), `_APPROVAL_TTL` (1800), `_AUTO_ASK` (true, 3.1.0),
+`_RUN_CONTROL` (true, 3.1.0). Full list:
 [data/config.json](data/config.json).

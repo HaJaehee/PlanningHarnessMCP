@@ -441,6 +441,70 @@ tool-description wording - except two that follow a decision: `agents.md` must n
 under 2,600 characters (was 4,200), and the README is required to point at `agents.md`
 rather than to contain it.
 
+### 3.1.0 — the server asks, and the human can step in while it runs
+
+The target is a mid-sized model that already thinks (CoT) and remembers on its own, on a
+host with no approval step of its own. What such a model lacks is the gate - so the gate is
+where 3.1 spends its effort, in two directions: ask less of the model, give the human more.
+
+- **The gate is on the transition, not on a call.** The final `plan_and_think` call and the
+  last `DONE` *are* the approval requests: the server opens the request in the call that
+  recorded the plan (or finished the work), and that call waits on the human exactly as
+  `request_user_approval` did. A decision made during the wait is the answer to that call. A
+  targeted revision, a repair and a note from the run card go back to the human the same
+  way, in the call that rewrote the tasks. `request_user_approval` is left with one job: keep
+  waiting when a slice ended undecided (`APPROVAL_PENDING`) - or, with no page, report the
+  user's reply. `plan_summary` is gone from that flow; the model's own sentence (`thought`)
+  is the overview on the page. `PLANNING_MCP_AUTO_ASK=false` restores the flow of 3.0 with
+  its texts; nothing is asked under `PLANNING_MCP_AUTOAPPROVE`.
+- **Less text, not more.** Two rules left the prompt (8 → 6; 2,275 → 2,126 characters), and
+  the tool text shrank: 3,486 → 3,406 estimated tokens (standard), 3,325 → 3,237
+  (reasoning). The approval tool is advertised as *WAITING FOR THE USER*, execution became
+  STEP 2, hints no longer ask for a `plan_summary`, and the server instructions no longer
+  name `request_user_approval`. Not measured on the corporate model.
+- **One call waits one slice.** A call that has already waited gets only what is left of the
+  client's budget (`_CallCtx.wait_spent`), and a loop trip decided earlier in the same call
+  suppresses the plan request - the halt card asks instead.
+- **The run card.** Between the two gates the page said "no pending requests". It now shows
+  each executing plan - tasks, statuses, the evidence of the finished ones, when the agent
+  last reported - from a new shared file, `state/runs.json` (`RunBoard`), rebuilt by one
+  `_sync_runs` at the end of every call and before every wait. A run card raises no alarm.
+- **Stop (멈춤).** Asked for on the card, applied when the agent next reports a task: the
+  `DONE` is recorded, the next task does not start, and the plan is held by the breaker's
+  halt machinery under another reason (`halt.reason = "user_pause"`, error code
+  `PLAN_PAUSED`, a card titled 실행 멈춤). The human continues - with or without a direction,
+  which leads the next hint - or cancels. Continuing starts the task the stop held back.
+- **Change what is left (의견 전달).** The note opens the unfinished tasks through the
+  local-repair machinery with a third origin (`pending_revision.origin = "run"`): the model
+  rewrites the tasks the note affects with `task_updates`, each carries the note
+  (`revision_note`), finished tasks are out of reach, and the human approves the change
+  before anything continues. A whole `task_list` is accepted too and keeps the finished work
+  of tasks whose wording survived.
+- **Nothing typed is dropped.** A request not yet applied can be taken back and its words
+  return to the box; a stop or a note that arrives after the last task is shown on the
+  completion report; one that meets a failure goes to the model with the failure; a memo
+  typed beside 멈춤 becomes the direction if the human resumes without typing another.
+- **[D30](09-defects-and-lessons.md#d30)** fixed: a decision made between two calls was
+  undone by the `request_user_approval(ASK_USER)` that collected it - a confirmed plan went
+  back to `AWAITING_APPROVAL`, and a plan sent back for changes was shown again unchanged
+  while the model never received the comment. The ordinary path in `return` mode since 1.14.
+- New: settings `PLANNING_MCP_AUTO_ASK` and `PLANNING_MCP_RUN_CONTROL` (both on); error code
+  `PLAN_PAUSED`; audit events `run_paused`, `run_note_applied`, `tasks_steered`,
+  `steer_replanned`, `run_control_moot`, and `by_server` on `approval_requested` /
+  `completion_verification_requested`; `POST /api/control`, and `runs` in
+  `GET /api/pending`; `Plan.run_note`.
+- Minor version: the default flow changed, but every 3.0 call sequence is still accepted - an
+  agent on the 3.0 prompt calls `request_user_approval(ASK_USER)` and joins the request the
+  server already opened. The state file gained one optional field.
+
+111 new tests (`tests/test_gate_and_run.py`) and a seventh smoke test
+(`tests/smoke_gate_and_run.py`, added to `verify_install.py`). The older suites run on the
+new default except where they assert the model-asks call sequence step by step; those
+classes and tests are pinned to it, so the 3.0 flow keeps its coverage
+([07](07-testing.md#gate-and-run-suite-teststest_gate_and_runpy-310)). Two tests changed
+expectation: the version, and the page-template string of the halt card's task row.
+Verified in a real browser - see [06](06-human-in-the-loop.md#the-run-card-310).
+
 ---
 
 ## Git commit ↔ version map

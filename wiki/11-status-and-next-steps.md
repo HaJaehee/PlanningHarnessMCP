@@ -1,6 +1,45 @@
 # 11 · Status and Next Steps
 
-## Current state (as of version 3.0.0, 2026-10-03)
+## Current state (as of version 3.1.0, 2026-10-03)
+
+- **3.1.0 - the gate on the transition, and the run in between.** For a mid-sized model that
+  already thinks and remembers, on a host with no approval step. The server asks the human
+  itself - the final `plan_and_think` call and the last `DONE` are the approval requests -
+  so `request_user_approval` is only the call that keeps waiting. The approval page shows a
+  running plan and takes a stop or a note, applied when the agent next reports a task.
+  Changelog: [08](08-changelog.md); mechanism:
+  [06](06-human-in-the-loop.md#the-gate-on-the-transition-310).
+- **Tests:** 851 unit + 7 smoke, all passing (`tests/test_gate_and_run.py`,
+  `tests/smoke_gate_and_run.py` are new; one unit test skips where symlinks cannot be
+  created). `verify_install.py` runs the new smoke test.
+- **Committed on `develop` (prompt, code, docs); not pushed.** The source-only package was built and
+  verified (`verify_install.py`: GO, 50 manifest files, 851 unit + 6 of the 7 smoke tests);
+  the `--with-python` variant was not rebuilt.
+- **Repaste the prompt when deploying.** `agents.md` lost two rules (8 → 6). An agent on the
+  3.0 prompt still works - its `request_user_approval(ASK_USER)` joins the request the
+  server already opened - but it spends two calls per request that are no longer needed.
+- **Nothing to configure.** Both settings default on. `PLANNING_MCP_AUTO_ASK=false` is the
+  flow of 3.0, texts included; `PLANNING_MCP_RUN_CONTROL=false` hides the run card.
+
+### 3.1.0 follow-up (field)
+
+None of this could be measured here.
+1. **Does the model still call `request_user_approval` after planning?** Harmless, but it is
+   the call 3.1 removed: `approval_requested` lines without `by_server` on a 3.1 server are
+   the model asking on its own. If a model does it every time, its prompt was not repasted.
+2. **Does it re-send the plan or the DONE after `APPROVAL_PENDING`?** `call_held_for_human`
+   right after a `by_server` request is that. The response says what was recorded
+   ("Your plan is recorded ..."); if the model re-sends anyway, the wording needs work.
+3. **Are stop and note used, and do they arrive in time?** `run_paused` and
+   `run_note_applied` against `run_control_moot` (the request met the last task or a
+   failure). Many moot requests mean tasks are too long for "applied at the next report" -
+   the case for the execution gateway below.
+4. **Does the model answer a note with `task_updates`?** `tasks_steered` against
+   `steer_replanned` (it replaced the whole list) and `REVISION_INCOMPLETE` after
+   `run_note_applied` (it rewrote a finished task or nothing).
+5. **The shorter tool text and prompt** - the same question as 3.0's trim, one step further.
+
+### 3.0.0 (previous)
 
 - **3.0.0 - the verification contract and local repair.** Per task, `done_when` says what exists
   or is true when it is finished; the human approves it with the plan and may write it on the
@@ -188,6 +227,12 @@ that asserts the guarantee, watch it fail.
   `task_list`. That count against `tasks_revised` is the metric; if it stays high for the
   corporate model, the fix is prompt/hint wording, not more server logic.
 
+- **Stopping a tool that is already running.** 3.1's stop is applied when the agent next
+  reports a task, because that is the first moment the server hears from it. A task that
+  runs for minutes cannot be interrupted. Only the gateway below would change that.
+- **Per-task notes on the run card, and structural edits.** The note is one text box for
+  everything that is left; adding, deleting or reordering tasks still needs a whole
+  `task_list` (see the first item).
 - **Gate execution itself.** The gate governs our own tools; the model executes with other
   AnythingLLM skills we can't intercept. To close that, execution would have to become one of
   *our* tools (e.g. `execute_step` checking `plan_status == APPROVED`). Significant redesign;
