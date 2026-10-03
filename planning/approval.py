@@ -696,7 +696,12 @@ _PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>planning-mcp 승인</title>
 <style>
-:root{color-scheme:light dark}
+/* --sub: where everything under a task title starts - the title's own left edge, which
+   is the number column (.tn, 1.4em at .95rem) plus the gap of .tt (.55rem). In rem on
+   purpose. These rows used to be indented 1.95em each, and since each has its own
+   font size, each got its own indent: the 태스크 완료 기준 label, the 의견 label, the
+   options and the evidence lines all started a few pixels apart. */
+:root{color-scheme:light dark;--sub:1.88rem}
 body{font-family:system-ui,"Segoe UI","Malgun Gothic",sans-serif;margin:0;padding:2rem 1rem;
      background:#f6f7f9;color:#16181d}
 @media(prefers-color-scheme:dark){body{background:#15171c;color:#e8eaed}}
@@ -771,12 +776,12 @@ dialog.about::backdrop{background:rgba(0,0,0,.35)}
 .tn{opacity:.5;font-variant-numeric:tabular-nums;min-width:1.4em}
 .badge{font-size:.72rem;padding:.1rem .4rem;border-radius:4px;background:#e6e8eb;opacity:.8}
 @media(prefers-color-scheme:dark){.badge{background:#2c3038}}
-.was{font-size:.82rem;opacity:.55;margin:.25rem 0 0 1.95em;text-decoration:line-through}
-.note{font-size:.82rem;margin:.25rem 0 0 1.95em;color:#8a5a00}
+.was{font-size:.82rem;opacity:.55;margin:.25rem 0 0 var(--sub);text-decoration:line-through}
+.note{font-size:.82rem;margin:.25rem 0 0 var(--sub);color:#8a5a00}
 @media(prefers-color-scheme:dark){.note{color:#d9a441}}
 /* The agent's evidence for a finished task. Shown only on a completion report - it is
    the thing the human is actually being asked to judge. */
-.ev{font-size:.86rem;opacity:.75;margin:.25rem 0 0 1.95em;line-height:1.55;
+.ev{font-size:.86rem;opacity:.75;margin:.25rem 0 0 var(--sub);line-height:1.55;
     white-space:pre-wrap;word-break:break-word}
 .ev.none{opacity:.45;font-style:italic}
 /* Superseded output on a row the human sent back. Muted rather than struck through -
@@ -784,7 +789,7 @@ dialog.about::backdrop{background:rgba(0,0,0,.35)}
 .ev.old{opacity:.45}
 /* Per-task comment boxes are collapsed by default. Nine open textareas turn a task list
    into a form; the plan itself is what the human came here to read. */
-.tcrow{display:none;gap:.5rem;align-items:baseline;margin:.4rem 0 0 1.95em}
+.tcrow{display:none;gap:.5rem;align-items:baseline;margin:.4rem 0 0 var(--sub)}
 .task.open .tcrow{display:flex}
 /* The box sits beside its label, the way a criterion does - which is why it needs no
    sample sentence inside it. */
@@ -819,7 +824,7 @@ textarea.tc{flex:1 1 auto;width:auto;min-width:0;min-height:2.4rem;margin:0;font
 .scope input{margin:0}
 /* 2.0.0 - a task that offers a choice. The recommendation is pre-selected and marked;
    each option carries its trade-off, so the human can pick without asking. */
-.opts{display:flex;flex-direction:column;gap:.3rem;margin:.4rem 0 0 1.95em;font-size:.9rem}
+.opts{display:flex;flex-direction:column;gap:.3rem;margin:.4rem 0 0 var(--sub);font-size:.9rem}
 .opt{display:flex;gap:.45rem;align-items:baseline;cursor:pointer;line-height:1.45}
 .opt input{margin:0;flex:0 0 auto}
 .optl{opacity:.55;min-width:1.1em;font-variant-numeric:tabular-nums}
@@ -836,7 +841,7 @@ textarea.tc{flex:1 1 auto;width:auto;min-width:0;min-height:2.4rem;margin:0;font
    approved it or wrote it, and what the server itself found on disk. A task with no
    criterion shows only a small button, for the reason the comment boxes are collapsed:
    the plan is what the human came to read. */
-.dw{display:flex;gap:.5rem;align-items:baseline;margin:.3rem 0 0 1.95em;font-size:.86rem;
+.dw{display:flex;gap:.5rem;align-items:baseline;margin:.3rem 0 0 var(--sub);font-size:.86rem;
     line-height:1.5}
 .dw.hid{display:none}
 .dwl{flex:0 0 auto;font-size:.72rem;font-weight:600;letter-spacing:.04em;opacity:.5}
@@ -853,7 +858,7 @@ input.dwi{display:none;flex:1 1 auto;min-width:0;box-sizing:border-box;border-ra
 .dw.changed .dwl{color:#8a5a00;opacity:1}
 .tcbtn.dwadd{margin-left:auto}
 .tcbtn.dwadd+.tcbtn{margin-left:0}
-.ck{font-size:.84rem;margin:.2rem 0 0 1.95em;line-height:1.5;word-break:break-word}
+.ck{font-size:.84rem;margin:.2rem 0 0 var(--sub);line-height:1.5;word-break:break-word}
 .ck.ok{color:#1a7f37}.ck.warn{color:#8a5a00}.ck.dim{opacity:.6}
 @media(prefers-color-scheme:dark){.ck.ok{color:#5dbb77}.ck.warn{color:#d9a441}}
 .took{font-size:.76rem;opacity:.5;white-space:nowrap}

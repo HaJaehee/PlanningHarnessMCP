@@ -499,6 +499,9 @@ where 3.1 spends its effort, in two directions: ask less of the model, give the 
   like 의견; once there is text the field stays, because that text travels with the
   approval. Each of the two buttons now shows the open state of its own field (restoring
   a comment used to mark 완료 기준 추가 as expanded instead of 의견).
+- **One left line under a task title.** The criterion row, the comment row, the options and
+  the evidence lines were each indented in em of their own font size and so started a few
+  pixels apart; they share one indent now (`--sub`), the title's own left edge.
 - **Nothing typed is dropped.** A request not yet applied can be taken back and its words
   return to the box; a stop or a note that arrives after the last task is shown on the
   completion report; one that meets a failure goes to the model with the failure; a memo

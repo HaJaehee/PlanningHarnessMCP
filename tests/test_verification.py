@@ -1246,6 +1246,17 @@ class TestPageTemplate(unittest.TestCase):
         self.assertNotIn("task.querySelector('.tcbtn')", _PAGE)
         self.assertIn("if(add)add.setAttribute('aria-expanded','true');", _PAGE)
 
+    def test_everything_under_a_task_title_starts_on_one_line(self):
+        """Each row under a title has its own font size, so an indent in em gave each its
+        own left edge - the criterion label and the comment label sat 4px apart. One
+        length in rem, said once."""
+        css = _PAGE[:_PAGE.index("</style>")]
+        self.assertIn("--sub:1.88rem", css)
+        for selector in (".was{", ".note{", ".ev{", ".tcrow{", ".opts{", ".dw{", ".ck{"):
+            at = css.index(selector)
+            self.assertIn("0 0 var(--sub)", css[at:css.index("}", at)], selector)
+        self.assertNotIn("0 0 1.95em", css)  # no rule still uses the old em indent
+
     def test_the_small_row_buttons_look_like_buttons(self):
         """의견, 완료 기준 추가 and 수정 were flat grey at 65% opacity and were missed.
         They are bold and slightly raised, in both colour schemes."""

@@ -9,11 +9,11 @@
   running plan and takes a stop or a note, applied when the agent next reports a task.
   Changelog: [08](08-changelog.md); mechanism:
   [06](06-human-in-the-loop.md#the-gate-on-the-transition-310).
-- **Tests:** 865 unit + 7 smoke, all passing (`tests/test_gate_and_run.py`,
+- **Tests:** 866 unit + 7 smoke, all passing (`tests/test_gate_and_run.py`,
   `tests/smoke_gate_and_run.py` are new; one unit test skips where symlinks cannot be
   created). `verify_install.py` runs the new smoke test.
 - **Committed on `develop` (prompt, code, docs); not pushed.** The source-only package was built and
-  verified (`verify_install.py`: GO, 50 manifest files, 865 unit + 6 of the 7 smoke tests);
+  verified (`verify_install.py`: GO, 50 manifest files, 866 unit + 6 of the 7 smoke tests);
   the `--with-python` variant was not rebuilt.
 - **Repaste the prompt when deploying.** `agents.md` lost two rules (8 → 6). An agent on the
   3.0 prompt still works - its `request_user_approval(ASK_USER)` joins the request the
