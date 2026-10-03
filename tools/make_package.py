@@ -35,6 +35,10 @@ from planning.config import SERVER_VERSION  # noqa: E402
 INCLUDE_FILES = [
     "server.py",
     "README.md",
+    # The agent system prompt. Since 3.0.0 the README no longer carries a copy of it -
+    # it names this file as the thing to paste - so a package without it would point
+    # the operator at a file that is not there.
+    "agents.md",
     ".gitignore",
     "anythingllm_mcp_servers.example.json",
 ]
@@ -133,6 +137,29 @@ PATH changes.
 """
 
 
+def manifest_text(files: list[Path], built: str, runtime_line: str | None = None) -> str:
+    """Per-file SHA-256 lines for `files`, plus the bundled runtime's line if given."""
+    lines = [
+        "# planning-mcp transfer manifest",
+        f"# version      : {SERVER_VERSION}",
+        f"# built        : {built}",
+        f"# files        : {len(files)}",
+        f"# total bytes  : {sum(f.stat().st_size for f in files)}",
+        "# python       : 3.9 or newer (developed and tested on 3.12)",
+        "# dependencies : none - Python standard library only",
+        "#",
+        "# Verify on arrival with:  python tools/verify_install.py",
+        "#",
+        "# sha256                                                            size  path",
+    ]
+    for path in files:
+        rel = path.relative_to(ROOT).as_posix()
+        lines.append(f"{sha256(path)}  {path.stat().st_size:>7}  {rel}")
+    if runtime_line:
+        lines.append(runtime_line)
+    return "\n".join(lines) + "\n"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -164,34 +191,23 @@ def main() -> int:
         print("Nothing to package.")
         return 1
 
-    total = sum(f.stat().st_size for f in files)
-    manifest_lines = [
-        "# planning-mcp transfer manifest",
-        f"# version      : {SERVER_VERSION}",
-        f"# built        : {datetime.datetime.now().astimezone().replace(microsecond=0).isoformat()}",
-        f"# files        : {len(files)}",
-        f"# total bytes  : {total}",
-        "# python       : 3.9 or newer (developed and tested on 3.12)",
-        "# dependencies : none - Python standard library only",
-        "#",
-        "# Verify on arrival with:  python tools/verify_install.py",
-        "#",
-        "# sha256                                                            size  path",
-    ]
-    for path in files:
-        rel = path.relative_to(ROOT).as_posix()
-        manifest_lines.append(f"{sha256(path)}  {path.stat().st_size:>7}  {rel}")
-
     runtime_note = ""
+    runtime_line = None
     if embed is not None:
         embed_digest = sha256(embed)
-        embed_rel = f"runtime/{embed.name}"
-        manifest_lines.append(f"{embed_digest}  {embed.stat().st_size:>7}  {embed_rel}")
+        runtime_line = f"{embed_digest}  {embed.stat().st_size:>7}  runtime/{embed.name}"
         runtime_note = RUNTIME_NOTE.format(
             name=embed.name, digest=embed_digest, size=embed.stat().st_size
         )
 
-    manifest = "\n".join(manifest_lines) + "\n"
+    built = datetime.datetime.now().astimezone().replace(microsecond=0).isoformat()
+    # Two manifests, because they describe two different trees. The archive's names the
+    # bundled runtime zip; the repository's must not - the working tree has no runtime/
+    # zip, and a manifest that lists one makes verify_install fail here with "missing".
+    # Writing the archive's manifest over the repo's is what used to force "build
+    # --with-python first, source-only last".
+    manifest = manifest_text(files, built)
+    archive_manifest = manifest_text(files, built, runtime_line)
     (ROOT / "MANIFEST.txt").write_text(manifest, encoding="utf-8")
 
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -199,7 +215,7 @@ def main() -> int:
             rel = path.relative_to(ROOT).as_posix()
             zf.write(path, f"planning-mcp/{rel}")
             print(f"  + {rel}")
-        zf.writestr("planning-mcp/MANIFEST.txt", manifest)
+        zf.writestr("planning-mcp/MANIFEST.txt", archive_manifest)
         print("  + MANIFEST.txt")
         if embed is not None:
             # Stored, not deflated: it is already compressed, and leaving the bytes
