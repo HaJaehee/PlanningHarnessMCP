@@ -23,7 +23,7 @@
 
 | 환경 변수 | 기본값 | thinking 모델 권장 | 설명 |
 |---|---|---|---|
-| `PLANNING_MCP_MODEL_PROFILE` | `standard` | **`reasoning`** | 도구 설명을 "한 번의 호출로 계획을 기록하라"로 바꿉니다. `step_number`·`total_steps`·`revises_step`을 노출하지 않습니다. 2.0.0부터는 "두 방법 사이에서 망설여지면 다시 생각하지 말고 대안(`alternatives`)으로 제시하라, 사용자가 고른다"는 지시도 함께 들어갑니다. |
+| `PLANNING_MCP_MODEL_PROFILE` | `standard` | **`reasoning`** | 도구 설명을 "한 번의 호출로 계획을 기록하라"로 바꿉니다. `step_number`·`total_steps`·`revises_step`을 노출하지 않습니다. 2.0.0부터는 "두 방법 사이에서 망설여지면 다시 생각하지 말고 대안(`alternatives`)으로 제시하라, 사용자가 고른다"는 지시도 함께 들어갑니다. 3.0.0부터는 "태스크를 다시 확인하고 싶으면 지금 확인하지 말고 확인할 내용을 `done_when`에 적어라, 태스크가 끝날 때 확인된다"는 지시가 추가됩니다. 한 번 더 확인하려는 충동에 갈 곳을 주기 위한 것이며, 효과는 `tools/loop_report.py`의 `reconsider` 수치로 확인합니다. |
 | `PLANNING_MCP_MAX_THINKING_STEPS` | `0` (프로필 기본값: standard 8, reasoning 2) | 그대로 | 한 계획 라운드의 사고 단계 상한. 다 쓰면 서버가 마지막 초안을 사용자에게 제출합니다. 음수는 무제한. |
 | `PLANNING_MCP_LOOP_BREAKER` | `true` | 그대로 | 서킷 브레이커 켜기/끄기. |
 | `PLANNING_MCP_BREAKER_CALLS` | `12` | 그대로 | 진척(확정, 사람의 결정, 태스크 DONE/FAILED) 없이 이어질 수 있는 호출 수. |

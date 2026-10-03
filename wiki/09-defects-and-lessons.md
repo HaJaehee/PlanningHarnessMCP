@@ -530,6 +530,74 @@ changes nothing (or, with the report open on the page, waits on the human).
 was still open, one branch away. When you close a path into a bad state, enumerate every
 transition into that state - not only the one that was reported.
 
+<a id="d27"></a>
+## D27 — a second approval put the recommendation back over the human's pick (3.0.0)
+
+**Symptom:** found in the browser check of 3.0, not by the suite. A plan whose task 2 the human
+had approved as **B** was repaired after task 3 failed; on the re-approval page task 2 still read
+as B, but after the click the completion report showed it as the *recommended* option - title
+changed back, badge `권장안` - on a task that was already `DONE` with evidence of having been
+done the B way.
+**Root cause:** `_apply_choices` (2.0.0) ran on every approval and read "no pick for this task"
+as "the recommendation": `index = picks.get(task_id, 0)`. That is right the first time. But the
+page only offers a choice while it is undecided (`t.chosen == null`), so a *second* approval of
+the same plan carries no pick for it by design - and the default overwrote `chosen` and `title`.
+In 2.0 a second approval happened only when an approval expired (TTL) and was re-asked, which is
+the path this page listed under "where the next bug probably is" and nobody had driven. Local
+repair made a second approval routine, so the bug could no longer hide.
+**Fix:** a task whose choice is already decided keeps it unless a pick for it arrives, and a
+`DONE` task is never re-decided at all. `TestAPickSurvivesReApproval` covers both ways a plan is
+approved twice (after a repair, after an expiry) and a pick sent for finished work.
+**Lesson:** a default that is correct for the first occurrence of an event is a silent overwrite
+on the second. When a new feature makes a rare path common, re-read every "if absent, assume..."
+on that path - and note that the list of suspected seams was right; it just had not been tested.
+
+<a id="d28"></a>
+## D28 — one failed task threw away the work of the tasks before it (3.0.0)
+
+**Symptom:** none reported; found while reading the failure path for the 3.0 design. A plan that
+failed at task 3 of 5 answered `BLOCKED` → "re-plan around this failure", the model sent a new
+`task_list`, and tasks 1-2 came back `PENDING` with their `result_log` gone - to be done again,
+or (worse) left out of the new list, so the completion report the human finally certified no
+longer mentioned the work the first half of the plan had done.
+**Root cause:** not an accident - `_carry_evidence` says "an ordinary re-plan, after a failure,
+still drops the old evidence, which is correct there", and for a *whole* re-plan it is: a new
+task list is a new plan, and nothing guarantees an old result still means anything in it. The gap
+was that a whole re-plan was the **only** move available. 1.10 gave the human a way to change one
+task and keep the rest; 1.13 gave them a way to redo one task and keep the rest; the model, on
+the one occasion it has a legitimate reason to change one task, had neither.
+**Fix:** a `FAILED` task is flagged exactly as a human's comment would flag it
+(`pending_revision` with `origin: "failure"`), and the model repairs it with the `task_updates`
+it already knows. Finished tasks are out of reach (an edit to one is dropped with a note); the
+failed task *must* be rewritten (`REVISION_INCOMPLETE` otherwise - approved with a `FAILED` task
+in it, a plan can never finish); the human re-approves, seeing the old wording and the reason.
+A whole `task_list` is still accepted, at its old cost, and audited `repair_ignored`. See
+[04](04-state-machine.md#local-repair-300).
+**Lesson:** D17's lesson again, from the model's side: when the only way to express a small
+change is a large one, the large one's side effects become the small change's cost. Check that
+every actor who can legitimately want a narrow change has a narrow move.
+
+<a id="d29"></a>
+## D29 — a removed plan's id was handed to the next plan (3.0.0)
+
+**Symptom:** found by the first run of the eviction tests. `test_starting_the_same_goal_again`
+asserted that the plan created after an eviction had a new id; it had the evicted plan's.
+**Root cause:** `Store.next_plan_id` computed "how many of today's plans exist, plus one". That
+is only unique while plans are never removed. Retention pruning already removed finished plans
+(a model holding a finished plan's id could, later the same day, read a different plan under
+it), but nobody had noticed because pruning needs more than `max_plans` plans. Eviction removes
+a plan and creates one in the same call - so the displaced plan's id went straight to the plan
+that displaced it. The conversation coming back for the old plan would have been routed, by
+explicit `plan_id`, onto another conversation's brand-new plan: tasks, approval and all. The
+tombstone that exists to prevent exactly that (`State.evicted`) would have been shadowed by
+the live plan of the same id.
+**Fix:** ids are one past the highest ever issued that day - over live plans, remembered
+evictions and a persisted `last_plan_id` - so removal of any kind can never free one.
+`TestAnIdIsNeverReused` covers eviction, many evictions in a row, the remembered list being
+empty, retention pruning, and a pre-3.0 state file.
+**Lesson:** an identifier derived from the *current contents* of a collection is unique only
+until something is removed. The moment a feature deletes, re-read every place that counts.
+
 [typescript-sdk#849]: https://github.com/modelcontextprotocol/typescript-sdk/pull/849
 
 ## Where the next bug probably is
@@ -537,10 +605,17 @@ transition into that state - not only the one that was reported.
 Judging by the pattern (bugs cluster in untested seams and failure paths), the thinner-covered
 areas still are:
 - **Choices meeting other features (2.0.0)**: a choice on a task the human then sends back for
-  rework from the completion report, a targeted revision of a task that offered a choice under
-  the page's per-task review, and choices on a plan whose approval expires (TTL) and is
-  re-asked. Each path is designed and partly tested; none has been driven end to end in a
-  browser.
+  rework from the completion report, and a targeted revision of a task that offered a choice
+  under the page's per-task review. The third path listed here until 3.0 - a plan approved a
+  second time - was a real bug ([D27](#d27)).
+- **The contract meeting other features (3.0.0)**: a criterion the human wrote on a task that is
+  then rewritten twice; a repair on a plan with a rework already in flight; file checks when the
+  allowed folder is on a share that disappears mid-plan (the check is bounded and reports
+  `unknown`, but only the unit path is tested, not a real stalled share); `claims_withdrawn`
+  when the model corrects a path rather than dropping it.
+- **`Store.load` treats a read error like a corrupt file.** A transient `OSError` (a sharing
+  violation on Windows) quarantines a state file that may be perfectly good. Seen once as a
+  one-off test failure during 3.0 and not reproduced; not fixed here.
 - `models.py` serialization round-trips at the boundaries (unusual `from_dict` inputs, huge task
   counts, retention pruning interacting with multi-plan).
 - `config.py` env-var parsing (already partly covered, but not every coercion path).

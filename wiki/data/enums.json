@@ -56,6 +56,8 @@
     "INVALID_DECISION",
     "INVALID_STEP",
     "LOOP_HALTED",
+    "FILE_NOT_FOUND",
+    "PLAN_EVICTED",
     "INTERNAL_ERROR"
   ]
 }

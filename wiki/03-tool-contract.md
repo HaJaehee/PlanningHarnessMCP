@@ -19,6 +19,34 @@ thinking model reasoned about on every call ([D25](09-defects-and-lessons.md#d25
 | `model_profile` | `plan_and_think` | `standard`: one thinking step per call. `reasoning`: record the plan in **one** call; `step_number`, `total_steps`, `revises_step` are not advertised (still accepted), `thought` is optional, a `task_list` with no `need_more_thinking` means final. |
 | `approval_mode` / `blocking` | `request_user_approval` | chunked / heartbeat: "this call waits; APPROVAL_PENDING = call again". `return`: "show display_to_user, end your turn, call ASK_USER again when the user writes". No page: the two-phase ask / report text - the only mode that tells the model to send APPROVED. |
 | `auto_advance` | `update_task_progress` | as since 1.11.0 |
+| `done_when` (3.0.0) | `plan_and_think`, `update_task_progress` | on: the `done_when` field, and "if next_task has done_when, result_log must show it was met". Reasoning profile also: "to double-check a task, write the check in done_when instead of re-checking now". Off: none of it. |
+| `file_checks` (3.0.0) | `update_task_progress` | the `files` field and "the server refuses DONE for a file it cannot find" - **only** when `PLANNING_MCP_ARTIFACT_ROOTS` is set. A field the model fills in and nothing reads would promise a check that is not made. |
+| `local_repair` (3.0.0) | `plan_and_think` | on: "if a task failed, send task_updates for it". Off: `task_updates` is described as answering the user's comments only. |
+
+With `done_when` and `local_repair` off none of the 3.0 text is advertised (`TestSchema`).
+
+**The text was trimmed in 3.0.0.** It had grown one field failure at a time until "one task per
+call" was said three times, the `FAILED` rule twice, and "send your own plan_id, `current` is
+a guess" in full in both the description and the parameter of `get_current_plan`. Now each
+rule is said once, and where it is said follows one layout (the docstring of
+`planning/schemas.py`): a rule about *what to do* lives in the tool description, which is the
+part that always arrives - some clients drop or shorten parameter descriptions when they relay
+a schema (matrix E16); a parameter description gives the shape of the value and one example;
+for an array of objects the example sits on the array, showing the whole shape, and the nested
+fields carry a few words rather than a second example. No example, enum value or rule was
+removed - `TestToolTextIsLean` pins the rules and a ceiling on the size.
+
+| estimated tokens (`bytes // 3`, the method of `docs/context-budget-analysis.md`) | standard | reasoning |
+|---|---:|---:|
+| 2.0.0 | 3,903 | 3,703 |
+| 3.0.0 new fields, before the trim | 4,239 | 4,066 |
+| **3.0.0 as shipped** | **3,486** | **3,325** |
+| ... with file checks (`files` advertised) | 3,599 | 3,438 |
+| ... with `done_when` and `local_repair` off | 3,181 | 2,993 |
+
+The trim is **not measured on the corporate model**. The long text was long because weak models
+needed telling; what was cut is repetition, and repetition can itself be what a weak model
+needs. If tool-call errors rise after the upgrade, that is the first place to look.
 
 None of them says "before answering ANY request" any more: that rule, against `ANSWER_USER`, is
 what sent a thinking model back into planning after the last task. They say "for each NEW
@@ -34,7 +62,7 @@ One thinking step per call. `need_more_thinking=true` to continue; on the final 
 
 Required: `goal`, `thought`, `step_number`, `total_steps`, `need_more_thinking`.
 Optional: `task_list` (required when finalizing), `task_updates`, `revised_goal`, `revises_step`,
-`plan_id`.
+`plan_id`, `alternatives`, `recommended_reasons` (2.0.0), `done_when` (3.0.0).
 
 - **Routing by goal.** The model repeats the same `goal` on every step (the system prompt tells
   it to), so a matching active plan *is* this session's plan. A different goal starts its own
@@ -78,6 +106,23 @@ Optional: `task_list` (required when finalizing), `task_updates`, `revised_goal`
   drops its choice. Advertised in both profiles; only the reasoning profile is also told "if
   you are torn between two ways, put the other in alternatives - the user picks". Turned off
   with `PLANNING_MCP_ALTERNATIVES=off` (not advertised, ignored with a note).
+- **Completion criteria (3.0.0).** `done_when: [{"task_id", "check"}]` says, for a task whose
+  result can be checked, what will exist or be true when it is finished - the result, not the
+  method, so it stays when the human picks another *way* to do the task. One per task (the
+  first wins), cut to `PLANNING_MCP_MAX_DONE_WHEN_CHARS` (200) with a note. A criterion that only
+  says the task gets done ("작업이 완료된다", the title repeated) is dropped with a note - the
+  page then shows none, which is true and invites the human to write one. Kept with a draft
+  (`draft_done_when`) and submitted with it. May accompany `task_updates`, for the tasks being
+  rewritten: a rewritten task drops the criterion the model wrote for the old wording unless
+  the same call sends a new one, and **never** replaces one the human wrote
+  (`done_when_by == "user"`). There is no way for the model to set a criterion after the plan is
+  on the page - `request_user_approval` has no such field in any mode. Turned off with
+  `PLANNING_MCP_DONE_WHEN=off` (the model's field only; the human can still write one).
+- **Repairing a failed task (3.0.0).** After a `FAILED`, the server names the task and the
+  hint carries the argument: `task_updates=[{"task_id": 3, "title": "<another way to do this
+  task>"}]`. The failed task must be among the updates; unfinished tasks after it may be;
+  `DONE` tasks cannot be touched and keep their results. See
+  [04](04-state-machine.md#local-repair-300).
 - **Convergence (1.16.0, [D25](09-defects-and-lessons.md#d25)).**
   - *Thinking budget.* A drafting round may take `PLANNING_MCP_MAX_THINKING_STEPS` steps (0 =
     profile default: standard 8, reasoning 2; negative = unlimited). It starts on the round's first
@@ -129,6 +174,15 @@ Optional: `plan_summary` (required for `ASK_USER`), `user_comment`, `plan_id`.
   `choices: {"2": "B"}` - letters, A = the recommendation; a bare number is refused by
   leniency because it could mean A or B. Anything missing or invalid keeps the
   recommendation.
+- **Criteria (3.0.0).** On a plan request the human may write or rewrite a task's `done_when`
+  and approve in the same click; the page posts `criteria: {"3": "..."}` (`""` removes one) and
+  the store refuses the whole decision if it names a task the request did not show or one that
+  is already `DONE`. Applied in the same transaction as the approval, audited
+  `criteria_applied` (before / after). The response tells the model which tasks changed; each
+  criterion is in `next_task` when its task is reached, with `done_when_by: "user"`. Criteria
+  typed before pressing REVISE are kept too: applied to the tasks on a per-task revision,
+  carried in `user_comment` on a whole-plan one. Not accepted on a completion report or a halt
+  card, and never from the model.
 - **`APPROVED`/`REJECTED`/`REVISE`**: report what the human actually said. A `REVISE` the model
   reports itself is always a whole-plan revision; only the approval page can express a per-task
   one, because only there can the human point at a specific task.
@@ -149,7 +203,7 @@ Optional: `plan_summary` (required for `ASK_USER`), `user_comment`, `plan_id`.
 ## 3. `update_task_progress` — execution tracking + the enforced gate
 
 Required: `task_id`, `status` ∈ {`PENDING`,`IN_PROGRESS`,`DONE`,`FAILED`}.
-Optional: `result_log`, `plan_id`.
+Optional: `result_log`, `plan_id`, `files` (3.0.0, only where the server checks files).
 
 - **The enforcement half of the HITL gate.** Until `plan_status` is `APPROVED`/`IN_EXECUTION`,
   every call returns `ok:false` / `PLAN_NOT_APPROVED`. The model cannot execute early even if it
@@ -171,8 +225,19 @@ Optional: `result_log`, `plan_id`.
   Set `PLANNING_MCP_AUTO_ADVANCE=false` to require both calls; the tool description follows.
 - Out-of-order starts are **redirected**, not rejected. Duplicate `DONE` is idempotent, and a
   redundant `IN_PROGRESS` on a running task is accepted without resetting `started_at`.
-- `FAILED` → `plan_status: BLOCKED`; `next_action: CALL_PLAN_AND_THINK` (re-plan, do not
-  continue). Attempting another task while `BLOCKED` → `PLAN_BLOCKED`.
+- **The contract at DONE (3.0.0).** `next_task` carries the task's `done_when` (and
+  `done_when_by: "user"` when the human wrote it), and the hint restates it. A `result_log` that
+  only says the criterion back is refused (`MISSING_RESULT_LOG`); a file listed in `files` that
+  is not there, or is empty, refuses the DONE (`FILE_NOT_FOUND`, naming the folders the server
+  looks in). After that refusal the model may save the file and resend, correct the path, or
+  send DONE without the file - the last is accepted and shown to the human as a dropped claim.
+  `files` sent to a server with no allowed folders is ignored with a note. What the server
+  found is never in a response to the model. See
+  [04](04-state-machine.md#the-verification-contract-300).
+- `FAILED` → `plan_status: BLOCKED`; `next_action: CALL_PLAN_AND_THINK`. Since 3.0.0 the
+  response names the finished tasks (`tasks_unchanged`) and the hint asks for a repair of the
+  failed task alone, not a re-plan. Attempting another task while `BLOCKED` → `PLAN_BLOCKED`,
+  with the same hint.
 - All tasks `DONE` → `COMPLETED`, `next_action: ANSWER_USER`.
 
 ## 4. `get_current_plan` — always-safe recovery
@@ -220,10 +285,13 @@ Every error maps to a `next_action` that tells the model how to recover. Full li
 | `APPROVAL_EXPIRED` | approval idle past TTL | `CALL_REQUEST_USER_APPROVAL` |
 | `APPROVAL_PENDING` | the user has not answered yet — either this wait slice ended, or the model tried to decide on their behalf | `CALL_REQUEST_USER_APPROVAL` (with `ASK_USER`, immediately) |
 | `PLAN_AMBIGUOUS` | several plans active, no `plan_id` given | `CALL_GET_CURRENT_PLAN` |
+| `PLAN_EVICTED` | the `plan_id` sent names a plan the server closed to make room - it was the least recently used unfinished plan when the limit was reached (3.0.0) | `ANSWER_USER` (tell the user; start again only if they ask; never use another plan in its place) |
 | `GOAL_NOT_MATCHED` | continuing (step>1) but goal matches no plan (drift) | `CALL_PLAN_AND_THINK` (with the exact goal from `active_plans`) |
 | `TASK_NOT_FOUND` | bad `task_id` | `CALL_UPDATE_TASK_PROGRESS` (with valid ids listed) |
 | `MISSING_RESULT_LOG` | `DONE` with evidence that is empty, a bare claim, or the task title | `CALL_UPDATE_TASK_PROGRESS` |
 | `REWORK_NOT_DONE` | a reopened task reported `DONE` with the very outcome the user rejected | `CALL_UPDATE_TASK_PROGRESS` (quoting what they asked for) |
+| `FILE_NOT_FOUND` | `DONE` listed a file the server looked for and did not find (3.0.0) | `CALL_UPDATE_TASK_PROGRESS` (save it, fix the path, or drop the claim) |
+| `REVISION_INCOMPLETE` | no flagged task was rewritten - or, in a repair, the failed task was not | `CALL_PLAN_AND_THINK` (with the exact `task_updates` argument) |
 | `LOOP_HALTED` | the circuit breaker paused this plan (or, with no plan, stopped a repeating call) | `CALL_REQUEST_USER_APPROVAL` (`ASK_USER`) before the human has been shown the halt; `STOP_AND_WAIT_FOR_USER` after |
 | `INTERNAL_ERROR` | something unexpected | `CALL_GET_CURRENT_PLAN` (resync) |
 
@@ -233,6 +301,9 @@ Applied by `leniency.normalize()` before validation, so near-miss calls succeed:
 case/alias normalization (`done|완료`→`DONE`, `네|yes`→`APPROVED`, …); `"true"/1/"3"` coercion;
 `task_list` as a newline/comma string → array; array-of-objects → titles; numbering prefixes
 stripped; unknown keys dropped; non-string keys dropped; NaN/inf rejected for integer fields.
+3.0.0: `done_when` as `{"2": "..."}`, `"2: ..."` lines or a misnamed field (`criteria`,
+`acceptance_criteria`); `files` as a JSON string, objects with `path`, or a newline / semicolon
+separated string - **not** comma-separated, since a comma can be part of a file name.
 
 > **Client caveat:** some MCP clients validate enums *before* the server sees them, so enum
 > aliases like `done`/`진행중` may be rejected with `-32602` at the client. Non-enum leniency

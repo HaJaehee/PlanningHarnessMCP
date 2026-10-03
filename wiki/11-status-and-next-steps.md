@@ -1,15 +1,63 @@
 # 11 · Status and Next Steps
 
-## Current state (as of version 2.0.0, 2026-10-02)
+## Current state (as of version 3.0.0, 2026-10-03)
+
+- **3.0.0 - the verification contract and local repair.** Per task, `done_when` says what exists
+  or is true when it is finished; the human approves it with the plan and may write it on the
+  approval page and approve in the same click. A `result_log` that only repeats it is refused;
+  inside `PLANNING_MCP_ARTIFACT_ROOTS` a file the task says it produced is looked for, and a
+  missing one refuses the `DONE`. The completion page shows criterion, evidence and what the
+  server found. A `FAILED` task is repaired in place with `task_updates`; finished tasks keep
+  their results. Plan, research and decisions:
+  [`docs/plan-3.0-verification-contract.md`](../docs/plan-3.0-verification-contract.md).
+- **Tests:** 732 unit + 6 smoke, all passing (`tests/test_verification.py`,
+  `tests/test_local_repair.py`, `tests/test_plan_eviction.py` are new; one unit test skips where symlinks cannot be created).
+- **Committed on `develop` (code, prompt, docs); not packaged or pushed.** `MANIFEST.txt`
+  is still the 1.15.1 one, so `verify_install.py` reports NO-GO on integrity until
+  `make_package.py` is rerun.
+- **Repaste the prompt when deploying.** `agents.md` was rewritten for 3.0: shorter (31 lines,
+  down from 46), with a line each for `done_when` and `files`. An agent on the 2.0 prompt
+  will never send those fields, and carries rules the tool descriptions now say on their own.
+- **File checks are off until configured.** Set `PLANNING_MCP_ARTIFACT_ROOTS` to the folder(s)
+  the agent's tools write into (`;`-separated) or the server looks at nothing.
+
+### 3.0.0 follow-up (field)
+
+None of this could be measured here; the audit log is built to answer it.
+1. **The repeat threshold** (`PLANNING_MCP_EVIDENCE_NOVELTY`, 0.3) was set from 20 hand-written
+   pairs. `task_done.novelty` records every score and `done_repeats_criterion` every refusal:
+   if real reports cluster just above 0.3, or honest ones are refused, move it.
+2. **Does the model write criteria worth having?** `plan_finalized.criteria` lists the tasks
+   that got one; `criteria_applied` records every time the human replaced or added one. Humans
+   rewriting most of them means the description of `done_when` needs work, not the server.
+3. **Does it repair or re-plan?** `task_repaired` against `repair_ignored`.
+4. **File checks**: `file_not_found` followed by `file_claim_withdrawn` on the same task is a
+   model that names files it does not write; `outside` checks mean the roots do not cover where
+   the tools actually save.
+5. **The trimmed tool text.** The new fields would have cost +336 estimated tokens, so the
+   tool descriptions were cut to say each rule once: 3,903 (2.0.0) → 3,486 with every 3.0
+   feature on. Nothing but repetition was removed, but a weak model may have been leaning on
+   the repetition. Compare tool-call errors before and after: the `execution_blocked`,
+   `done_without_start`, `done_out_of_order` and `done_without_evidence` rates in the audit
+   log for the first sessions on 3.0 against the same model on the old text. (A client-side
+   `-32602` never reaches the server, so it has to be read off the chat.) If they rise,
+   restore the longer `UPDATE_TASK_PROGRESS_DESCRIPTION` first - it lost the most.
+6. **The trimmed prompt.** Same question for `agents.md` (3,862 → 2,275 characters). The
+   rules that left it are listed, with where each is now said, in
+   `docs/phase3-anythingllm-agent-prompt.md`. Watch the three that used to be spelled out
+   and now rest on the hint alone: after `LOOP_HALTED` the model must not retry
+   (`loop_halted` followed by the same call again), a reworked task must not be re-planned
+   (`plan_and_think_redirected` during a rework), and a failed task should be repaired, not
+   re-planned (`repair_ignored`). If one regresses, put that one line back.
+
+### 2.0.0 (previous)
 
 - **2.0.0 - per-task alternatives**: the model proposes (`task_list` = recommendation,
   `alternatives`, `recommended_reasons`), the human picks on the approval page (radios, 권장,
   기타 → revision), the pick becomes the task, and the model never sees the unchosen options
   again. Also on the halt card and in the draft; chat-mode relay; off switch and limits.
   Plan and decisions: [`docs/plan-2.0-task-alternatives.md`](../docs/plan-2.0-task-alternatives.md).
-- **Tests:** 528 unit + 6 smoke, all passing (`tests/test_alternatives.py` is new).
-- **Not packaged or pushed.** `MANIFEST.txt` is still the 1.15.1 one, so `verify_install.py`
-  reports NO-GO on integrity until `make_package.py` is rerun.
+- **Tests (then):** 528 unit + 6 smoke (`tests/test_alternatives.py`).
 
 ### 1.16.0 (previous)
 
@@ -139,9 +187,25 @@ that asserts the guarantee, watch it fail.
 - **Gate execution itself.** The gate governs our own tools; the model executes with other
   AnythingLLM skills we can't intercept. To close that, execution would have to become one of
   *our* tools (e.g. `execute_step` checking `plan_status == APPROVED`). Significant redesign;
-  only worth it if disabling other skills during bring-up proves insufficient.
+  only worth it if disabling other skills during bring-up proves insufficient. Since 3.0 there
+  is a second reason and a place to put the result: a server that fronted the other MCP servers
+  (a gateway) would *see* each tool call, and could attach it to the running task as observed
+  evidence in `Task.checks` - closing, for MCP tools, the gap file checks only narrow. Outlined
+  in `docs/plan-3.0-verification-contract.md` §7; AnythingLLM's built-in skills would still
+  bypass it.
+- **Plan memory.** Offer a plan the human approved and certified as the starting point for a
+  similar goal, and show "what you picked / wrote last time" from `choices_applied` and
+  `criteria_applied`. Needs field evidence that requests repeat. `docs/plan-3.0-...` §6.
+- **`Store.load` and transient read errors** - see
+  [09](09-defects-and-lessons.md#where-the-next-bug-probably-is). Small, and worth doing before
+  the next deployment on Windows.
 - **Retention/pruning polish** for the multi-plan era (ensure pruning never touches an active
-  plan under `max_active_plans` pressure; there is a base test to extend).
+  plan under `max_active_plans` pressure; there is a base test to extend). Since 3.0.0 the
+  limit itself is handled - the least recently used unfinished plan is evicted - and the
+  field question is the floor: `plan_evicted.idle_seconds` in the audit log shows how idle
+  the victims really were. If they cluster just above 300 s, live plans are being caught and
+  `PLANNING_MCP_EVICT_MIN_IDLE` should go up; a refusal at the limit (`PLAN_AMBIGUOUS` with
+  20 plans) means every plan was in use, or the floor is too high for how the PC is used.
 
 ## Hard rules for whoever continues (repeat of README, because they matter)
 

@@ -146,10 +146,23 @@ PASS criteria are written so they can be judged from the AnythingLLM transcript 
 |---|---|
 | **Setup** | Task 2 of 4 cannot be completed |
 | **Expect M** | `update_task_progress {task_id: 2, status: "FAILED", result_log: "<why>"}` |
-| **S** | `plan_status → BLOCKED`, `next_action: CALL_PLAN_AND_THINK` |
-| **PASS** | Model does **not** start task 3; it re-plans, then goes through approval again |
+| **S** | `plan_status → BLOCKED`, `next_action: CALL_PLAN_AND_THINK`, `tasks_unchanged: [1]`; the hint carries `task_updates=[{"task_id": 2, "title": "<another way to do this task>"}]` (3.0.0) |
+| **PASS (3.0.0)** | Model does **not** start task 3. It sends `plan_and_think` with `task_updates` for task 2 only, then goes through approval again. Task 1 is still `DONE` with its `result_log` on the re-approval page, and after approval work resumes at task 2 |
+| **Acceptable** | Model re-plans with a whole `task_list`. It works, but task 1 must be redone; the response says so and the audit log records `repair_ignored`. If this is what the model always does, the prompt was not repasted |
 | **FAIL mode** | Model marks task 2 DONE with an excuse, or silently continues to task 3 |
-| **Hard check** | Attempting `update_task_progress {task_id: 3, ...}` while BLOCKED must return `ok:false` / `PLAN_BLOCKED` |
+| **Hard check** | Attempting `update_task_progress {task_id: 3, ...}` while BLOCKED must return `ok:false` / `PLAN_BLOCKED`. `task_updates` that rewrites task 3 but not task 2 must return `REVISION_INCOMPLETE` and change nothing |
+
+### C1b. The completion criterion and the file check (3.0.0)
+
+| | |
+|---|---|
+| **Setup** | `PLANNING_MCP_ARTIFACT_ROOTS` set to the folder the agent's tools write into. Ask for something that produces a file ("3분기 매출을 집계해서 xlsx로 저장해줘") |
+| **Expect M** | `plan_and_think` with `done_when` for the task that produces the file - what will exist, not how |
+| **Human** | On the approval page: rewrite one criterion with [수정], add one with [기준 추가], press `승인 · 완료 기준 2건 반영` |
+| **S** | `APPROVED`; the message names the tasks whose criterion the user set; each `next_task` carries its `done_when` (`done_when_by: "user"` for the two) |
+| **PASS** | Each `result_log` says how the criterion was met with real values; the file task sends `files` and the completion page shows `✔ <file> · 이 태스크 중 생성/변경됨` |
+| **FAIL mode** | `result_log` is the criterion with its tense changed → refused `MISSING_RESULT_LOG`; a file named in `files` that was never written → refused `FILE_NOT_FOUND`. Both are the server working. What to watch is what the model does **next**: writing the file / giving real values is a pass; repeating the same call until `LOOP_HALTED` is a model that cannot use the feature - set `PLANNING_MCP_DONE_WHEN=off` for it |
+| **Watch for** | The model listing files it did not write and then dropping them: the completion page says `결과 파일로 적었다가 뺐습니다`. One is noise; a pattern is a model claiming work |
 
 ### C2. Context truncation recovery
 

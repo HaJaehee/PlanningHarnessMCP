@@ -40,6 +40,7 @@ SSE transport.
 | `protocol.py` | Minimal MCP / JSON-RPC 2.0. `initialize`, `tools/list`, `tools/call`, `ping`, batch. |
 | `transport.py` | `serve_stdio` (threaded) and `serve_sse`, plus notifiers for progress heartbeats. |
 | `choices.py` | (2.0.0) Per-task alternatives: validate the model's alternatives against its task list (`build_options`), the page's picks against what it showed (`validate_page_choices`, strict), the model's relayed picks (`validate_model_choices`, lenient). Pure, never raises. |
+| `evidence.py` | (3.0.0) The verification contract's pure pieces: validate the model's `done_when` (`clean_done_when`), score how much a `result_log` adds to it (`novelty`, `repeats_criterion`), pull paths out of prose (`extract_paths`), look for files **only inside the allowed folders** with `os.stat` on a deadline (`check_files`, `check_mentions`), validate the criteria the page posts (`validate_page_criteria`, strict). Imports nothing from the package; never raises. |
 | `loopguard.py` | (1.16.0) The circuit breaker's counters: calls since the last milestone, repeated calls, error streaks. In process memory by design - see [04](04-state-machine.md#loop-convergence-1160). |
 | `server.py` (root) | Entry point: arg parsing, config, builds protocol, claims the approval page, serves. |
 

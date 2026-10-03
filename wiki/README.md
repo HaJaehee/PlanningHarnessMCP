@@ -9,7 +9,7 @@ it forces a `PLAN → HUMAN APPROVAL → EXECUTE → REPORT` lifecycle and physi
 agent loop until a human approves. **Zero third-party dependencies** — Python 3.9+ standard
 library only, because the deployment target has no package index.
 
-Current version: **2.0.0** · 528 unit tests + 6 end-to-end smoke tests, all passing.
+Current version: **3.0.0** · 732 unit tests + 6 end-to-end smoke tests, all passing.
 
 ---
 
@@ -27,6 +27,8 @@ Current version: **2.0.0** · 528 unit tests + 6 end-to-end smoke tests, all pas
 | How tests are organised and run | [07-testing.md](07-testing.md) |
 | What changed in each version and why | [08-changelog.md](08-changelog.md) + [data/versions.json](data/versions.json) |
 | **Known failure modes and their root causes** | [09-defects-and-lessons.md](09-defects-and-lessons.md) |
+| **What "done" means and what the server checks: `done_when`, file checks, the human writing the criterion (3.0)** | [04-state-machine.md#the-verification-contract-300](04-state-machine.md#the-verification-contract-300) + [06-human-in-the-loop.md#the-contract-on-the-page-300](06-human-in-the-loop.md#the-contract-on-the-page-300) + [../docs/plan-3.0-verification-contract.md](../docs/plan-3.0-verification-contract.md) |
+| **A failed task repaired in place, finished work kept (3.0)** | [04-state-machine.md#local-repair-300](04-state-machine.md#local-repair-300) + [09-defects-and-lessons.md#d28](09-defects-and-lessons.md#d28) |
 | **Per-task alternatives: the model proposes, the human picks (2.0)** | [03-tool-contract.md](03-tool-contract.md) + [06-human-in-the-loop.md#choosing-between-alternatives-200](06-human-in-the-loop.md#choosing-between-alternatives-200) + [../docs/plan-2.0-task-alternatives.md](../docs/plan-2.0-task-alternatives.md) |
 | **Thinking (CoT) models looping in planning; the circuit breaker** | [04-state-machine.md#loop-convergence-1160](04-state-machine.md#loop-convergence-1160) + [../docs/thinking-model-hosts.md](../docs/thinking-model-hosts.md) |
 | Packaging and air-gapped transfer | [10-deployment.md](10-deployment.md) |
@@ -95,7 +97,8 @@ manual and the original phase design records.
    the schema and the runtime validator cannot drift.
 7. **No instruction may contradict another** - in a tool description, a hint, the MCP
    `instructions`, or the agent prompt. A thinking model treats an unresolved contradiction as a
-   task (D25). `agents.md` is the canonical prompt; README and the Phase 3 manual embed it
-   verbatim, and `TestPromptHygiene` fails if they drift.
+   task (D25). `agents.md` is the canonical prompt; the Phase 3 manual embeds it verbatim and
+   `TestPromptHygiene` fails if they drift. The top-level README only points at the file
+   (3.0.0) - it used to carry a third copy.
 8. **The model never sees an option the human did not pick** (2.0). Options go to the page
    (`page_brief`), never into a model-facing response (`brief`).

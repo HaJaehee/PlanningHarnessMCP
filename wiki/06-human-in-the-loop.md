@@ -293,6 +293,13 @@ that was sent back?":
 The last row is the honest boundary of the whole design: the server enforces structure, the human
 checks substance. Everything above only exists to make sure the human is shown the right thing.
 
+> **3.0.0 moved this boundary; it did not remove it.** Two claims in a `result_log` are now
+> things the server checks rather than takes on trust - a file the task says it produced, and
+> evidence that says more than the criterion did - and the human reads what is left against a
+> criterion they approved, with the checked and the unchecked told apart. A model that writes a
+> plausible *new* sentence about work it did not do still passes. See
+> [The contract on the page](#the-contract-on-the-page-300).
+
 **Keeping the request in front of the model.** `_status_action` leads the hint with the human's
 literal sentence, forbids re-planning, and names the tasks that must not be touched;
 `_rework_suffix` repeats it in `message` wherever a task is handed over — including the
@@ -383,6 +390,117 @@ surviving a reload, the click reaching the waiting agent (task 2 handed over as 
 alternative with its reason), the completion badges, and a halt-card draft approved with a
 pick. The same check found the radios named "0" / "1" in the accessibility tree; they now
 carry an `aria-label`.
+
+<a id="the-contract-on-the-page-300"></a>
+## The contract on the page (3.0.0)
+
+Two things changed for the human: they say what "finished" means before the work, and they are
+shown what the server itself found after it. Server side:
+[04](04-state-machine.md#the-verification-contract-300).
+
+**Before the work - writing the criterion.**
+
+```
+2.  엑셀 피벗으로 매출 집계                                        [의견]
+    완료 기준  분기별 매출 합계 4행이 있는 표가 만들어진다            [수정]
+3.  5줄 요약 작성                                    [기준 추가]   [의견]
+```
+
+- A task the model gave a criterion shows it with [수정]; a task without one shows only a small
+  [기준 추가] button. Rendered as an open field on every row it would be the twelve textareas of
+  1.11 again - the plan is what the human came to read.
+- The human writes or rewrites it **and approves in the same click**. Nothing about the task
+  changed, so there is nothing for the agent to redraft and no round trip through 수정 요청 -
+  the reason this is on the approve path at all. The button states it first, like every other:
+  `승인 · 완료 기준 1건 반영`, or with a choice `승인 · 변경 3건 반영`.
+- What is typed is a draft like a comment: in `localStorage` (`…:dw<task_id>`), surviving a
+  rebuild and a reload, mirrored across tabs (D22). Erasing a criterion is a real edit - it
+  removes it - so "no draft" and "erased" are stored differently.
+- Only tasks whose text differs from what was shown are posted (`criteria`). The store refuses
+  the whole decision if one names a task the request did not show, or a finished one
+  (`validate_page_criteria`) - the page then keeps the drafts and says the decision was not
+  recorded, as since 2.0.
+- **The model cannot set one.** With choices there is a chat-mode relay; here there is no field
+  in any mode. In chat mode the user says what they want and the ordinary revision path runs.
+- **What the human replaced is gone from the model's view.** The task carries only the current
+  criterion; the model's own wording survives in the audit log (`criteria_applied`) and nowhere
+  else. `TestTheHumanWritesTheCriterion` scans a whole lifecycle for it.
+- **Typed, then 수정 요청 instead of 승인:** nothing typed is dropped. A per-task revision keeps
+  the tasks, so the criteria are applied to them - and a criterion the human wrote stays on its
+  task even when the model rewrites that task's wording. A whole-plan revision replaces every
+  task, so they travel in the comment the model reads while redrafting.
+- A **finished** task has no editor: what "done" meant for work already done is not changed
+  afterwards. The **halt card** shows the draft's criteria read-only.
+- `PLANNING_MCP_DONE_WHEN=off` removes the *model's* field. The buttons stay: a criterion the
+  human writes is still handed to the model and still checked.
+
+**After the work - the completion report.**
+
+```
+완료 확인 · plan_20261003_0001
+3개 중 1개는 태스크 중에 만들거나 바꾼 파일을 서버가 확인했습니다. 나머지 2개는 에이전트의 보고가 근거입니다.
+
+1.  집계                                                소요 2분 14초
+    완료 기준  합계 4행 표가 생긴다
+    → 표를 만들어 pivot.xlsx 로 저장
+    ✔ pivot.xlsx · 14.2 KB · 이 태스크 중 생성/변경됨
+2.  원본 확인                                           소요 3초
+    → q3.xlsx 확인
+    · q3.xlsx · 900 B · 작업 전부터 있던 파일 (이 태스크에서 바뀌지 않음)
+3.  요약                                                소요 1시간 6분
+    완료 기준  요약이 5줄이다
+    → 요약이 5줄이다
+    ⚠ 처음에 summary.md 을(를) 결과 파일로 적었다가 뺐습니다 (서버가 찾지 못함)
+    ⚠ 증거가 완료 기준 문장을 거의 그대로 반복합니다
+```
+
+- The criterion sits directly above the evidence it is read against.
+- The `✔ / · / ⚠` lines are the only lines on the card that are not the agent's word. The
+  header counts the tasks for which the server confirmed a file **the task itself created or
+  changed** - a file that was already there gets its line but does not move its task out of
+  "the agent's report". The header appears only when at least one file was checked for the plan;
+  without allowed folders it would say "0 of N" on every report and mean nothing.
+- `소요` is `finished_at − started_at`, already recorded. Shown, not judged: no threshold was
+  set without field data.
+- A file that was there when the task reported `DONE` and is gone when the report is asked for
+  reads `보고 당시에는 있었으나 지금은 없음`.
+- Tasks of a repaired plan keep their `✕ 이전 시도 실패` line here too.
+
+**Re-approving a repaired plan** ([local repair](04-state-machine.md#local-repair-300)) is an
+ordinary PLAN request. The rewritten task shows its old wording struck through and
+`✕ 이전 시도 실패: <reason>`; finished tasks show `DONE` and are not editable; the human approves,
+comments per task, or rejects exactly as on a first approval.
+
+Verified in a real browser against a real server through all three requests of one plan - see
+[07](07-testing.md#browser-verification-manual-for-the-approval-page). That check found
+[D27](09-defects-and-lessons.md#d27).
+
+## Version label and information dialog (3.0.0)
+
+Above the card, right-aligned and small: `planning-mcp 3.0.0` and an `i` button.
+
+- **One element for every state.** The label sits outside `#root`, which is the only part
+  `render()` replaces - so the idle screen, a plan request, a completion report and a halt
+  card all show the same label, it is in the first paint (the version is filled in when the
+  page is served, `page_html()`, not fetched by script), and no re-render can drop it.
+- **Why it is there.** After an upgrade, "is the new version actually running?" had no answer
+  on screen: a process keeps the modules it imported until it is restarted, so the files on
+  disk say nothing about the page in the browser ([11](11-status-and-next-steps.md)).
+- **It is the page's version, and says when a request is not.** The page is served by one
+  process and asked by any of them. Each request records `server_version` when it is
+  published; the card adds a line when that differs from the page's (`이 요청은 planning-mcp
+  2.0.0 서버가 보냈습니다`) or is absent (a process older than 3.0.0). Silent when they agree.
+- **The `i` opens a dialog**: `Author`, `Email`, `Version` (`SERVER_AUTHOR`,
+  `SERVER_AUTHOR_EMAIL`, `SERVER_VERSION` in `config.py`). A native `<dialog>` - Esc closes
+  it and focus stays inside - with a click on the backdrop closing it too, and a plain
+  `alert` where `showModal` does not exist.
+- **`decide()` disables `#root button` only.** It used to disable every button on the page
+  while a decision was posted, relying on the next render to rebuild them. The icon and the
+  dialog's button are never rebuilt; disabled once, they would have stayed disabled.
+
+Verified in a real browser: the label on the idle screen and above a plan and a completion
+request; the two mismatch lines; the dialog's three lines; closing by button and by Esc; the
+icon still working after a decision; no console error.
 
 ## Config knobs
 

@@ -55,8 +55,12 @@ finished work — see below.
 | `DRAFTING` + `rework_from_completion` | `plan_and_think` (final+`task_list`) | `AWAITING_APPROVAL`, surviving tasks keep `DONE` + `result_log` | — |
 | `AWAITING_APPROVAL` | `approval` APPROVED **when every task is already DONE** | `AWAITING_COMPLETION`, not `APPROVED` (1.13.0) | — |
 | `AWAITING_COMPLETION` | `update_task_progress` | *(no change)* | `COMPLETION_PENDING` |
-| `IN_EXECUTION` | `update_task_progress` FAILED | `BLOCKED` | — |
+| `IN_EXECUTION` | `update_task_progress` FAILED | `BLOCKED` + `pending_revision` (`origin: failure`) naming the failed task (3.0) | — |
 | `BLOCKED` | `plan_and_think` | `DRAFTING` (same plan_id) | — |
+| `BLOCKED`/`DRAFTING` + failure marker | `plan_and_think` (final+`task_updates`) | `AWAITING_APPROVAL` - the failed task (and any later unfinished task sent) rewritten, `DONE` tasks untouched (3.0) | failed task not rewritten → `REVISION_INCOMPLETE` |
+| `BLOCKED`/`DRAFTING` + failure marker | `plan_and_think` (final+`task_list`) | `AWAITING_APPROVAL` - whole re-plan, finished work not carried, audited `repair_ignored` | — |
+| `IN_EXECUTION` | `update_task_progress` DONE naming a file that is not there (3.0) | *(no change)* | `FILE_NOT_FOUND` |
+| `IN_EXECUTION` | `update_task_progress` DONE whose `result_log` only repeats `done_when` (3.0) | *(no change)* | `MISSING_RESULT_LOG` |
 | `BLOCKED` | `update_task_progress` on another task | *(no change)* | `PLAN_BLOCKED` |
 | `DRAFTING` | `plan_and_think` (more, **budget spent, draft kept**) | `AWAITING_APPROVAL` - draft submitted, straight to the page (1.16) | — |
 | `DRAFTING` | `plan_and_think` (more, **budget spent, no draft**) | `DRAFTING` + `halt` | — |
@@ -69,7 +73,10 @@ finished work — see below.
 | halted | human: 이 초안으로 승인 | `APPROVED` - the draft becomes the task list, with the draft's choices applied (2.0) | — |
 | halted | human: 계속 진행 (+ direction) | same status, `guidance` set; DRAFTING gets a fresh budget | — |
 | halted | human: 취소 | `CANCELLED` | — |
-| `AWAITING_APPROVAL` | human approves with **choices** (2.0) | `APPROVED`; each task with options gets `chosen`, and the picked option becomes its `title` | a pick not on screen → nothing recorded (page) / recommendation kept (chat) |
+| `AWAITING_APPROVAL` | human approves with **choices** (2.0) | `APPROVED`; each task with options gets `chosen`, and the picked option becomes its `title`. A choice already made on an earlier approval is kept (3.0, D27) | a pick not on screen → nothing recorded (page) / recommendation kept (chat) |
+| `AWAITING_APPROVAL` | human approves with **criteria** (3.0) | `APPROVED`; each named task's `done_when` becomes what they wrote, `done_when_by = user` | a task not on screen, or already `DONE` → nothing recorded |
+| any unfinished, **idle ≥ `evict_min_idle`, least recently used** | another conversation starts a plan while `max_active_plans` are active (3.0) | *(removed)* - evicted; remembered by id, evidence in the audit log | every active plan in use → the new plan is refused, `PLAN_AMBIGUOUS` |
+| *(evicted)* | any tool with that `plan_id` | *(no change)* | `PLAN_EVICTED` → `ANSWER_USER` |
 | any | `get_current_plan` | *(no change)* | never fails |
 
 ## Deliberate leniencies (rejecting these would strand a weak model)
@@ -193,6 +200,109 @@ offered a choice gets a `chosen` (keeping the recommendation is a decision too),
 picked option becomes the task. From then on the task is an ordinary task - ordering,
 evidence and rework guards are untouched. A completion report takes no choices; a rework
 redoes the option that was chosen.
+
+A choice is decided **once**. A later approval of the same plan - after a repair, or after an
+approval expired - arrives with no pick for it (the page offers a choice only while it is
+undecided), and that must not be read as "the recommendation": a decided task keeps its choice,
+and a `DONE` task is never re-decided ([D27](09-defects-and-lessons.md#d27)).
+
+## The verification contract (3.0.0)
+
+Logic: `planning/evidence.py` (pure) + `handlers._finish_task`. Design and decisions:
+[`docs/plan-3.0-verification-contract.md`](../docs/plan-3.0-verification-contract.md).
+
+A task may carry `done_when` - one sentence saying what exists or is true when it is finished.
+The model proposes it (`plan_and_think.done_when`, `{task_id, check}`), the human approves it
+with the plan and may write it themselves on the approval page ([06](06-human-in-the-loop.md)),
+and from then on it is part of the task: handed over in `next_task` and the hint at the moment
+the task starts, shown beside the evidence on the completion report, and included in the
+fingerprint (only where a task has one - a plan without criteria keeps its 2.0 fingerprint).
+
+`DONE` gains two refusals, after the 1.9.0 ones:
+
+| Refusal | error_code | Why it is safe to refuse |
+|---|---|---|
+| a file listed in `files` is not in an allowed folder's tree, or is empty | `FILE_NOT_FOUND` | the model said the task produced it; the server looked |
+| `result_log` adds less than `PLANNING_MCP_EVIDENCE_NOVELTY` (0.3) of new text to `done_when` | `MISSING_RESULT_LOG` | the criterion said back is the criterion, not evidence that it was met |
+
+Everything short of that is **shown to the human, not refused** - the 1.9.0 rule, kept: a wrong
+refusal costs a weak model a retry loop, and both refusals are bounded by the 1.16 breaker (a
+refused call repeated halts the plan for a human).
+
+- **File checks** run only inside `PLANNING_MCP_ARTIFACT_ROOTS` (`;`-separated; empty = no
+  checks, and `files` is not advertised). A path outside - `..`, another drive, UNC, a link out
+  of the folder - is recorded `outside` and **nothing on disk is touched for it**. Inside, the
+  server calls `os.stat` and nothing else. States: `found` (changed since the task started),
+  `old` (there, but untouched since before it started), `folder`, `empty`, `missing`,
+  `outside`, `unknown` (the check did not come back within 3 s - never a refusal). A relative
+  path is tried under each root; on Windows a rooted path with no drive (`/workspace/out.csv`,
+  a sandbox's view) is tried under each root with its leading folders dropped one at a time.
+- **A path named only in `result_log`** is checked too, but only a positive finding is kept:
+  "removed out/tmp.csv" is a true sentence about a file that is not there.
+- **A file that was already there** (`old`) proves the file exists, not that the task did
+  anything. It is shown, but it cannot stand in for evidence: only a `found` / `folder` check
+  lets a `result_log` that repeats the criterion through.
+- **A dropped claim is allowed and visible.** After `FILE_NOT_FOUND` the model may send `DONE`
+  without the file (the task may truly have produced none); the task then carries
+  `claims_withdrawn`, audited `file_claim_withdrawn`, and the page says so.
+- **The repeat check** is the share of the evidence's character bigrams that are not in the
+  criterion - no tokenizer, works for Korean. The threshold was set from hand-written pairs
+  (`TestTheRepeatCheck`): said back with only the tense changed scores 0.0-0.25; adding a
+  count, a size or a name scores 0.33 and up. 0.3 refuses the first group only. Evidence under
+  0.5 is marked on the completion page (`echo`) instead of refused. Every `DONE` under a
+  criterion records its score (`task_done.novelty`), so the threshold can be tuned from the
+  field.
+- **Before the completion report is shown**, confirmed files are looked at once more; one that
+  has gone is marked (`gone`, audited `file_gone_before_completion`). Only path and state are
+  in the fingerprint - a human opening and saving a file while reading the report changes its
+  size and mtime, and must not void the request they are answering.
+- **What the server found is for the human.** `checks`, `claims_withdrawn` and `echo` are in
+  `page_brief()` only; no response to the model carries them.
+
+What this does **not** do: judge whether the content is right. A file exists or it does not. The
+boundary of [06](06-human-in-the-loop.md#rework-1130) has moved, not gone.
+
+<a id="local-repair-300"></a>
+## Local repair (3.0.0)
+
+A `FAILED` task used to leave one move: re-plan the whole task list, which drops the evidence of
+every task already finished ([D28](09-defects-and-lessons.md#d28)). Now `_fail_task` flags the
+failed task the way a human's comment flags one:
+
+```
+pending_revision = {"targets": {"3": "<the failure's result_log>"},
+                    "origin": "failure", "open": [4, 5]}
+```
+
+and the per-task machinery of 1.10 does the rest, under three rules that differ from a human's
+revision:
+
+| | human's per-task revision (1.10) | repair after a failure (3.0) |
+|---|---|---|
+| must be rewritten | none (an unaddressed target is noted) | the failed task - else `REVISION_INCOMPLETE`, nothing written |
+| may also be rewritten | nothing | the unfinished tasks after it (`open`) |
+| a `DONE` task | reset if the human flagged it | out of reach; an edit is dropped with a note |
+| marker on the rewritten task | `revision_note` (their comment) | `failure_note` (why it failed), kept until the plan ends |
+
+The hint hands over the literal argument (`task_updates=[{"task_id": 3, "title": "<another way
+to do this task>"}]`) from every tool - the `FAILED` response, a stray `update_task_progress`
+(`PLAN_BLOCKED`), `request_user_approval`, `get_current_plan` - and names only `plan_and_think`.
+The failure text is clipped to 200 characters there; the task keeps it whole.
+
+After the rewrite the plan is `AWAITING_APPROVAL` like any changed plan: the human sees the old
+wording struck through, the reason, and the `DONE` rows that stay. On approval `current_task()`
+is the repaired task - the tasks before it are `DONE`, so the ordering guards need no change -
+and `next_task.failure_note` plus the hint say why it reads differently. Sending the same
+wording again is a valid repair (the failure may have been passing).
+
+A whole `task_list` is still accepted - sometimes the approach was wrong, not the step - with the
+2.0 consequences (finished work is not carried), a note saying so, and an audited
+`repair_ignored`; `task_repaired` against `repair_ignored` is the field measure of whether a
+model follows the hint. `PLANNING_MCP_LOCAL_REPAIR=false` restores the 2.0 path and removes the
+repair text from the tool descriptions.
+
+Out of scope, as since 1.10: adding, deleting or reordering tasks in a repair. One step replaced
+by two still needs the whole-plan path.
 
 ## Two time-based / version-based guards (added after real bugs)
 

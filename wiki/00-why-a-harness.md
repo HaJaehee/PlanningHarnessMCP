@@ -109,6 +109,14 @@ and on what that leaves:
 > human checks substance. Everything above only exists to make sure the human is shown the
 > right thing.
 
+3.0.0 moves that boundary without removing it. Until then the human judged the evidence against
+nothing but the task title, and the server looked at nothing it could have looked at. Now each
+task can carry a criterion the human approved (or wrote), a `result_log` that only says the
+criterion back is refused, a file the task claims to have produced is looked for, and the
+completion page tells the confirmed apart from the merely reported. What remains undetectable is
+narrower - a plausible *new* sentence about work that left no file - and it is still the human's
+to catch. See [04](04-state-machine.md#the-verification-contract-300).
+
 This harness does not remove hallucination. It makes drift *blockable and visible*, and puts a
 person physically in front of the evidence before a plan can close. And per
 [D19](09-defects-and-lessons.md#d19): every field added to help the model do the work is equally

@@ -37,8 +37,11 @@
     <transition from="AWAITING_COMPLETION" call="request_user_approval(REVISE, scope=TASKS)" to="IN_EXECUTION" note="rework (1.13.0): only the named tasks reopen; every other task keeps DONE and its result_log; no re-approval, the task list did not change"/>
     <transition from="AWAITING_COMPLETION" call="request_user_approval(REVISE, scope=PLAN)"  to="DRAFTING" note="whole-plan redraft for add/delete/reorder; sets rework_from_completion so the redraft carries evidence for surviving titles"/>
     <transition from="AWAITING_APPROVAL"   call="request_user_approval(APPROVED, all tasks already DONE)" to="AWAITING_COMPLETION" note="1.13.0: never unlock a plan with nothing left to run - that would skip the completion gate"/>
-    <transition from="IN_EXECUTION"      call="update_task_progress(FAILED)"           to="BLOCKED"/>
+    <transition from="IN_EXECUTION"      call="update_task_progress(FAILED)"           to="BLOCKED" note="3.0.0: also sets pending_revision {targets: the failed task, origin: failure, open: later unfinished tasks} - the failed task is flagged for repair (off with PLANNING_MCP_LOCAL_REPAIR=false)"/>
     <transition from="BLOCKED"           call="plan_and_think"                          to="DRAFTING" note="same plan id, revision"/>
+    <transition from="BLOCKED/DRAFTING + failure marker" call="plan_and_think(final, task_updates incl. the failed task)" to="AWAITING_APPROVAL" note="3.0.0 local repair: the failed task gets the new wording, failure_note and PENDING; later unfinished tasks may be rewritten too; DONE tasks are untouched and keep result_log; the human re-approves"/>
+    <transition from="BLOCKED/DRAFTING + failure marker" call="plan_and_think(final, task_list)" to="AWAITING_APPROVAL" note="whole re-plan, as in 2.0: finished work is not carried; noted and audited repair_ignored"/>
+    <transition from="AWAITING_APPROVAL" call="human: APPROVED with criteria"           to="APPROVED" note="3.0.0: each named task's done_when becomes what the human wrote (done_when_by=user), in the same transaction; a task not on screen or already DONE records nothing"/>
     <transition from="DRAFTING"          call="plan_and_think(more, budget spent, draft kept)" to="AWAITING_APPROVAL" note="1.16.0: the draft is submitted (straight to the page when there is one)"/>
     <transition from="DRAFTING"          call="plan_and_think(more, budget spent, no draft)"   to="DRAFTING+halt" note="1.16.0: circuit breaker, reason thinking_budget"/>
     <transition from="AWAITING_APPROVAL" call="plan_and_think(no revised_goal)"         to="(unchanged)" note="1.16.0: redirected; only the human's REVISE reopens a plan"/>
@@ -47,9 +50,10 @@
     <transition from="COMPLETED (younger than replan_cooldown)" call="plan_and_think(same goal)" to="(unchanged)" note="1.16.0: ANSWER_USER with the finished results"/>
     <transition from="any non-terminal"  call="(circuit breaker trips)"                  to="(same status)+halt" note="1.16.0: overlay, not a status; every tool refuses with LOOP_HALTED; halt card on the page"/>
     <transition from="halted"            call="human: APPROVED (approve the draft)"     to="APPROVED" note="the draft becomes the task list, with the draft's alternatives and the human's picks applied (2.0.0)"/>
-    <transition from="AWAITING_APPROVAL" call="human: APPROVED with choices"            to="APPROVED" note="2.0.0: each task with options gets chosen; the picked option becomes its title; a pick not on screen records nothing"/>
+    <transition from="AWAITING_APPROVAL" call="human: APPROVED with choices"            to="APPROVED" note="2.0.0: each task with options gets chosen; the picked option becomes its title; a pick not on screen records nothing. 3.0.0 (D27): a choice already decided on an earlier approval is kept when no pick arrives, and a DONE task is never re-decided"/>
     <transition from="halted"            call="human: REVISE (continue + direction)"    to="(same status)" note="guidance leads every hint until the next milestone; DRAFTING gets a fresh thinking budget"/>
     <transition from="halted"            call="human: REJECTED (cancel)"                to="CANCELLED"/>
+    <transition from="any unfinished, least recently used, idle >= evict_min_idle" call="(another conversation starts a plan while max_active_plans are active)" to="(removed)" note="3.0.0 LRU eviction, PLANNING_MCP_EVICT_LRU: the plan is removed, its id remembered in state.evicted, its tasks and evidence written to the audit log (plan_evicted), its request withdrawn from the page. Every active plan in use -> the new plan is refused (PLAN_AMBIGUOUS), as before 3.0"/>
     <transition from="any"               call="get_current_plan"                        to="(unchanged)" note="never fails; reports halted / draft_tasks / thinking_steps_left"/>
   </transitions>
 
@@ -63,6 +67,10 @@
     <guard call="update_task_progress(DONE, task never IN_PROGRESS)" error="TASK_NOT_STARTED" note="1.9.0 - DONE is a claim of work and must be earned"/>
     <guard call="update_task_progress(DONE, an earlier task unfinished)" error="TASK_OUT_OF_ORDER"/>
     <guard call="update_task_progress(DONE, evidence-free result_log)" error="MISSING_RESULT_LOG" note="content check: bare success phrases and task-title echoes rejected regardless of length; floor PLANNING_MCP_MIN_RESULT_LOG=8 normalized chars"/>
+    <guard call="update_task_progress(DONE, result_log only repeats the task's done_when)" error="MISSING_RESULT_LOG" note="3.0.0: share of new character bigrams below PLANNING_MCP_EVIDENCE_NOVELTY (0.3), and no file the task itself produced was found"/>
+    <guard call="update_task_progress(DONE, files names a file that is missing or empty)" error="FILE_NOT_FOUND" note="3.0.0: only inside PLANNING_MCP_ARTIFACT_ROOTS; outside is never looked at and never refused; a check that does not come back in 3s is 'unknown', not a refusal"/>
+    <guard call="plan_and_think(task_updates that leave the failed task as it is)" whenState="failure marker pending" error="REVISION_INCOMPLETE" note="3.0.0: nothing is written"/>
+    <guard call="any tool with the plan_id of an evicted plan" error="PLAN_EVICTED" note="3.0.0: next_action ANSWER_USER; the response never lists other plans"/>
     <guard call="update_task_progress(any)" whenState="AWAITING_COMPLETION" error="COMPLETION_PENDING"/>
     <guard call="any except get_current_plan" whenState="halted" error="LOOP_HALTED" note="1.16.0; waits instead when the halt card is open on the page"/>
     <guard call="request_user_approval(APPROVED/REJECTED/REVISE)" whenState="halted, card open on the page" error="APPROVAL_PENDING" note="D20 applied to halts: only the human lifts a halt"/>

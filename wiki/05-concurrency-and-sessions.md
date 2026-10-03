@@ -27,6 +27,39 @@ If several plans are active and no `plan_id` is given → `PLAN_AMBIGUOUS` with 
 directory. A weak model recovers because (a) it only ever saw *its own* plan_id in prior
 responses, and (b) while multiple plans are live, every `next_action_hint` names the plan_id to
 include (`qualify=True`). `PLANNING_MCP_MAX_ACTIVE_PLANS` (default 20 since 1.16.0, was 5) caps how many can coexist.
+
+**At the limit, the least recently used unfinished plan is evicted (3.0.0).** Until then a full
+table refused every new plan (`PLAN_AMBIGUOUS`) until a human rejected an old one on the approval
+page - and a conversation that was abandoned never comes back to do that. With the limit at 20,
+the slots fill with exactly such plans. Now `_evict_for_room` removes the plan written to longest
+ago (`updated_at`) and the new plan takes the slot. `PLANNING_MCP_EVICT_LRU=false` restores the
+refusal.
+
+- **"Used" is the last write, and a plan in use is never evicted.** An agent waiting on approval
+  touches its plan every wait slice (45 s); an executing one at every task. A plan idle for less
+  than `PLANNING_MCP_EVICT_MIN_IDLE` (300 s) therefore has somebody on it and is skipped; if
+  every active plan is that fresh, the new plan is refused as before. A read
+  (`get_current_plan`) is deliberately not a use - touching on read would also un-expire an
+  approval.
+- **The floor is also the brake on a runaway.** A model that keeps opening plans evicts idle ones
+  until its own fresh plans hold every slot, and then it is refused: at most
+  `max_active_plans` evictions, never an endless churn (`TestAPlanInUseIsNeverEvicted`).
+- **Any unfinished status can go**, a halted plan and one waiting on a completion report
+  included; a finished plan never counts and is never the victim (retention handles those).
+- **Nothing is lost silently.** The `plan_evicted` audit line carries the plan's goal, status,
+  idle time and every task with its `result_log`; its request is withdrawn from the approval
+  page; and the state file remembers the id (`evicted`, the newest 50).
+- **A conversation that comes back is told the truth.** Any tool called with an evicted
+  `plan_id` answers `PLAN_EVICTED` → `ANSWER_USER`: the plan was closed for inactivity, tell
+  the user and ask whether to do it again. Without the remembered id it would be an *unknown*
+  id, and the answer for those - "do not start a new plan, use one of these", followed by other
+  conversations' plans - would invite it to adopt somebody else's. `PLAN_EVICTED` never carries
+  an `active_plans` list.
+- **Ids are never reused** ([D29](09-defects-and-lessons.md#d29)). The new plan gets an id one
+  past the highest ever issued that day (`last_plan_id` in the state file), not the evicted
+  plan's.
+- The new plan's own response says nothing about the eviction: another conversation's plan being
+  closed is not its business.
 Raising it removed the implicit bound a respawning model used to hit; the 1.16 circuit
 breaker bounds that loop directly instead (a goal reworded and restarted 3 times halts -
 judged from the shared state, so unrelated sessions never add up; see

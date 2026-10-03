@@ -349,6 +349,94 @@ whatever the human picks becomes the task. Plan and decisions:
 
 85 new tests in `tests/test_alternatives.py`; no existing test changed expectation.
 
+### 3.0.0 — what "done" means, and what the server can check
+Through 2.0 the harness governed *when* the model may act. The remaining hole was the one this
+wiki called its honest boundary: `DONE` is a claim, checked only for its shape, and judged at the
+very end by a human with nothing to read it against but the task title. 2026's harness work
+converges on the same answer - agree what "done" is before the work, verify what can be observed,
+keep the judge separate from the worker - and 3.0 builds the part of it that fits a stdlib-only
+server with no model of its own. Plan, research and decisions:
+`docs/plan-3.0-verification-contract.md`.
+
+**The verification contract** ([04](04-state-machine.md#the-verification-contract-300)).
+- `plan_and_think.done_when`: per task, what exists or is true when it is finished. The human
+  approves it with the plan - and may **write or rewrite it on the approval page and approve in
+  the same click**, with no revision round trip, because the task itself did not change.
+- The criterion is handed over with the task (`next_task.done_when`, the hint), not left five
+  turns back. A `result_log` that only says it back is refused.
+- `update_task_progress.files`: the files a task created or changed. Inside the folders named in
+  `PLANNING_MCP_ARTIFACT_ROOTS` the server looks (`os.stat`, nothing else, nothing outside), and
+  a file that is not there refuses the `DONE` (`FILE_NOT_FOUND`). Off by default: no folders,
+  no checks, and the field is not advertised.
+- The completion page shows criterion, evidence and what the server found side by side, says how
+  many tasks rest on the agent's report alone, and marks a dropped claim, a file gone since, and
+  evidence that nearly repeats the criterion.
+- No LLM judge. Reported false-success detectors built on a second model do little better than
+  chance; the checks here are deterministic and the judge is the human.
+
+**Local repair** ([04](04-state-machine.md#local-repair-300),
+[D28](09-defects-and-lessons.md#d28)). A `FAILED` task used to force a re-plan of the whole
+list, which dropped the evidence of every finished task. Now the failure flags that one task -
+the 1.10 per-task machinery, with the failure as the comment - and the model rewrites it (and,
+if it must, the unfinished tasks after it) with `task_updates`. Finished tasks cannot be touched;
+the failed one must be; the human re-approves the change. A whole `task_list` still works, at
+its old cost, audited.
+
+**Found on the way** ([D27](09-defects-and-lessons.md#d27)). Approving a plan a second time put
+the recommendation back over the human's pick - a 2.0 bug on the expired-approval path, exposed
+when a repair made second approvals routine. Found by the browser check, not by the suite.
+
+- **Nothing changes for a plan under no contract**: responses, chat texts and fingerprint are
+  the 2.0 ones, and with `PLANNING_MCP_DONE_WHEN=off` + `PLANNING_MCP_LOCAL_REPAIR=false` none
+  of the 3.0 text is advertised. State files from 2.0 load unchanged.
+- **Cost, and the trim that paid for it**: the new fields took the tool definitions from
+  3,903 to 4,239 estimated tokens (the `bytes // 3` method of
+  `docs/context-budget-analysis.md`) - more than the +250-300 first estimated. So the whole
+  tool text was trimmed in the same release: each rule said once, in the tool description
+  (the part every client relays); one example per parameter; no second example on nested
+  fields. Result: **3,486** (3,599 with file checks) - 3.0 with everything on now costs less
+  than 2.0 did. No rule, example or enum value was removed (`TestToolTextIsLean`), but the
+  trim is unmeasured on the corporate model. Table in
+  [03](03-tool-contract.md).
+- **The repeat threshold is 0.3, not the 0.5 first proposed**: measured on more pairs, 0.5 would
+  have refused "Saved the summary to out/summary.md (5 lines, 412 bytes)". Evidence under 0.5 is
+  marked on the page instead. Every score is audited (`task_done.novelty`) for field tuning.
+- **The agent prompt was trimmed too**, at the user's direction: the target is a mid-sized
+  model, and a long prompt lowers how much of it such a model follows. `agents.md` went from
+  46 lines / 3,862 characters to 31 / 2,275. A rule the tool descriptions state, or that the
+  hint gives at the moment it applies, is no longer repeated in the prompt (`LOOP_HALTED`,
+  the rework rule, `task_updates`, `task_id` from `next_task`, the refused phrases); the
+  table of what moved where is in `docs/phase3-anythingllm-agent-prompt.md`. The Korean
+  Variant B, which had been left at its 2.0 wording, was rewritten to match. The README no
+  longer embeds the prompt: it names `agents.md` as the file to paste.
+- **The approval page shows its version.** A small `planning-mcp 3.0.0` above the card, the
+  same element on the idle screen, a plan request, a completion report and a halt card - so
+  "is the new version actually running?" has an answer on screen (a process keeps the code
+  it imported until restarted). Each request also records which version asked, and the card
+  says so when that differs from the page's, or when the asking process is too old to say.
+  A small `i` beside it opens an information dialog (author, email, version).
+- **At the plan limit, the least recently used unfinished plan is evicted** instead of the new
+  one being refused (`PLANNING_MCP_EVICT_LRU`, default on). With 20 slots the table fills with
+  plans abandoned conversations left behind, and only a human rejecting them on the page ever
+  removed one. A plan touched within `PLANNING_MCP_EVICT_MIN_IDLE` (300 s) is in use and is
+  never evicted - if all are, the new plan is refused as before, which is also what stops a
+  model that keeps opening plans from emptying the table. The evicted plan's evidence goes to
+  the audit log, its request leaves the approval page, and a conversation that returns to it
+  gets `PLAN_EVICTED` → `ANSWER_USER`, never another conversation's plans. See
+  [05](05-concurrency-and-sessions.md).
+- **Plan ids are never reused** ([D29](09-defects-and-lessons.md#d29)): found by the eviction
+  tests, where the plan that displaced an evicted one was handed its id.
+- New module `planning/evidence.py` (pure). One new error code (`FILE_NOT_FOUND`); no new plan
+  status, task status or `next_action`.
+- Major version: the plan model (`done_when`, `files`, `checks`, `failure_note`,
+  `pending_revision.origin`) and the approval protocol (`criteria`) changed.
+
+204 new tests (`tests/test_verification.py` 135, `tests/test_local_repair.py` 34,
+`tests/test_plan_eviction.py` 32, three in `TestPromptHygiene`). No existing test changed expectation - including the ones that pin
+tool-description wording - except two that follow a decision: `agents.md` must now stay
+under 2,600 characters (was 4,200), and the README is required to point at `agents.md`
+rather than to contain it.
+
 ---
 
 ## Git commit ↔ version map

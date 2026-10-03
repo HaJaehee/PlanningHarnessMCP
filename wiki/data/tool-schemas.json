@@ -1,19 +1,19 @@
 {
-  "_comment": "Generated from planning/schemas.py (build_tool_definitions). 'tools' is the default configuration (standard profile, chunked blocking approval, auto_advance, alternatives on). Since 1.16.0 the advertised text varies with the configuration; 'variants' holds the parts that differ.",
+  "_comment": "Generated from planning/schemas.py (build_tool_definitions). 'tools' is the default configuration (standard profile, chunked blocking approval, auto_advance, alternatives on, done_when on, local_repair on, no file checks). Since 1.16.0 the advertised text varies with the configuration; 'variants' holds the parts that differ. The text was trimmed in 3.0.0 (each rule once; one example per parameter): 3,486 estimated tokens by default, against 3,903 in 2.0.0.",
   "tools": [
     {
       "name": "plan_and_think",
-      "description": "STEP 1 - PLAN BEFORE YOU ACT.\nCall this first for each NEW user request. When a response says next_action = ANSWER_USER, write the answer instead - that is not a new request.\n\nHOW TO USE:\n- One call per thinking step, starting at step_number = 1. Send the same goal each time.\n- When your task breakdown is ready, send need_more_thinking = false with task_list.\n  It does not need to be perfect: the user reviews it before anything runs.\n- Each response says how many thinking steps are left. When none are left, the server\n  sends your latest task_list to the user as it stands.\n\nIF THE USER COMMENTED ON PARTICULAR TASKS:\nThe server names them. Send task_updates instead of task_list, rewriting only those\ntasks. Every other task was already accepted - leave it alone.\n\nDo not execute anything or answer the user while planning.",
+      "description": "STEP 1 - PLAN BEFORE YOU ACT.\nCall this first for each NEW user request. When a response says next_action = ANSWER_USER, write the answer instead - that is not a new request.\n\nHOW TO USE:\n- One call per thinking step, starting at step_number = 1. Send the same goal each time.\n- When your task breakdown is ready, send need_more_thinking = false with task_list.\n  It does not need to be perfect: the user reviews it before anything runs.\n- Each response says how many thinking steps are left. When none are left, the server\n  sends your latest task_list to the user as it stands.\n\nIF THE USER COMMENTED ON PARTICULAR TASKS:\nThe server names them. Send task_updates instead of task_list, rewriting only those\ntasks. Every other task was already accepted - leave it alone.\n\nIF A TASK FAILED:\nThe server names it. Send task_updates rewriting that task with another way to do it\n(and any later task that has to change). Finished tasks keep their results.\n\nDo not execute anything or answer the user while planning.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "goal": {
             "type": "string",
-            "description": "One sentence restating what the user ultimately wants. Repeat the SAME goal text on every step. Example: 'Summarize the Q3 sales report and email it to the team lead.' If the user CORRECTS the goal, keep sending the old text here and put the corrected one in revised_goal."
+            "description": "What the user ultimately wants, in one sentence. Send the SAME text on every call. Example: 'Summarize the Q3 sales report and email it to the team lead.' If the user CORRECTS the goal, keep the old text here and put the new one in revised_goal."
           },
           "revised_goal": {
             "type": "string",
-            "description": "OPTIONAL. Use ONLY when the user says the goal itself was wrong or has changed - for example 'no, I meant the Q4 report, not Q3'. Put the corrected goal here and leave 'goal' as the text you have been sending, so the server can find the plan and record the change. Do NOT use it to reword or paraphrase the same goal. Example: 'Summarize the Q4 sales report and email it to the team lead.'"
+            "description": "OPTIONAL. The corrected goal, ONLY when the user says the goal itself was wrong ('no, I meant the Q4 report, not Q3'). Do NOT use it to reword the same goal. Example: 'Summarize the Q4 sales report and email it to the team lead.'"
           },
           "thought": {
             "type": "string",
@@ -22,12 +22,12 @@
           "step_number": {
             "type": "integer",
             "minimum": 1,
-            "description": "Which thinking step this is. Starts at 1 and increases by exactly 1 each call. Example: 2"
+            "description": "Which thinking step this is: 1, then one more each call. Example: 2"
           },
           "total_steps": {
             "type": "integer",
             "minimum": 1,
-            "description": "How many thinking steps you expect to need in total. Example: 3"
+            "description": "How many thinking steps you expect in total. Example: 3"
           },
           "need_more_thinking": {
             "type": "boolean",
@@ -38,7 +38,7 @@
             "items": {
               "type": "string"
             },
-            "description": "REQUIRED when need_more_thinking is false. A flat list of plain-text action items, in execution order. Plain strings only - do NOT send objects, do NOT add numbering, do NOT add status. The server assigns task_id automatically. Example: [\"Locate the Q3 sales report file\", \"Extract the revenue table\", \"Write a 5-line summary\", \"Send the summary by email\"]"
+            "description": "REQUIRED when need_more_thinking is false. Plain-text action items in execution order. Strings only - no objects, numbering or status; the server assigns task_id. Example: [\"Locate the Q3 sales report file\", \"Extract the revenue table\", \"Write a 5-line summary\", \"Send the summary by email\"]"
           },
           "task_updates": {
             "type": "array",
@@ -48,11 +48,11 @@
                 "task_id": {
                   "type": "integer",
                   "minimum": 1,
-                  "description": "The task the user commented on. Example: 3"
+                  "description": "The task to rewrite."
                 },
                 "title": {
                   "type": "string",
-                  "description": "The rewritten task, answering the user's comment. Example: 'Copy the revenue table into the summary unchanged'"
+                  "description": "Its new wording."
                 }
               },
               "required": [
@@ -60,16 +60,16 @@
                 "title"
               ]
             },
-            "description": "ONLY use this when the server told you the user commented on specific tasks. Rewrite JUST those tasks; every task you do not list stays exactly as it is. Do NOT send task_list at the same time, and do NOT use this to add, delete or reorder tasks - that requires a full task_list. Example: [{\"task_id\": 3, \"title\": \"Copy the revenue table in unchanged\"}]"
+            "description": "ONLY use this when the server asks for it: the user commented on specific tasks, or a task failed. Rewrite JUST those tasks; a task you do not list stays as it is. Not together with task_list, and not to add, delete or reorder tasks - that needs a full task_list. Example: [{\"task_id\": 3, \"title\": \"Copy the revenue table in unchanged\"}]"
           },
           "revises_step": {
             "type": "integer",
             "minimum": 1,
-            "description": "OPTIONAL - normally left out. The step_number of an earlier step that this step replaces. Example: 2"
+            "description": "OPTIONAL - normally left out. The step_number of an earlier step this one replaces. Example: 2"
           },
           "plan_id": {
             "type": "string",
-            "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+            "description": "OPTIONAL. Leave it out unless the server asks for it; then send the plan_id from earlier responses. Example: \"plan_20260724_0002\""
           },
           "alternatives": {
             "type": "array",
@@ -79,19 +79,19 @@
                 "task_id": {
                   "type": "integer",
                   "minimum": 1,
-                  "description": "The task's number in task_list (first = 1). Example: 2"
+                  "description": "The task's number in task_list (first = 1)."
                 },
                 "title": {
                   "type": "string",
-                  "description": "Another way to do that task. Example: 'Export the table to CSV and total it with a script'"
+                  "description": "Another way to do that task."
                 },
                 "reason": {
                   "type": "string",
-                  "description": "Its trade-off, short. Example: 'faster, loses formatting'"
+                  "description": "Its trade-off, short."
                 },
                 "topic": {
                   "type": "string",
-                  "description": "OPTIONAL. What is being chosen, in two to four words, in the language you use with the user - shown as the heading of the choice. Once per task is enough. Example: '집계 방식'"
+                  "description": "OPTIONAL. What is being chosen, in two to four words, in the language you use with the user. Once per task is enough."
                 }
               },
               "required": [
@@ -108,12 +108,10 @@
               "properties": {
                 "task_id": {
                   "type": "integer",
-                  "minimum": 1,
-                  "description": "Example: 2"
+                  "minimum": 1
                 },
                 "reason": {
-                  "type": "string",
-                  "description": "Example: 'keeps the report formatting'"
+                  "type": "string"
                 }
               },
               "required": [
@@ -122,6 +120,27 @@
               ]
             },
             "description": "OPTIONAL. Why you recommend the task_list version of a task that has alternatives. Example: [{\"task_id\": 2, \"reason\": \"keeps the report formatting\"}]"
+          },
+          "done_when": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "check": {
+                  "type": "string",
+                  "description": "The result, not the method. One short sentence."
+                }
+              },
+              "required": [
+                "task_id",
+                "check"
+              ]
+            },
+            "description": "OPTIONAL. What will exist or be true when a task is finished, for tasks whose result can be checked. The user sees it with the plan, and your result_log for that task must show it was met. Example: [{\"task_id\": 2, \"check\": \"A table with one revenue total per quarter (4 rows) exists\"}]"
           }
         },
         "required": [
@@ -147,19 +166,19 @@
               "REJECTED",
               "REVISE"
             ],
-            "description": "Send ASK_USER. The user answers on the approval page, and the server refuses APPROVED / REJECTED / REVISE from you while their question is open. Example: \"ASK_USER\""
+            "description": "Send \"ASK_USER\". The user answers on the approval page, and the server refuses the other values from you while their question is open."
           },
           "plan_summary": {
             "type": "string",
-            "description": "REQUIRED when decision is ASK_USER. A short human-readable summary of the plan you want approval for, written for a non-technical reader. Example: 'I will (1) find the Q3 report, (2) extract the revenue table, (3) write a 5-line summary, (4) email it to the team lead.'"
+            "description": "REQUIRED with ASK_USER. A short summary of the plan for a non-technical reader. Example: 'I will (1) find the Q3 report, (2) extract the revenue table, (3) write a 5-line summary, (4) email it to the team lead.'"
           },
           "user_comment": {
             "type": "string",
-            "description": "OPTIONAL. Copy the user's exact words here when decision is REVISE or REJECTED. Example: 'Do not send the email, just show me the summary.'"
+            "description": "OPTIONAL. The user's exact words, with REVISE or REJECTED. Example: 'Do not send the email, just show me the summary.'"
           },
           "plan_id": {
             "type": "string",
-            "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+            "description": "OPTIONAL. Leave it out unless the server asks for it; then send the plan_id from earlier responses. Example: \"plan_20260724_0002\""
           }
         },
         "required": [
@@ -169,14 +188,14 @@
     },
     {
       "name": "update_task_progress",
-      "description": "STEP 3 - EXECUTION TRACKING.\nHandle exactly ONE task per call.\n\nALWAYS take task_id from the next_task field of the most recent server response.\nnext_task is the ONLY place the server publishes a task_id. Never reuse a task_id\nfrom an earlier response and never count tasks yourself - earlier responses named\ntasks that are already finished.\n\n  1. Start the FIRST task: status = \"IN_PROGRESS\". Then do the work.\n  2. Report it: status = \"DONE\" + a result_log saying what you actually produced.\n  3. The server then starts the NEXT task for you and names it in next_task.\n     Do that work, then report it \"DONE\" the same way.\n     You do NOT send \"IN_PROGRESS\" again - just keep reporting DONE, one call per\n     task, until the server tells you no tasks remain.\nUse status = \"FAILED\" instead of \"DONE\" if the task did not work.\nThe response carries progress (\"2/5 done\") but not the task list. If you have lost\ntrack of the plan, call get_current_plan - that is what it is for.\n\nDONE IS ENFORCED. The server REFUSES a DONE for a task that:\n  - is not the task currently in progress,\n  - skips ahead while an earlier task is unfinished,\n  - has no result_log describing the real outcome.\nNever mark a task DONE before you actually did it. You must work through EVERY task in\norder, one at a time. You are not finished until the server tells you so - keep going\nwhile it says tasks remain.\nIf a task fails, set status = \"FAILED\" and explain in result_log - then follow the\nnext_action the server gives you back.",
+      "description": "STEP 3 - EXECUTION TRACKING. One task per call.\n\nTake task_id from next_task in the most recent server response. That is the ONLY place\nthe server publishes one: never reuse an earlier task_id and never count tasks yourself.\n\n  1. Start the FIRST task: status = \"IN_PROGRESS\". Then do the work.\n  2. Report it: status = \"DONE\" + a result_log saying what you actually produced.\n  3. The server then starts the NEXT task for you and names it in next_task. Do that\n     work and report it \"DONE\" the same way. You do NOT send \"IN_PROGRESS\" again - keep\n     going, one call per task, until the server tells you no tasks remain.\nIf a task did not work, send status = \"FAILED\" with the reason in result_log instead of\n\"DONE\", then follow next_action.\n\nThe server REFUSES a DONE for a task that is not the one in progress, that skips an\nunfinished earlier task, or that has no result_log describing the real outcome. Never\nmark a task DONE before you actually did it.\nThe response carries progress (\"2/5 done\"), not the task list. If you lose track of the\nplan, call get_current_plan.\n\nIf next_task has done_when, result_log must show it was met, with the actual values,\nnames or path. Repeating the done_when sentence is refused.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "task_id": {
             "type": "integer",
             "minimum": 1,
-            "description": "Copy this from next_task.task_id in the server's most recent response. That is the only task you may act on. One task per call. Example: 1"
+            "description": "Copy next_task.task_id from the server's most recent response - the only task you may act on. Example: 1"
           },
           "status": {
             "type": "string",
@@ -186,15 +205,15 @@
               "DONE",
               "FAILED"
             ],
-            "description": "IN_PROGRESS = starting now. DONE = finished successfully. FAILED = could not finish. PENDING = reset back to not-started. Example: \"IN_PROGRESS\""
+            "description": "IN_PROGRESS = starting now. DONE = finished. FAILED = could not finish. PENDING = reset to not-started. Example: \"IN_PROGRESS\""
           },
           "result_log": {
             "type": "string",
-            "description": "REQUIRED when status is DONE - the server rejects DONE without it. Write one or two sentences stating the CONCRETE outcome of the work you just did: what you found, where you saved it, or what you produced. 'done' / 'ok' / 'completed' is not acceptable. Example: 'Found the file at /reports/q3_sales.xlsx.'  or  'FAILED: no file matching q3 was found in /reports.'"
+            "description": "REQUIRED with DONE. One or two sentences on the CONCRETE outcome: what you found, what you produced, or where you saved it. 'done' / 'ok' / 'completed' is refused. Example: 'Found the file at /reports/q3_sales.xlsx.'  or  'FAILED: no file matching q3 was found in /reports.'"
           },
           "plan_id": {
             "type": "string",
-            "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+            "description": "OPTIONAL. Leave it out unless the server asks for it; then send the plan_id from earlier responses. Example: \"plan_20260724_0002\""
           }
         },
         "required": [
@@ -205,14 +224,14 @@
     },
     {
       "name": "get_current_plan",
-      "description": "RECOVERY TOOL.\nCall this when you are unsure what the plan is, which task you were on, or after a long\nconversation. It returns YOUR plan and tells you exactly what to do next.\nIt changes nothing - it is always safe to call.\n\nSEND YOUR OWN plan_id. Every response you have received carries a \"plan_id\" field -\nsend that exact value here and you will always get back your own plan, even if other\nconversations are running plans at the same time.\nOnly send \"current\" if you genuinely do not know your plan_id (for example this is your\nfirst call). \"current\" is a guess: when several plans are in flight the server cannot\ntell which one is yours, so it answers with the list of plans and you have to call\nagain with the right plan_id.",
+      "description": "RECOVERY TOOL. Call it when you are unsure what the plan is or which task you were on.\nIt returns YOUR plan and says what to do next. It changes nothing - always safe to call.\n\nSend the plan_id that every earlier response carried: that always returns your own plan.\nSend \"current\" only if you do not know it yet. \"current\" is a guess - with several plans\nin flight the server answers with the list of plans, and you call again with the right\nplan_id.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "plan_id": {
             "type": "string",
             "default": "current",
-            "description": "The plan you want. Send the plan_id YOUR conversation has been receiving in every response - that is how you get your own plan back. Example: \"plan_20260724_0002\". It also reads a plan that is already finished or cancelled. Send the exact text \"current\" ONLY if you do not know your plan_id yet; the server then guesses, and with several plans in flight it cannot guess and returns the list of plans instead."
+            "description": "The plan_id from an earlier response - a finished or cancelled plan can be read too. Example: \"plan_20260724_0002\". Send \"current\" only if you do not know it yet."
           }
         },
         "required": [
@@ -225,24 +244,24 @@
     "model_profile=reasoning": {
       "plan_and_think": {
         "name": "plan_and_think",
-        "description": "STEP 1 - RECORD YOUR PLAN.\nCall this first for each NEW user request. When a response says next_action = ANSWER_USER, write the answer instead - that is not a new request.\n\nYou have already reasoned about the request. Record the result in ONE call:\ngoal + task_list, with need_more_thinking = false.\n\nDo not re-check the plan here. The user reviews it on the approval page before\nanything runs - that review is the verification step.\n\nIf the user commented on particular tasks, the server names them: send task_updates\ninstead of task_list, rewriting only those tasks.\nIf you are torn between two ways of doing a task, do not reconsider. Put the one you\nprefer in task_list and the other in alternatives. The user picks.",
+        "description": "STEP 1 - RECORD YOUR PLAN.\nCall this first for each NEW user request. When a response says next_action = ANSWER_USER, write the answer instead - that is not a new request.\n\nYou have already reasoned about the request. Record the result in ONE call:\ngoal + task_list, with need_more_thinking = false.\n\nDo not re-check the plan here. The user reviews it on the approval page before\nanything runs - that review is the verification step.\n\nIf the user commented on particular tasks, the server names them: send task_updates\ninstead of task_list, rewriting only those tasks.\nIf you are torn between two ways of doing a task, do not reconsider. Put the one you\nprefer in task_list and the other in alternatives. The user picks.\nIf a task failed, the server names it: send task_updates for that task with another way\nto do it. Finished tasks keep their results.\nIf you want to double-check a task, do not re-check it now. Write the check in\ndone_when; it is checked when the task is done.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "goal": {
               "type": "string",
-              "description": "One sentence restating what the user ultimately wants. Repeat the SAME goal text on every step. Example: 'Summarize the Q3 sales report and email it to the team lead.' If the user CORRECTS the goal, keep sending the old text here and put the corrected one in revised_goal."
+              "description": "What the user ultimately wants, in one sentence. Send the SAME text on every call. Example: 'Summarize the Q3 sales report and email it to the team lead.' If the user CORRECTS the goal, keep the old text here and put the new one in revised_goal."
             },
             "revised_goal": {
               "type": "string",
-              "description": "OPTIONAL. Use ONLY when the user says the goal itself was wrong or has changed - for example 'no, I meant the Q4 report, not Q3'. Put the corrected goal here and leave 'goal' as the text you have been sending, so the server can find the plan and record the change. Do NOT use it to reword or paraphrase the same goal. Example: 'Summarize the Q4 sales report and email it to the team lead.'"
+              "description": "OPTIONAL. The corrected goal, ONLY when the user says the goal itself was wrong ('no, I meant the Q4 report, not Q3'). Do NOT use it to reword the same goal. Example: 'Summarize the Q4 sales report and email it to the team lead.'"
             },
             "task_list": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "REQUIRED when need_more_thinking is false. A flat list of plain-text action items, in execution order. Plain strings only - do NOT send objects, do NOT add numbering, do NOT add status. The server assigns task_id automatically. Example: [\"Locate the Q3 sales report file\", \"Extract the revenue table\", \"Write a 5-line summary\", \"Send the summary by email\"]"
+              "description": "REQUIRED when need_more_thinking is false. Plain-text action items in execution order. Strings only - no objects, numbering or status; the server assigns task_id. Example: [\"Locate the Q3 sales report file\", \"Extract the revenue table\", \"Write a 5-line summary\", \"Send the summary by email\"]"
             },
             "need_more_thinking": {
               "type": "boolean",
@@ -260,11 +279,11 @@
                   "task_id": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "The task the user commented on. Example: 3"
+                    "description": "The task to rewrite."
                   },
                   "title": {
                     "type": "string",
-                    "description": "The rewritten task, answering the user's comment. Example: 'Copy the revenue table into the summary unchanged'"
+                    "description": "Its new wording."
                   }
                 },
                 "required": [
@@ -272,11 +291,11 @@
                   "title"
                 ]
               },
-              "description": "ONLY use this when the server told you the user commented on specific tasks. Rewrite JUST those tasks; every task you do not list stays exactly as it is. Do NOT send task_list at the same time, and do NOT use this to add, delete or reorder tasks - that requires a full task_list. Example: [{\"task_id\": 3, \"title\": \"Copy the revenue table in unchanged\"}]"
+              "description": "ONLY use this when the server asks for it: the user commented on specific tasks, or a task failed. Rewrite JUST those tasks; a task you do not list stays as it is. Not together with task_list, and not to add, delete or reorder tasks - that needs a full task_list. Example: [{\"task_id\": 3, \"title\": \"Copy the revenue table in unchanged\"}]"
             },
             "plan_id": {
               "type": "string",
-              "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+              "description": "OPTIONAL. Leave it out unless the server asks for it; then send the plan_id from earlier responses. Example: \"plan_20260724_0002\""
             },
             "alternatives": {
               "type": "array",
@@ -286,19 +305,19 @@
                   "task_id": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "The task's number in task_list (first = 1). Example: 2"
+                    "description": "The task's number in task_list (first = 1)."
                   },
                   "title": {
                     "type": "string",
-                    "description": "Another way to do that task. Example: 'Export the table to CSV and total it with a script'"
+                    "description": "Another way to do that task."
                   },
                   "reason": {
                     "type": "string",
-                    "description": "Its trade-off, short. Example: 'faster, loses formatting'"
+                    "description": "Its trade-off, short."
                   },
                   "topic": {
                     "type": "string",
-                    "description": "OPTIONAL. What is being chosen, in two to four words, in the language you use with the user - shown as the heading of the choice. Once per task is enough. Example: '집계 방식'"
+                    "description": "OPTIONAL. What is being chosen, in two to four words, in the language you use with the user. Once per task is enough."
                   }
                 },
                 "required": [
@@ -315,12 +334,10 @@
                 "properties": {
                   "task_id": {
                     "type": "integer",
-                    "minimum": 1,
-                    "description": "Example: 2"
+                    "minimum": 1
                   },
                   "reason": {
-                    "type": "string",
-                    "description": "Example: 'keeps the report formatting'"
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -329,6 +346,27 @@
                 ]
               },
               "description": "OPTIONAL. Why you recommend the task_list version of a task that has alternatives. Example: [{\"task_id\": 2, \"reason\": \"keeps the report formatting\"}]"
+            },
+            "done_when": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "check": {
+                    "type": "string",
+                    "description": "The result, not the method. One short sentence."
+                  }
+                },
+                "required": [
+                  "task_id",
+                  "check"
+                ]
+              },
+              "description": "OPTIONAL. What will exist or be true when a task is finished, for tasks whose result can be checked. The user sees it with the plan, and your result_log for that task must show it was met. Example: [{\"task_id\": 2, \"check\": \"A table with one revenue total per quarter (4 rows) exists\"}]"
             }
           },
           "required": [
@@ -353,19 +391,19 @@
                 "REJECTED",
                 "REVISE"
               ],
-              "description": "Send ASK_USER. The user answers on the approval page, and the server refuses APPROVED / REJECTED / REVISE from you while their question is open. Example: \"ASK_USER\""
+              "description": "Send \"ASK_USER\". The user answers on the approval page, and the server refuses the other values from you while their question is open."
             },
             "plan_summary": {
               "type": "string",
-              "description": "REQUIRED when decision is ASK_USER. A short human-readable summary of the plan you want approval for, written for a non-technical reader. Example: 'I will (1) find the Q3 report, (2) extract the revenue table, (3) write a 5-line summary, (4) email it to the team lead.'"
+              "description": "REQUIRED with ASK_USER. A short summary of the plan for a non-technical reader. Example: 'I will (1) find the Q3 report, (2) extract the revenue table, (3) write a 5-line summary, (4) email it to the team lead.'"
             },
             "user_comment": {
               "type": "string",
-              "description": "OPTIONAL. Copy the user's exact words here when decision is REVISE or REJECTED. Example: 'Do not send the email, just show me the summary.'"
+              "description": "OPTIONAL. The user's exact words, with REVISE or REJECTED. Example: 'Do not send the email, just show me the summary.'"
             },
             "plan_id": {
               "type": "string",
-              "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+              "description": "OPTIONAL. Leave it out unless the server asks for it; then send the plan_id from earlier responses. Example: \"plan_20260724_0002\""
             }
           },
           "required": [
@@ -393,15 +431,15 @@
             },
             "plan_summary": {
               "type": "string",
-              "description": "REQUIRED when decision is ASK_USER. A short human-readable summary of the plan you want approval for, written for a non-technical reader. Example: 'I will (1) find the Q3 report, (2) extract the revenue table, (3) write a 5-line summary, (4) email it to the team lead.'"
+              "description": "REQUIRED with ASK_USER. A short summary of the plan for a non-technical reader. Example: 'I will (1) find the Q3 report, (2) extract the revenue table, (3) write a 5-line summary, (4) email it to the team lead.'"
             },
             "user_comment": {
               "type": "string",
-              "description": "OPTIONAL. Copy the user's exact words here when decision is REVISE or REJECTED. Example: 'Do not send the email, just show me the summary.'"
+              "description": "OPTIONAL. The user's exact words, with REVISE or REJECTED. Example: 'Do not send the email, just show me the summary.'"
             },
             "plan_id": {
               "type": "string",
-              "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+              "description": "OPTIONAL. Leave it out unless the server asks for it; then send the plan_id from earlier responses. Example: \"plan_20260724_0002\""
             },
             "choices": {
               "type": "object",
@@ -420,17 +458,17 @@
     "alternatives=false": {
       "plan_and_think": {
         "name": "plan_and_think",
-        "description": "STEP 1 - PLAN BEFORE YOU ACT.\nCall this first for each NEW user request. When a response says next_action = ANSWER_USER, write the answer instead - that is not a new request.\n\nHOW TO USE:\n- One call per thinking step, starting at step_number = 1. Send the same goal each time.\n- When your task breakdown is ready, send need_more_thinking = false with task_list.\n  It does not need to be perfect: the user reviews it before anything runs.\n- Each response says how many thinking steps are left. When none are left, the server\n  sends your latest task_list to the user as it stands.\n\nIF THE USER COMMENTED ON PARTICULAR TASKS:\nThe server names them. Send task_updates instead of task_list, rewriting only those\ntasks. Every other task was already accepted - leave it alone.\n\nDo not execute anything or answer the user while planning.",
+        "description": "STEP 1 - PLAN BEFORE YOU ACT.\nCall this first for each NEW user request. When a response says next_action = ANSWER_USER, write the answer instead - that is not a new request.\n\nHOW TO USE:\n- One call per thinking step, starting at step_number = 1. Send the same goal each time.\n- When your task breakdown is ready, send need_more_thinking = false with task_list.\n  It does not need to be perfect: the user reviews it before anything runs.\n- Each response says how many thinking steps are left. When none are left, the server\n  sends your latest task_list to the user as it stands.\n\nIF THE USER COMMENTED ON PARTICULAR TASKS:\nThe server names them. Send task_updates instead of task_list, rewriting only those\ntasks. Every other task was already accepted - leave it alone.\n\nIF A TASK FAILED:\nThe server names it. Send task_updates rewriting that task with another way to do it\n(and any later task that has to change). Finished tasks keep their results.\n\nDo not execute anything or answer the user while planning.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "goal": {
               "type": "string",
-              "description": "One sentence restating what the user ultimately wants. Repeat the SAME goal text on every step. Example: 'Summarize the Q3 sales report and email it to the team lead.' If the user CORRECTS the goal, keep sending the old text here and put the corrected one in revised_goal."
+              "description": "What the user ultimately wants, in one sentence. Send the SAME text on every call. Example: 'Summarize the Q3 sales report and email it to the team lead.' If the user CORRECTS the goal, keep the old text here and put the new one in revised_goal."
             },
             "revised_goal": {
               "type": "string",
-              "description": "OPTIONAL. Use ONLY when the user says the goal itself was wrong or has changed - for example 'no, I meant the Q4 report, not Q3'. Put the corrected goal here and leave 'goal' as the text you have been sending, so the server can find the plan and record the change. Do NOT use it to reword or paraphrase the same goal. Example: 'Summarize the Q4 sales report and email it to the team lead.'"
+              "description": "OPTIONAL. The corrected goal, ONLY when the user says the goal itself was wrong ('no, I meant the Q4 report, not Q3'). Do NOT use it to reword the same goal. Example: 'Summarize the Q4 sales report and email it to the team lead.'"
             },
             "thought": {
               "type": "string",
@@ -439,12 +477,12 @@
             "step_number": {
               "type": "integer",
               "minimum": 1,
-              "description": "Which thinking step this is. Starts at 1 and increases by exactly 1 each call. Example: 2"
+              "description": "Which thinking step this is: 1, then one more each call. Example: 2"
             },
             "total_steps": {
               "type": "integer",
               "minimum": 1,
-              "description": "How many thinking steps you expect to need in total. Example: 3"
+              "description": "How many thinking steps you expect in total. Example: 3"
             },
             "need_more_thinking": {
               "type": "boolean",
@@ -455,7 +493,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "REQUIRED when need_more_thinking is false. A flat list of plain-text action items, in execution order. Plain strings only - do NOT send objects, do NOT add numbering, do NOT add status. The server assigns task_id automatically. Example: [\"Locate the Q3 sales report file\", \"Extract the revenue table\", \"Write a 5-line summary\", \"Send the summary by email\"]"
+              "description": "REQUIRED when need_more_thinking is false. Plain-text action items in execution order. Strings only - no objects, numbering or status; the server assigns task_id. Example: [\"Locate the Q3 sales report file\", \"Extract the revenue table\", \"Write a 5-line summary\", \"Send the summary by email\"]"
             },
             "task_updates": {
               "type": "array",
@@ -465,11 +503,11 @@
                   "task_id": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "The task the user commented on. Example: 3"
+                    "description": "The task to rewrite."
                   },
                   "title": {
                     "type": "string",
-                    "description": "The rewritten task, answering the user's comment. Example: 'Copy the revenue table into the summary unchanged'"
+                    "description": "Its new wording."
                   }
                 },
                 "required": [
@@ -477,16 +515,37 @@
                   "title"
                 ]
               },
-              "description": "ONLY use this when the server told you the user commented on specific tasks. Rewrite JUST those tasks; every task you do not list stays exactly as it is. Do NOT send task_list at the same time, and do NOT use this to add, delete or reorder tasks - that requires a full task_list. Example: [{\"task_id\": 3, \"title\": \"Copy the revenue table in unchanged\"}]"
+              "description": "ONLY use this when the server asks for it: the user commented on specific tasks, or a task failed. Rewrite JUST those tasks; a task you do not list stays as it is. Not together with task_list, and not to add, delete or reorder tasks - that needs a full task_list. Example: [{\"task_id\": 3, \"title\": \"Copy the revenue table in unchanged\"}]"
             },
             "revises_step": {
               "type": "integer",
               "minimum": 1,
-              "description": "OPTIONAL - normally left out. The step_number of an earlier step that this step replaces. Example: 2"
+              "description": "OPTIONAL - normally left out. The step_number of an earlier step this one replaces. Example: 2"
             },
             "plan_id": {
               "type": "string",
-              "description": "OPTIONAL. Leave this out unless the server asks for it. If several plans are active at the same time, set it to the plan_id this conversation has been receiving in every response. Example: \"plan_20260724_0002\""
+              "description": "OPTIONAL. Leave it out unless the server asks for it; then send the plan_id from earlier responses. Example: \"plan_20260724_0002\""
+            },
+            "done_when": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "check": {
+                    "type": "string",
+                    "description": "The result, not the method. One short sentence."
+                  }
+                },
+                "required": [
+                  "task_id",
+                  "check"
+                ]
+              },
+              "description": "OPTIONAL. What will exist or be true when a task is finished, for tasks whose result can be checked. The user sees it with the plan, and your result_log for that task must show it was met. Example: [{\"task_id\": 2, \"check\": \"A table with one revenue total per quarter (4 rows) exists\"}]"
             }
           },
           "required": [
@@ -495,6 +554,257 @@
             "step_number",
             "total_steps",
             "need_more_thinking"
+          ]
+        }
+      }
+    },
+    "auto_advance=false": {
+      "update_task_progress": {
+        "name": "update_task_progress",
+        "description": "STEP 3 - EXECUTION TRACKING. One task per call.\n\nTake task_id from next_task in the most recent server response. That is the ONLY place\nthe server publishes one: never reuse an earlier task_id.\n\nCall this tool TWICE for every task:\n  1. BEFORE you start the task  -> status = \"IN_PROGRESS\"\n  2. AFTER you finish the task  -> status = \"DONE\" + a result_log saying what you\n     actually produced\nIf a task did not work, send status = \"FAILED\" with the reason in result_log instead of\n\"DONE\", then follow next_action. Keep going, in order, until the server tells you no\ntasks remain.\n\nThe server REFUSES a DONE that was never marked IN_PROGRESS first, that skips an\nunfinished earlier task, or that has no result_log describing the real outcome. Never\nmark a task DONE before you actually did it.\n\nIf next_task has done_when, result_log must show it was met, with the actual values,\nnames or path. Repeating the done_when sentence is refused.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Copy next_task.task_id from the server's most recent response - the only task you may act on. Example: 1"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "PENDING",
+                "IN_PROGRESS",
+                "DONE",
+                "FAILED"
+              ],
+              "description": "IN_PROGRESS = starting now. DONE = finished. FAILED = could not finish. PENDING = reset to not-started. Example: \"IN_PROGRESS\""
+            },
+            "result_log": {
+              "type": "string",
+              "description": "REQUIRED with DONE. One or two sentences on the CONCRETE outcome: what you found, what you produced, or where you saved it. 'done' / 'ok' / 'completed' is refused. Example: 'Found the file at /reports/q3_sales.xlsx.'  or  'FAILED: no file matching q3 was found in /reports.'"
+            },
+            "plan_id": {
+              "type": "string",
+              "description": "OPTIONAL. Leave it out unless the server asks for it; then send the plan_id from earlier responses. Example: \"plan_20260724_0002\""
+            }
+          },
+          "required": [
+            "task_id",
+            "status"
+          ]
+        }
+      }
+    },
+    "file_checks=true (PLANNING_MCP_ARTIFACT_ROOTS set)": {
+      "update_task_progress": {
+        "name": "update_task_progress",
+        "description": "STEP 3 - EXECUTION TRACKING. One task per call.\n\nTake task_id from next_task in the most recent server response. That is the ONLY place\nthe server publishes one: never reuse an earlier task_id and never count tasks yourself.\n\n  1. Start the FIRST task: status = \"IN_PROGRESS\". Then do the work.\n  2. Report it: status = \"DONE\" + a result_log saying what you actually produced.\n  3. The server then starts the NEXT task for you and names it in next_task. Do that\n     work and report it \"DONE\" the same way. You do NOT send \"IN_PROGRESS\" again - keep\n     going, one call per task, until the server tells you no tasks remain.\nIf a task did not work, send status = \"FAILED\" with the reason in result_log instead of\n\"DONE\", then follow next_action.\n\nThe server REFUSES a DONE for a task that is not the one in progress, that skips an\nunfinished earlier task, or that has no result_log describing the real outcome. Never\nmark a task DONE before you actually did it.\nThe response carries progress (\"2/5 done\"), not the task list. If you lose track of the\nplan, call get_current_plan.\n\nIf next_task has done_when, result_log must show it was met, with the actual values,\nnames or path. Repeating the done_when sentence is refused.\n\nList the files the task created or changed in files: the server looks for each one and\nrefuses DONE for a file it cannot find.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Copy next_task.task_id from the server's most recent response - the only task you may act on. Example: 1"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "PENDING",
+                "IN_PROGRESS",
+                "DONE",
+                "FAILED"
+              ],
+              "description": "IN_PROGRESS = starting now. DONE = finished. FAILED = could not finish. PENDING = reset to not-started. Example: \"IN_PROGRESS\""
+            },
+            "result_log": {
+              "type": "string",
+              "description": "REQUIRED with DONE. One or two sentences on the CONCRETE outcome: what you found, what you produced, or where you saved it. 'done' / 'ok' / 'completed' is refused. Example: 'Found the file at /reports/q3_sales.xlsx.'  or  'FAILED: no file matching q3 was found in /reports.'"
+            },
+            "plan_id": {
+              "type": "string",
+              "description": "OPTIONAL. Leave it out unless the server asks for it; then send the plan_id from earlier responses. Example: \"plan_20260724_0002\""
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "OPTIONAL, with DONE. The files this task created or changed. Leave it out if there are none. Example: [\"D:/reports/q4_pivot.xlsx\"]"
+            }
+          },
+          "required": [
+            "task_id",
+            "status"
+          ]
+        }
+      }
+    },
+    "done_when=false, local_repair=false": {
+      "plan_and_think": {
+        "name": "plan_and_think",
+        "description": "STEP 1 - PLAN BEFORE YOU ACT.\nCall this first for each NEW user request. When a response says next_action = ANSWER_USER, write the answer instead - that is not a new request.\n\nHOW TO USE:\n- One call per thinking step, starting at step_number = 1. Send the same goal each time.\n- When your task breakdown is ready, send need_more_thinking = false with task_list.\n  It does not need to be perfect: the user reviews it before anything runs.\n- Each response says how many thinking steps are left. When none are left, the server\n  sends your latest task_list to the user as it stands.\n\nIF THE USER COMMENTED ON PARTICULAR TASKS:\nThe server names them. Send task_updates instead of task_list, rewriting only those\ntasks. Every other task was already accepted - leave it alone.\n\nDo not execute anything or answer the user while planning.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "string",
+              "description": "What the user ultimately wants, in one sentence. Send the SAME text on every call. Example: 'Summarize the Q3 sales report and email it to the team lead.' If the user CORRECTS the goal, keep the old text here and put the new one in revised_goal."
+            },
+            "revised_goal": {
+              "type": "string",
+              "description": "OPTIONAL. The corrected goal, ONLY when the user says the goal itself was wrong ('no, I meant the Q4 report, not Q3'). Do NOT use it to reword the same goal. Example: 'Summarize the Q4 sales report and email it to the team lead.'"
+            },
+            "thought": {
+              "type": "string",
+              "description": "Your reasoning for this step, in one or two sentences. Example: 'I must first locate the Q3 report file before I can summarize it.'"
+            },
+            "step_number": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Which thinking step this is: 1, then one more each call. Example: 2"
+            },
+            "total_steps": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "How many thinking steps you expect in total. Example: 3"
+            },
+            "need_more_thinking": {
+              "type": "boolean",
+              "description": "false = task_list is ready (it does not need to be perfect - the user reviews it). true = you need another thinking step. Example: false"
+            },
+            "task_list": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "REQUIRED when need_more_thinking is false. Plain-text action items in execution order. Strings only - no objects, numbering or status; the server assigns task_id. Example: [\"Locate the Q3 sales report file\", \"Extract the revenue table\", \"Write a 5-line summary\", \"Send the summary by email\"]"
+            },
+            "task_updates": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The task to rewrite."
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "Its new wording."
+                  }
+                },
+                "required": [
+                  "task_id",
+                  "title"
+                ]
+              },
+              "description": "ONLY use this when the server told you the user commented on specific tasks. Rewrite JUST those tasks; a task you do not list stays as it is. Not together with task_list, and not to add, delete or reorder tasks - that needs a full task_list. Example: [{\"task_id\": 3, \"title\": \"Copy the revenue table in unchanged\"}]"
+            },
+            "revises_step": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "OPTIONAL - normally left out. The step_number of an earlier step this one replaces. Example: 2"
+            },
+            "plan_id": {
+              "type": "string",
+              "description": "OPTIONAL. Leave it out unless the server asks for it; then send the plan_id from earlier responses. Example: \"plan_20260724_0002\""
+            },
+            "alternatives": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The task's number in task_list (first = 1)."
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "Another way to do that task."
+                  },
+                  "reason": {
+                    "type": "string",
+                    "description": "Its trade-off, short."
+                  },
+                  "topic": {
+                    "type": "string",
+                    "description": "OPTIONAL. What is being chosen, in two to four words, in the language you use with the user. Once per task is enough."
+                  }
+                },
+                "required": [
+                  "task_id",
+                  "title"
+                ]
+              },
+              "description": "OPTIONAL. Other ways to do a task, ONLY when the choice depends on the user's preference - not on facts you can check yourself. The task in task_list is your recommendation; the user picks one option on the approval page and you are told which. At most 3 per task, 3 tasks per plan. Example: [{\"task_id\": 2, \"title\": \"Export to CSV and total it with a script\", \"reason\": \"faster, loses formatting\", \"topic\": \"집계 방식\"}]"
+            },
+            "recommended_reasons": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "task_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task_id",
+                  "reason"
+                ]
+              },
+              "description": "OPTIONAL. Why you recommend the task_list version of a task that has alternatives. Example: [{\"task_id\": 2, \"reason\": \"keeps the report formatting\"}]"
+            }
+          },
+          "required": [
+            "goal",
+            "thought",
+            "step_number",
+            "total_steps",
+            "need_more_thinking"
+          ]
+        }
+      },
+      "update_task_progress": {
+        "name": "update_task_progress",
+        "description": "STEP 3 - EXECUTION TRACKING. One task per call.\n\nTake task_id from next_task in the most recent server response. That is the ONLY place\nthe server publishes one: never reuse an earlier task_id and never count tasks yourself.\n\n  1. Start the FIRST task: status = \"IN_PROGRESS\". Then do the work.\n  2. Report it: status = \"DONE\" + a result_log saying what you actually produced.\n  3. The server then starts the NEXT task for you and names it in next_task. Do that\n     work and report it \"DONE\" the same way. You do NOT send \"IN_PROGRESS\" again - keep\n     going, one call per task, until the server tells you no tasks remain.\nIf a task did not work, send status = \"FAILED\" with the reason in result_log instead of\n\"DONE\", then follow next_action.\n\nThe server REFUSES a DONE for a task that is not the one in progress, that skips an\nunfinished earlier task, or that has no result_log describing the real outcome. Never\nmark a task DONE before you actually did it.\nThe response carries progress (\"2/5 done\"), not the task list. If you lose track of the\nplan, call get_current_plan.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Copy next_task.task_id from the server's most recent response - the only task you may act on. Example: 1"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "PENDING",
+                "IN_PROGRESS",
+                "DONE",
+                "FAILED"
+              ],
+              "description": "IN_PROGRESS = starting now. DONE = finished. FAILED = could not finish. PENDING = reset to not-started. Example: \"IN_PROGRESS\""
+            },
+            "result_log": {
+              "type": "string",
+              "description": "REQUIRED with DONE. One or two sentences on the CONCRETE outcome: what you found, what you produced, or where you saved it. 'done' / 'ok' / 'completed' is refused. Example: 'Found the file at /reports/q3_sales.xlsx.'  or  'FAILED: no file matching q3 was found in /reports.'"
+            },
+            "plan_id": {
+              "type": "string",
+              "description": "OPTIONAL. Leave it out unless the server asks for it; then send the plan_id from earlier responses. Example: \"plan_20260724_0002\""
+            }
+          },
+          "required": [
+            "task_id",
+            "status"
           ]
         }
       }
