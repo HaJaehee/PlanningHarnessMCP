@@ -866,6 +866,9 @@ input.dwi{display:none;flex:1 1 auto;min-width:0;box-sizing:border-box;border-ra
 @media(prefers-color-scheme:dark){.pendingctl{background:#2a2115}}
 .pendingctl .q{display:block;margin-top:.3rem;opacity:.8;white-space:pre-wrap;
                word-break:break-word}
+/* One card per request and per running plan, each drawn on its own. The rule between two
+   cards belongs to the second of them, so a card that comes or goes takes its rule along. */
+.item+.item{border-top:1px solid #ccd0d5;margin-top:1.75rem;padding-top:1.75rem}
 .linkbtn{display:block;flex:none;min-width:0;margin-top:.55rem;padding:.25rem .7rem;
          font-size:.8rem;font-weight:500;border-radius:6px;background:#fff;color:inherit}
 @media(prefers-color-scheme:dark){.linkbtn{background:#2c3038}}
@@ -882,7 +885,7 @@ input.dwi{display:none;flex:1 1 auto;min-width:0;box-sizing:border-box;border-ra
 <button type="button" id="about-close">닫기</button>
 </div></dialog>
 <script>
-let seen='',busy=false,flash=null,pendingCount=0,lastError='';
+let busy=false,flash=null,pendingCount=0,lastError='';
 // The version of the server that is serving this page (filled in when it is served).
 const VERSION='__PLANNING_MCP_VERSION__';
 // A request can be asked by another planning-mcp process on the same state directory,
@@ -961,43 +964,43 @@ function dprune(ids){
 function taskBoxes(req){
   return document.querySelectorAll('textarea.tc[data-req="'+req+'"]');
 }
-function restore(list){
-  list.forEach(d=>{
-    if(d.decided)return;
-    const all=document.getElementById('c-'+d.id);
-    if(all)all.value=dget(d.id,'_all');
-    const whole=document.getElementById('all-'+d.id);
-    if(whole)whole.checked=dget(d.id,'_whole')==='1';
-    taskBoxes(d.id).forEach(b=>{
-      b.value=dget(d.id,b.getAttribute('data-tid'));
-      // A restored comment has to be visible, or the human sends a targeted revision
-      // they cannot see. relabel() marks the row; opening it lets them edit it.
-      if(b.value.trim()){
-        const task=b.closest('.task');
-        if(task){
-          task.classList.add('open');
-          const btn=task.querySelector('.tcbtn');
-          if(btn)btn.setAttribute('aria-expanded','true');
-        }
+// Puts what the human had typed back into ONE card, right after that card is drawn. A
+// card that was not redrawn still holds it in the DOM and is left alone.
+function restore(d){
+  if(d.decided)return;
+  const all=document.getElementById('c-'+d.id);
+  if(all)all.value=dget(d.id,'_all');
+  const whole=document.getElementById('all-'+d.id);
+  if(whole)whole.checked=dget(d.id,'_whole')==='1';
+  taskBoxes(d.id).forEach(b=>{
+    b.value=dget(d.id,b.getAttribute('data-tid'));
+    // A restored comment has to be visible, or the human sends a targeted revision
+    // they cannot see. relabel() marks the row; opening it lets them edit it.
+    if(b.value.trim()){
+      const task=b.closest('.task');
+      if(task){
+        task.classList.add('open');
+        const btn=task.querySelector('.tcbtn');
+        if(btn)btn.setAttribute('aria-expanded','true');
       }
-    });
-    // The human's picks survive a rebuild like their comments do (D22).
-    document.querySelectorAll('input[type=radio][data-req="'+d.id+'"]').forEach(r=>{
-      const v=dget(d.id,'ch'+r.getAttribute('data-ctid'));
-      if(v!==''&&r.value===v){
-        r.checked=true;
-        if(v==='other')openComment(d.id,r.getAttribute('data-ctid'),false);
-      }
-    });
-    // So does a criterion they wrote. "No draft" and "erased it" are different states
-    // here - erasing removes the criterion - so the raw item is read, not dget's ''.
-    dwInputs(d.id).forEach(i=>{
-      let v=null;
-      try{v=localStorage.getItem(dkey(d.id,'dw'+i.getAttribute('data-dtid')));}catch(e){}
-      if(v!==null&&v!==(i.getAttribute('data-orig')||'')){i.value=v;showCriterion(i);}
-    });
-    relabel(d.id);
+    }
   });
+  // The human's picks survive a rebuild like their comments do (D22).
+  document.querySelectorAll('input[type=radio][data-req="'+d.id+'"]').forEach(r=>{
+    const v=dget(d.id,'ch'+r.getAttribute('data-ctid'));
+    if(v!==''&&r.value===v){
+      r.checked=true;
+      if(v==='other')openComment(d.id,r.getAttribute('data-ctid'),false);
+    }
+  });
+  // So does a criterion they wrote. "No draft" and "erased it" are different states
+  // here - erasing removes the criterion - so the raw item is read, not dget's ''.
+  dwInputs(d.id).forEach(i=>{
+    let v=null;
+    try{v=localStorage.getItem(dkey(d.id,'dw'+i.getAttribute('data-dtid')));}catch(e){}
+    if(v!==null&&v!==(i.getAttribute('data-orig')||'')){i.value=v;showCriterion(i);}
+  });
+  relabel(d.id);
 }
 // One delegated listener on a container that outlives every re-render, so no inline
 // handler has to carry an escaped id.
@@ -1082,18 +1085,10 @@ async function poll(){
     const list=d.requests||[];
     RUNS=d.runs||[];
     dprune(list.map(x=>x.id).concat(RUNS.map(runId)));
-    const sig=list.map(x=>x.id+':'+(x.decided||'')+':'+(x.agent_waiting?1:0)+':'+
-      (x.agent_note||'').length).join('|')+'#'+RUNS.map(x=>x.plan_id+':'+(x.rev||'')+':'+
-      (x.control?x.control.id:'')).join('|');
-    if(sig===seen)return;
-    seen=sig;
     const undecided=list.filter(x=>!x.decided);
     pendingCount=undecided.length;
-    const focus=focusKey();
-    render(list);
-    restore(list);
-    restoreRuns();
-    refocus(focus);
+    // Nothing on the page changed: nothing is touched, and the tone is not played again.
+    if(!draw(list))return;
     // A running plan is not a question, so it never raises the alarm.
     if(undecided.length)alertOn();else alertOff();
   }catch(e){}
@@ -1532,11 +1527,9 @@ function runCard(r){
     '\\',\\'NOTE\\')">의견 전달</button><button class="no" type="button" onclick="control(\\''+
     pid+'\\',\\'PAUSE\\')">멈춤</button></div>';
 }
-function restoreRuns(){
-  RUNS.forEach(r=>{
-    const box=document.getElementById('c-'+runId(r));
-    if(box)box.value=dget(runId(r),'_all');
-  });
+function restoreRun(r){
+  const box=document.getElementById('c-'+runId(r));
+  if(box)box.value=dget(runId(r),'_all');
 }
 async function control(pid,action){
   if(busy)return;
@@ -1547,7 +1540,7 @@ async function control(pid,action){
     return;
   }
   busy=true;
-  document.querySelectorAll('#root button').forEach(b=>b.disabled=true);
+  lock(id);
   // Taking a request back puts its words back in the box: nothing typed is dropped.
   const run=RUNS.find(r=>r.plan_id===pid);
   const back=action==='CLEAR'&&run&&run.control?(run.control.comment||''):'';
@@ -1561,57 +1554,45 @@ async function control(pid,action){
     }else lastError='요청을 기록하지 못했습니다. 계획이 이미 다음 단계로 넘어갔을 수 있으니 '+
       '화면을 확인해 주십시오.';
   }catch(e){lastError='요청을 전송하지 못했습니다. 다시 시도해 주십시오.';}
-  busy=false;seen='';poll();
+  busy=false;stale(id);poll();
 }
 const DONE_LABEL={APPROVED:'승인되었습니다',REJECTED:'거절되었습니다',REVISE:'수정 요청되었습니다'};
 const HALT_DONE_LABEL={APPROVED:'초안이 승인되었습니다',REJECTED:'취소되었습니다',
   REVISE:'계속 진행하도록 했습니다'};
-function render(list){
-  const root=document.getElementById('root');
-  // Matches the static placeholder above, so the page does not flicker between two
-  // different wordings when the first poll lands.
-  if(!list.length&&!RUNS.length){root.innerHTML='<div class="idle">현재 대기 중인 승인 요청이 없습니다.<br>'+
-    '<span style="font-size:.85rem">에이전트가 계획을 제출하면 이곳에 표시됩니다.</span></div>';return;}
+// ---- drawing: one card at a time ---------------------------------------------------
+// Each request and each running plan is its own card, and a card is redrawn only when
+// what it shows has changed. Before, any change rebuilt every card: with run cards on
+// the page that meant a task reported by one plan redrew the approval request of another
+// that the human was in the middle of reading - an opened comment box closed, a
+// selection was lost, the caret had to be put back. What is typed was always safe (it
+// is a draft); now the card it was typed into is not touched at all.
+const NODES={};   // key -> the card's element
+const SHOWN={};   // key -> what that card shows now; a different value means "redraw"
+// Matches the static placeholder above, so the page does not flicker between two
+// different wordings when the first poll lands.
+const IDLE_HTML='<div class="idle">현재 대기 중인 승인 요청이 없습니다.<br>'+
+  '<span style="font-size:.85rem">에이전트가 계획을 제출하면 이곳에 표시됩니다.</span></div>';
+function reqKey(d){return 'q-'+d.id;}
+// The request's own content is fixed by its id - a changed plan is a new request - so
+// only what can change under one id is in the signature.
+function reqSig(d){
+  return (d.decided||'')+':'+(d.agent_waiting?1:0)+':'+(d.agent_note||'').length;
+}
+function runSig(r){return (r.rev||'')+':'+(r.control?r.control.id:'');}
+// The buttons of one card, switched off while its decision is on its way. Only that
+// card's: no other card is redrawn by this decision, so nothing would switch theirs
+// back on - and the information icon lives outside #root altogether.
+function lock(key){
+  const node=NODES[key];
+  if(node)node.querySelectorAll('button').forEach(b=>b.disabled=true);
+}
+// Redraw this card at the next poll whatever its signature says: its buttons were
+// switched off, and a decision that could not be recorded changes nothing else.
+function stale(key){delete SHOWN[key];}
+function hintHtml(list){
   const anyChoice=list.some(d=>!d.decided&&(d.tasks||[]).some(hasChoice));
   const anyPlan=list.some(d=>!d.decided&&d.phase==='PLAN'&&(d.tasks||[]).length);
-  // 여러 세션이 동시에 승인을 기다릴 수 있으므로 큐 전체를 보여준다.
-  root.innerHTML=(lastError?'<div class="err">'+esc(lastError)+'</div>':'')+list.map(d=>{
-    if(d.decided){
-      const label=(d.phase==='HALT'?HALT_DONE_LABEL:DONE_LABEL)[d.decided]||d.decided;
-      return '<div class="done">'+esc(d.plan_id)+' — '+label+
-        '<br><span style="font-weight:400;opacity:.6;font-size:.9rem">'+
-        '에이전트가 이 결정을 반영합니다.</span></div>';
-    }
-    // An entry with no phase was published by an older server process on this same
-    // state directory. It has no per-task review, so fall back to the original form.
-    PHASE[d.id]=d.phase;
-    if(d.phase==='HALT')return haltCard(d);
-    const perTask=(d.phase==='PLAN'||d.phase==='COMPLETION')&&d.tasks&&d.tasks.length;
-    // The fallback path keeps the original layout on purpose: `display` already opens
-    // with its own title, 목표 and summary, so composing a header above it would repeat
-    // all three.
-    let html=perTask?header(d)+(d.phase==='COMPLETION'?triage(d):'')+taskRows(d)
-      :'<h1>'+(d.phase==='COMPLETION'?'완료 확인':'승인 요청')+' · '+esc(d.plan_id)+
-       '</h1>'+verNote(d)+'<p class="goal">'+esc(d.goal)+'</p><pre>'+esc(d.display)+'</pre>';
-    html+=agentNote(d);
-    html+=chip(d);
-    html+='<textarea id="c-'+esc(d.id)+
-      '" placeholder="전체 의견을 입력해 주십시오 (거절 사유도 여기에 입력하실 수 있습니다)"></textarea>';
-    if(perTask)html+='<label class="scope"><input type="checkbox" id="all-'+esc(d.id)+
-      '"> '+
-      (d.phase==='COMPLETION'?'계획 자체를 다시 세우기 (태스크 추가·삭제·순서 변경 시 선택)'
-                             :'계획 전체를 다시 세우기 (태스크 추가·삭제·순서 변경 시 선택)')+
-      '</label>';
-    return html+'<div class="row">'+
-      '<button class="ok" id="ok-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
-      '\\',\\'APPROVED\\')">승인</button>'+
-      '<button class="rev" id="rev-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
-      '\\',\\'REVISE\\')">'+(perTask?revLabel(d.phase,[],false):'수정 요청')+'</button>'+
-      '<button class="no" onclick="decide(\\''+esc(d.id)+
-      '\\',\\'REJECTED\\')">거절</button></div>';
-  }).concat(RUNS.map(runCard))
-    .join('<hr style="border:0;border-top:1px solid #ccd0d5;margin:1.75rem 0">')+
-    '<p class="hint">'+(RUNS.length?RUN_HINT:'')+(!list.length?'':(anyChoice?'선택지가 있는 태스크는 [권장]안이 기본으로 선택되어 있습니다. '+
+  return (RUNS.length?RUN_HINT:'')+(!list.length?'':(anyChoice?'선택지가 있는 태스크는 [권장]안이 기본으로 선택되어 있습니다. '+
     '다른 안을 고르면 승인 버튼에 반영 내용이 표시되고, 기타를 고르면 수정 요청으로 바뀝니다.<br>':'')+
     '태스크의 [의견] 또는 [다시 작업] 버튼을 누르면 해당 태스크에만 요청을 남기실 수 '+
     '있습니다. 완료 보고 단계에서는 지정하신 태스크만 다시 실행되며, 나머지 태스크의 결과는 '+
@@ -1619,14 +1600,106 @@ function render(list){
     (anyPlan?'[기준 추가] 또는 [수정]으로 태스크의 완료 기준을 직접 적으실 수 있습니다. '+
     '적은 기준은 승인과 함께 반영되며, 수정 요청을 거치지 않습니다.<br>':'')+
     '결정하시기 전까지 해당 에이전트는 후속 작업을 진행하지 못합니다. '+
-    '요청은 응답하실 때까지 사라지지 않으니 천천히 검토해 주시기 바랍니다.')+'</p>';
+    '요청은 응답하실 때까지 사라지지 않으니 천천히 검토해 주시기 바랍니다.');
+}
+// Returns whether any card was added, removed or redrawn.
+function draw(list){
+  const root=document.getElementById('root');
+  // 여러 세션이 동시에 승인을 기다릴 수 있으므로 큐 전체를 보여준다.
+  const items=list.map(d=>({key:reqKey(d),sig:reqSig(d),html:()=>requestCard(d),
+                            after:()=>restore(d)}))
+    .concat(RUNS.map(r=>({key:runId(r),sig:runSig(r),html:()=>runCard(r),
+                          after:()=>restoreRun(r)})));
+  if(!items.length){
+    if(root.querySelector('.idle'))return false;
+    root.innerHTML=IDLE_HTML;
+    Object.keys(NODES).forEach(k=>{delete NODES[k];delete SHOWN[k];});
+    return true;
+  }
+  let changed=false;
+  const idle=root.querySelector('.idle');
+  if(idle)idle.remove();
+  // The line that says a click could not be recorded. Its own element, so showing or
+  // clearing it redraws no card.
+  let err=root.querySelector('.err');
+  if(lastError){
+    if(!err){err=document.createElement('div');err.className='err';root.insertBefore(err,root.firstChild);}
+    if(err.textContent!==lastError)err.textContent=lastError;
+  }else if(err)err.remove();
+  let hint=root.querySelector('p.hint');
+  if(!hint){hint=document.createElement('p');hint.className='hint';root.appendChild(hint);}
+  // Cards whose request was collected, or whose plan stopped running.
+  const wanted={};
+  items.forEach(it=>{wanted[it.key]=true;});
+  Object.keys(NODES).forEach(k=>{
+    if(wanted[k])return;
+    NODES[k].remove();delete NODES[k];delete SHOWN[k];changed=true;
+  });
+  // In order: requests first, then runs. A card already in its place is not moved -
+  // moving a node takes the focus out of it just as redrawing would.
+  let cursor=root.querySelector('.item');
+  items.forEach(it=>{
+    let node=NODES[it.key];
+    if(!node){
+      node=document.createElement('div');
+      node.className='item';
+      node.setAttribute('data-key',it.key);
+      NODES[it.key]=node;
+    }
+    if(node!==cursor)root.insertBefore(node,cursor||hint);
+    cursor=node.nextElementSibling;
+    if(cursor&&!cursor.classList.contains('item'))cursor=null;
+    if(SHOWN[it.key]===it.sig)return;
+    const focus=node.contains(document.activeElement)?focusKey():null;
+    node.innerHTML=it.html();
+    SHOWN[it.key]=it.sig;
+    it.after();
+    refocus(focus);
+    changed=true;
+  });
+  const text=hintHtml(list);
+  if(hint.getAttribute('data-src')!==text){hint.innerHTML=text;hint.setAttribute('data-src',text);}
+  return changed;
+}
+function requestCard(d){
+  if(d.decided){
+    const label=(d.phase==='HALT'?HALT_DONE_LABEL:DONE_LABEL)[d.decided]||d.decided;
+    return '<div class="done">'+esc(d.plan_id)+' — '+label+
+      '<br><span style="font-weight:400;opacity:.6;font-size:.9rem">'+
+      '에이전트가 이 결정을 반영합니다.</span></div>';
+  }
+  // An entry with no phase was published by an older server process on this same
+  // state directory. It has no per-task review, so fall back to the original form.
+  PHASE[d.id]=d.phase;
+  if(d.phase==='HALT')return haltCard(d);
+  const perTask=(d.phase==='PLAN'||d.phase==='COMPLETION')&&d.tasks&&d.tasks.length;
+  // The fallback path keeps the original layout on purpose: `display` already opens
+  // with its own title, 목표 and summary, so composing a header above it would repeat
+  // all three.
+  let html=perTask?header(d)+(d.phase==='COMPLETION'?triage(d):'')+taskRows(d)
+    :'<h1>'+(d.phase==='COMPLETION'?'완료 확인':'승인 요청')+' · '+esc(d.plan_id)+
+     '</h1>'+verNote(d)+'<p class="goal">'+esc(d.goal)+'</p><pre>'+esc(d.display)+'</pre>';
+  html+=agentNote(d);
+  html+=chip(d);
+  html+='<textarea id="c-'+esc(d.id)+
+    '" placeholder="전체 의견을 입력해 주십시오 (거절 사유도 여기에 입력하실 수 있습니다)"></textarea>';
+  if(perTask)html+='<label class="scope"><input type="checkbox" id="all-'+esc(d.id)+
+    '"> '+
+    (d.phase==='COMPLETION'?'계획 자체를 다시 세우기 (태스크 추가·삭제·순서 변경 시 선택)'
+                           :'계획 전체를 다시 세우기 (태스크 추가·삭제·순서 변경 시 선택)')+
+    '</label>';
+  return html+'<div class="row">'+
+    '<button class="ok" id="ok-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
+    '\\',\\'APPROVED\\')">승인</button>'+
+    '<button class="rev" id="rev-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
+    '\\',\\'REVISE\\')">'+(perTask?revLabel(d.phase,[],false):'수정 요청')+'</button>'+
+    '<button class="no" onclick="decide(\\''+esc(d.id)+
+    '\\',\\'REJECTED\\')">거절</button></div>';
 }
 async function decide(id,dec){
   if(busy)return;busy=true;alertOff();
-  // Only the decision buttons, which the next render replaces. The information icon and
-  // its dialog live outside #root and are never rebuilt: disabled here, they would stay
-  // disabled for good.
-  document.querySelectorAll('#root button').forEach(b=>b.disabled=true);
+  // Only this card's buttons, which its next redraw replaces - see lock().
+  lock('q-'+id);
   const box=document.getElementById('c-'+id);
   const c=box?box.value:'';
   // Task comments travel with every decision, not just a targeted one: even when the
@@ -1642,10 +1715,10 @@ async function decide(id,dec){
     if(j&&j.ok){dclear(id);lastError='';}
     else lastError='결정을 기록하지 못했습니다. 화면이 최신이 아닐 수 있으니 잠시 후 다시 시도해 주십시오.';
   }catch(e){lastError='결정을 전송하지 못했습니다. 다시 시도해 주십시오.';}
-  busy=false;seen='';poll();
+  busy=false;stale('q-'+id);poll();
 }
-// Bound to #root rather than to each textarea: #root outlives every re-render, so the
-// listeners survive a rebuild that replaces all of its children.
+// Bound to #root rather than to each textarea: #root outlives every redraw, so the
+// listeners survive whichever cards come, go or are drawn again.
 document.getElementById('root').addEventListener('input',onInput);
 document.getElementById('root').addEventListener('change',onInput);
 window.addEventListener('storage',onStorage);

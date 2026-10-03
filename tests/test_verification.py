@@ -1333,11 +1333,13 @@ class TestInformationDialog(unittest.TestCase):
         self.assertLess(html.index("</dialog>"), script)
 
     def test_a_decision_does_not_disable_it(self):
-        """decide() used to disable every button on the page. The decision buttons are
-        rebuilt by the next render; the icon and the dialog's button never are."""
-        self.assertIn("document.querySelectorAll('#root button').forEach(b=>b.disabled=true)",
+        """decide() used to disable every button on the page. Only the buttons of the
+        card being decided are switched off - that card is the one its redraw rebuilds
+        (3.1.0); the icon and the dialog's button never are."""
+        self.assertIn("if(node)node.querySelectorAll('button').forEach(b=>b.disabled=true);",
                       _PAGE)
         self.assertNotIn("document.querySelectorAll('button')", _PAGE)
+        self.assertNotIn("document.querySelectorAll('#root button')", _PAGE)
 
     def test_it_opens_closes_and_has_a_fallback(self):
         for piece in ("d.showModal()", "d.close()", "else alert(",

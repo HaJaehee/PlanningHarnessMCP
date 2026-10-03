@@ -1,6 +1,6 @@
 # 07 · Testing
 
-**851 unit tests + 7 end-to-end smoke tests, all passing** (as of 3.1.0; one unit test skips
+**859 unit tests + 7 end-to-end smoke tests, all passing** (as of 3.1.0; one unit test skips
 where the OS will not let it create a symlink). Standard-library
 `unittest` only. This project's defect history proves the rule: *test the seam before you
 trust it.* See [09-defects-and-lessons.md](09-defects-and-lessons.md).
@@ -142,7 +142,7 @@ use is never evicted; nothing is lost silently; an id is never reused.*
 
 ## Gate and run suite (`tests/test_gate_and_run.py`, 3.1.0)
 
-111 tests on the default configuration, in the order the feature is argued:
+119 tests on the default configuration, in the order the feature is argued:
 - **The final task list is the request** / **the last DONE is the completion report**: the
   request opens in that call; an approval, a revision, a rejection and a rework are each the
   answer to it; choices and criteria are applied there; a slice that ends undecided says what
@@ -155,7 +155,8 @@ use is never evicted; nothing is lost silently; an id is never reused.*
   shorter, that no hint asks for a summary, that the bypass promises nothing.
 - **The run board** as a store (what survives a refresh, what a failed write means), **what
   the page shows of a run**, **pause** (15 tests) and **note** (12), then the page template
-  and the two endpoints over real HTTP on an ephemeral port.
+  - including that only the card that changed is redrawn - and the two endpoints over real
+  HTTP on an ephemeral port.
 
 **Which flow the older suites run.** They run on the new default wherever that changes
 nothing. The classes and tests that assert the model-asks call sequence step by step are

@@ -108,8 +108,9 @@ emptied the queue before the guard looks.
 
 ## The page never loses what you typed (1.14.0)
 
-The page rebuilds its whole card list whenever the queue changes, and a second session asking
-for approval is enough to trigger it. Two fixes keep a half-written comment safe:
+A card is redrawn whenever what it shows changes - and until 3.1.0 *every* card was, on
+any change; a second session asking for approval was enough (see
+[one card at a time](#one-card-at-a-time-310)). Two fixes keep a half-written comment safe:
 
 - **`publish` reuses the entry** when plan id *and* fingerprint match an undecided request.
   A chunked wait re-publishes every 45 s; minting a fresh id each time would change the page
@@ -497,6 +498,8 @@ Above the card, right-aligned and small: `planning-mcp 3.0.0` and an `i` button.
 - **`decide()` disables `#root button` only.** It used to disable every button on the page
   while a decision was posted, relying on the next render to rebuild them. The icon and the
   dialog's button are never rebuilt; disabled once, they would have stayed disabled.
+  (Since 3.1.0 only the buttons of the card being decided are switched off - `lock(key)` -
+  because only that card is redrawn.)
 
 Verified in a real browser: the label on the idle screen and above a plan and a completion
 request; the two mismatch lines; the dialog's three lines; closing by button and by Esc; the
@@ -598,6 +601,29 @@ Edges, each decided so that nothing typed is lost:
 
 The card redraws each time the agent reports a task. What is typed is a draft like any other
 and survives the redraw; the caret is put back (`focusKey` / `refocus`).
+
+### One card at a time (3.1.0)
+
+A task reported by one plan must not disturb the human reading another plan's request. The
+page used to rebuild every card whenever anything changed (`root.innerHTML = ...`); with run
+cards that is every task of every running plan, and each rebuild closed a comment box that
+had been opened but not yet typed into, dropped a text selection, and moved the focus out
+and back.
+
+`draw(list)` keeps one element per request (`q-<request id>`) and per run (`run-<plan id>`)
+and compares a signature of what each shows - for a request `decided`, `agent_waiting` and
+the length of the agent note (its content is fixed by its id: a changed plan is a new
+request); for a run its `rev` and the id of a pending control. A card whose signature is
+unchanged is not touched; one already in its place is not moved (moving a node blurs it as
+surely as redrawing does). Drafts are restored, and the caret put back, only in the card
+that was drawn. The line between two cards is a CSS rule on the second (`.item+.item`), and
+the error line and the hint paragraph are their own elements, so none of them redraws a
+card. A decision switches off and redraws its own card (`lock` / `stale`).
+
+Verified in a real browser with two plans on one page: while plan B reported two tasks, the
+card of plan A's request stayed the same node with the same children, an opened empty
+comment box stayed open, and the focus and the caret in its text box did not move; rejecting
+A removed A's card and left B's untouched, with its buttons enabled.
 
 `PLANNING_MCP_RUN_CONTROL=false` turns the card and both controls off.
 

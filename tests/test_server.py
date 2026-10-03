@@ -3680,9 +3680,9 @@ class TestCompletionPageTemplate(unittest.TestCase):
 class TestDraftSurvivalTemplate(unittest.TestCase):
     """Half-written comments must outlive a rebuild of the page.
 
-    The page re-renders its whole card list whenever the queue changes - a second
-    session asking for approval is enough - and a chunked wait makes the queue change
-    far more often than it used to. Keeping drafts in the DOM meant losing them, so they
+    A card is redrawn whenever what it shows changes (until 3.1.0 every card was, on
+    any change - a second session asking for approval was enough), and a reload or a
+    second tab starts from nothing. Keeping drafts in the DOM meant losing them, so they
     live in localStorage instead. Asserted against the template; the click-through,
     including two tabs and a mid-typing rebuild, was verified in a real browser.
     """

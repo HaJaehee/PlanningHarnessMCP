@@ -896,7 +896,8 @@ class TestHaltPageTemplate(unittest.TestCase):
 
     def test_the_agent_note_is_shown_and_rerenders(self):
         self.assertIn("에이전트 추가 의견", _PAGE)
-        self.assertIn("(x.agent_note||'').length", _PAGE)
+        # Part of the card's signature, so a new note redraws that card.
+        self.assertIn("(d.agent_note||'').length", _PAGE)
 
 
 class TestHaltAtTheStore(LoopCase):

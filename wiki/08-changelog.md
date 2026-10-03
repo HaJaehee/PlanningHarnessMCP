@@ -480,6 +480,11 @@ where 3.1 spends its effort, in two directions: ask less of the model, give the 
   (`revision_note`), finished tasks are out of reach, and the human approves the change
   before anything continues. A whole `task_list` is accepted too and keeps the finished work
   of tasks whose wording survived.
+- **One card at a time.** The page redraws only the card whose content changed. A task
+  reported by one plan no longer rebuilds another plan's approval request - an opened comment
+  box stays open, a selection and the caret stay where they were. A decision switches off
+  and redraws its own card only
+  ([06](06-human-in-the-loop.md#one-card-at-a-time-310)).
 - **Nothing typed is dropped.** A request not yet applied can be taken back and its words
   return to the box; a stop or a note that arrives after the last task is shown on the
   completion report; one that meets a failure goes to the model with the failure; a memo
@@ -497,12 +502,14 @@ where 3.1 spends its effort, in two directions: ask less of the model, give the 
   agent on the 3.0 prompt calls `request_user_approval(ASK_USER)` and joins the request the
   server already opened. The state file gained one optional field.
 
-111 new tests (`tests/test_gate_and_run.py`) and a seventh smoke test
+119 new tests (`tests/test_gate_and_run.py`) and a seventh smoke test
 (`tests/smoke_gate_and_run.py`, added to `verify_install.py`). The older suites run on the
 new default except where they assert the model-asks call sequence step by step; those
 classes and tests are pinned to it, so the 3.0 flow keeps its coverage
 ([07](07-testing.md#gate-and-run-suite-teststest_gate_and_runpy-310)). Two tests changed
-expectation: the version, and the page-template string of the halt card's task row.
+expectation: the version, and the page-template string of the halt card's task row; two
+more follow the page drawing one card at a time (which buttons a decision switches off,
+and where the agent note enters a card's signature).
 Verified in a real browser - see [06](06-human-in-the-loop.md#the-run-card-310).
 
 ---

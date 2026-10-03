@@ -1080,7 +1080,9 @@ class TestThePage(unittest.TestCase):
 
     def test_a_run_never_raises_the_alarm(self):
         self.assertIn("if(undecided.length)alertOn();else alertOff();", _PAGE)
-        self.assertIn("if(!list.length&&!RUNS.length){root.innerHTML='<div class=\"idle\">", _PAGE)
+        # Runs are counted as something to show, never as something waiting.
+        self.assertIn("const undecided=list.filter(x=>!x.decided);", _PAGE)
+        self.assertIn(".concat(RUNS.map(r=>({key:runId(r)", _PAGE)
 
     def test_everything_shown_on_it_is_escaped(self):
         for piece in ("esc(r.goal)", "esc(c.comment)", "esc(t.title)", "esc(ev)",
@@ -1097,6 +1099,64 @@ class TestThePage(unittest.TestCase):
         self.assertIn("user=d.origin==='user'", _PAGE)
         self.assertIn("(user?'실행 멈춤':'반복 감지')", _PAGE)
         self.assertIn("(user?'계획 취소':'취소')", _PAGE)
+
+
+class TestOnlyTheCardThatChangedIsRedrawn(unittest.TestCase):
+    """A task reported by one plan must not redraw another plan's approval request.
+
+    With run cards the page changes every time any agent reports a task. Rebuilding
+    every card on each change closed a comment box the human had just opened on a
+    different card, dropped their selection, and moved the focus out and back. Asserted
+    against the template; the behaviour itself - two plans on one page, one reporting
+    tasks while the other's request is being typed into - was verified in a real browser.
+    """
+
+    def test_each_request_and_each_run_is_its_own_card(self):
+        for piece in ("function draw(list)", "const NODES={};", "const SHOWN={};",
+                      "node.className='item';", "key:reqKey(d),sig:reqSig(d)",
+                      "key:runId(r),sig:runSig(r)"):
+            self.assertIn(piece, _PAGE, piece)
+
+    def test_a_card_whose_signature_is_unchanged_is_left_alone(self):
+        self.assertIn("if(SHOWN[it.key]===it.sig)return;", _PAGE)
+        # One place redraws a card, and one resets the page - to the idle text.
+        self.assertEqual(_PAGE.count("node.innerHTML=it.html();"), 1)
+        self.assertEqual(_PAGE.count("root.innerHTML="), 1)
+        self.assertIn("root.innerHTML=IDLE_HTML;", _PAGE)
+        self.assertNotIn(".join('<hr", _PAGE)
+
+    def test_the_signature_is_what_can_change_under_one_key(self):
+        self.assertIn("return (d.decided||'')+':'+(d.agent_waiting?1:0)+':'+"
+                      "(d.agent_note||'').length;", _PAGE)
+        self.assertIn("function runSig(r){return (r.rev||'')+':'+(r.control?r.control.id:'');}",
+                      _PAGE)
+
+    def test_a_card_already_in_place_is_not_moved(self):
+        """Moving a node takes the focus out of it just as redrawing would."""
+        self.assertIn("if(node!==cursor)root.insertBefore(node,cursor||hint);", _PAGE)
+
+    def test_what_was_typed_is_put_back_only_into_the_card_that_was_drawn(self):
+        self.assertIn("after:()=>restore(d)", _PAGE)
+        self.assertIn("after:()=>restoreRun(r)", _PAGE)
+        self.assertIn("function restore(d){", _PAGE)
+        self.assertIn("const focus=node.contains(document.activeElement)?focusKey():null;",
+                      _PAGE)
+
+    def test_a_decision_switches_off_and_redraws_its_own_card_only(self):
+        self.assertIn("lock('q-'+id);", _PAGE)
+        self.assertIn("busy=false;stale('q-'+id);poll();", _PAGE)
+        self.assertIn("busy=false;stale(id);poll();", _PAGE)
+        self.assertNotIn("#root button", _PAGE)
+
+    def test_the_line_between_cards_and_the_notices_are_not_cards(self):
+        """The rule belongs to the second of two cards; the error line and the hint are
+        their own elements, so showing or changing them redraws nothing."""
+        self.assertIn(".item+.item{border-top:1px solid #ccd0d5;", _PAGE)
+        self.assertIn("if(err.textContent!==lastError)err.textContent=lastError;", _PAGE)
+        self.assertIn("if(hint.getAttribute('data-src')!==text)", _PAGE)
+
+    def test_a_poll_that_changes_nothing_touches_nothing(self):
+        self.assertIn("if(!draw(list))return;", _PAGE)
 
 
 class TestTheEndpoints(GateCase):
