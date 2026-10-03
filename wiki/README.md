@@ -9,7 +9,7 @@ it forces a `PLAN → HUMAN APPROVAL → EXECUTE → REPORT` lifecycle and physi
 agent loop until a human approves. **Zero third-party dependencies** — Python 3.9+ standard
 library only, because the deployment target has no package index.
 
-Current version: **3.1.0** · 862 unit tests + 7 end-to-end smoke tests, all passing.
+Current version: **3.1.0** · 865 unit tests + 7 end-to-end smoke tests, all passing.
 
 ---
 

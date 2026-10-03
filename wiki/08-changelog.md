@@ -493,6 +493,12 @@ where 3.1 spends its effort, in two directions: ask less of the model, give the 
 - **The small row buttons look like buttons.** 의견 / 다시 작업, 완료 기준 추가 and 수정 were
   flat grey at 65% opacity; they are bold and slightly raised (a border, a light top edge,
   a shadow underneath), pressed in while held and while the comment box is open.
+- **The comment box is labelled, and 완료 기준 추가 is a toggle.** The per-task comment box
+  has its label beside it - 의견, or 다시 작업 on a completion report - and no sample
+  sentence inside. 완료 기준 추가 closes the field it opened as long as nothing was typed,
+  like 의견; once there is text the field stays, because that text travels with the
+  approval. Each of the two buttons now shows the open state of its own field (restoring
+  a comment used to mark 완료 기준 추가 as expanded instead of 의견).
 - **Nothing typed is dropped.** A request not yet applied can be taken back and its words
   return to the box; a stop or a note that arrives after the last task is shown on the
   completion report; one that meets a failure goes to the model with the failure; a memo

@@ -1214,6 +1214,38 @@ class TestPageTemplate(unittest.TestCase):
         self.assertNotIn("placeholder", row)
         self.assertNotIn("이 태스크가 끝났다고 볼 기준", _PAGE)
 
+    def test_the_comment_box_is_labelled_and_carries_no_sample_sentence(self):
+        """Like the criterion: the label beside the box is the name of the button that
+        opens it (의견, or 다시 작업 on a completion report), so nothing is written inside."""
+        self.assertIn("const what=done?'다시 작업':'의견';", _PAGE)
+        self.assertIn("<div class=\"tcrow\"><span class=\"dwl\">'+what+'</span><textarea "
+                      "class=\"tc\"", _PAGE)
+        self.assertIn("번 '+what+'\"></textarea></div>'", _PAGE)
+        rows = _PAGE[_PAGE.index("function taskRows(d)"):_PAGE.index("function chip(d)")]
+        self.assertNotIn("placeholder", rows)
+        for gone in ("해당 태스크에 대한 의견을 입력해 주십시오",
+                     "해당 태스크의 재작업 요청 사항을 입력해 주십시오"):
+            self.assertNotIn(gone, _PAGE)
+
+    def test_the_add_button_toggles_an_empty_criterion_field(self):
+        """Open and still empty, the button closes it again - like 의견. With something
+        typed it stays open: that text travels with the approval."""
+        self.assertIn("function toggleCriterion(btn,req,tid)", _PAGE)
+        self.assertIn("if(row&&row.classList.contains('edit')&&!dwValue(i)){", _PAGE)
+        self.assertIn("row.classList.remove('edit');row.classList.add('hid');", _PAGE)
+        self.assertIn('<button class="tcbtn dwadd" type="button" aria-expanded="false" ', _PAGE)
+        self.assertIn("'onclick=\"toggleCriterion(this,", _PAGE)
+        # 수정, on a criterion that already exists, only ever opens.
+        self.assertIn("'<button class=\"dwbtn\" type=\"button\" onclick=\"editCriterion(this,",
+                      _PAGE)
+
+    def test_each_button_shows_the_state_of_its_own_field(self):
+        """Both buttons of a row are .tcbtn; the one that opens the comment box must not
+        be found by 'the first .tcbtn', which is 완료 기준 추가 when there is one."""
+        self.assertEqual(_PAGE.count("task.querySelector('.tcbtn:not(.dwadd)')"), 2)
+        self.assertNotIn("task.querySelector('.tcbtn')", _PAGE)
+        self.assertIn("if(add)add.setAttribute('aria-expanded','true');", _PAGE)
+
     def test_the_small_row_buttons_look_like_buttons(self):
         """의견, 완료 기준 추가 and 수정 were flat grey at 65% opacity and were missed.
         They are bold and slightly raised, in both colour schemes."""

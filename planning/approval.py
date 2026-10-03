@@ -784,9 +784,12 @@ dialog.about::backdrop{background:rgba(0,0,0,.35)}
 .ev.old{opacity:.45}
 /* Per-task comment boxes are collapsed by default. Nine open textareas turn a task list
    into a form; the plan itself is what the human came here to read. */
-textarea.tc{display:none;min-height:2.4rem;margin:.4rem 0 0 1.95em;width:calc(100% - 1.95em);
-            font-size:.86rem;padding:.4rem .55rem}
-.task.open textarea.tc{display:block}
+.tcrow{display:none;gap:.5rem;align-items:baseline;margin:.4rem 0 0 1.95em}
+.task.open .tcrow{display:flex}
+/* The box sits beside its label, the way a criterion does - which is why it needs no
+   sample sentence inside it. */
+textarea.tc{flex:1 1 auto;width:auto;min-width:0;min-height:2.4rem;margin:0;font-size:.86rem;
+            padding:.4rem .55rem}
 /* The small buttons on a task row - 의견 / 다시 작업, 완료 기준 추가, 수정. They used to be
    flat grey at 65% opacity and read as labels rather than as something to press. Bold
    now, and slightly raised: a light edge on top, a shadow underneath, pressed in while
@@ -992,7 +995,7 @@ function restore(d){
       const task=b.closest('.task');
       if(task){
         task.classList.add('open');
-        const btn=task.querySelector('.tcbtn');
+        const btn=task.querySelector('.tcbtn:not(.dwadd)');
         if(btn)btn.setAttribute('aria-expanded','true');
       }
     }
@@ -1252,6 +1255,23 @@ function criteriaOf(id){
 function showCriterion(i){
   const row=i.closest('.dw');
   if(row){row.classList.remove('hid');row.classList.add('edit');}
+  // The button that opens the field shows that it is open, as 의견 does.
+  const task=i.closest('.task'),add=task&&task.querySelector('.dwadd');
+  if(add)add.setAttribute('aria-expanded','true');
+}
+// 완료 기준 추가 is a toggle, like 의견 - while the field is empty. Once something is
+// typed the field stays: it travels with the approval, and hiding it would hide what the
+// approval carries. Erase the text and the button closes the field again.
+function toggleCriterion(btn,req,tid){
+  const i=document.querySelector('input.dwi[data-req="'+req+'"][data-dtid="'+tid+'"]');
+  if(!i)return;
+  const row=i.closest('.dw');
+  if(row&&row.classList.contains('edit')&&!dwValue(i)){
+    row.classList.remove('edit');row.classList.add('hid');
+    btn.setAttribute('aria-expanded','false');
+    return;
+  }
+  showCriterion(i);i.focus();
 }
 function editCriterion(btn,req,tid){
   const i=document.querySelector('input.dwi[data-req="'+req+'"][data-dtid="'+tid+'"]');
@@ -1341,7 +1361,7 @@ function openComment(req,tid,focus){
   const task=ta&&ta.closest('.task');
   if(!task)return;
   task.classList.add('open');
-  const btn=task.querySelector('.tcbtn');
+  const btn=task.querySelector('.tcbtn:not(.dwadd)');
   if(btn)btn.setAttribute('aria-expanded','true');
   if(focus)ta.focus();
 }
@@ -1400,8 +1420,8 @@ function taskRows(d){
                         :'<span>'+esc(t.title)+'</span>')+picked+
       (badge?'<span class="badge">'+esc(t.status)+'</span>':'')+
       (took?'<span class="took">소요 '+took+'</span>':'')+
-      (editable&&!t.done_when?'<button class="tcbtn dwadd" type="button" '+
-        'onclick="editCriterion(this,\\''+esc(d.id)+'\\',\\''+esc(String(t.task_id))+
+      (editable&&!t.done_when?'<button class="tcbtn dwadd" type="button" aria-expanded="false" '+
+        'onclick="toggleCriterion(this,\\''+esc(d.id)+'\\',\\''+esc(String(t.task_id))+
         '\\')">완료 기준 추가</button>':'')+
       '<button class="tcbtn" type="button" aria-expanded="false" '+
       'onclick="toggleComment(this)">'+(done?'다시 작업':'의견')+'</button></div>';
@@ -1425,9 +1445,12 @@ function taskRows(d){
              :'<div class="ev none">(증거 기록 없음)</div>';
       row+=checksHtml(t);
     }
-    row+='<textarea class="tc" data-req="'+esc(d.id)+'" data-tid="'+esc(String(t.task_id))+
-      '" placeholder="'+(done?'해당 태스크의 재작업 요청 사항을 입력해 주십시오'
-                             :'해당 태스크에 대한 의견을 입력해 주십시오 (선택 사항)')+'"></textarea>';
+    // Labelled with the name of the button that opens it, so the box needs no sample
+    // sentence inside - a grey one read as if something had already been written.
+    const what=done?'다시 작업':'의견';
+    row+='<div class="tcrow"><span class="dwl">'+what+'</span><textarea class="tc" data-req="'+
+      esc(d.id)+'" data-tid="'+esc(String(t.task_id))+'" aria-label="'+
+      esc(String(t.task_id))+'번 '+what+'"></textarea></div>';
     return row+'</div>';
   }).join('')+'</div>';
 }

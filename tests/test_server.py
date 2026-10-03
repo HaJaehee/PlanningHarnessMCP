@@ -2718,8 +2718,8 @@ class TestApprovalPageSurface(HandlerTestCase):
         srv = self.serve()
         try:
             html = self.get(srv, "")
-            self.assertIn("textarea.tc{display:none", html)
-            self.assertIn(".task.open textarea.tc{display:block}", html)
+            self.assertIn(".tcrow{display:none", html)
+            self.assertIn(".task.open .tcrow{display:flex}", html)
             self.assertIn("function toggleComment(", html)
             self.assertIn('onclick="toggleComment(this)"', html)
             # Hidden boxes are still submitted, so a filled row must stay marked.
