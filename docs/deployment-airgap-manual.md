@@ -48,6 +48,7 @@
 | `README.md`, `.gitignore` | 프로젝트 개요 및 형상 관리 설정 파일 |
 | `agents.md` | 에이전트 시스템 프롬프트 원본. AnythingLLM에 붙여 넣는 파일입니다 (3.0.0부터 포함) |
 | `anythingllm_mcp_servers.example.json` | AnythingLLM MCP 서버 등록 예시 설정 |
+| `LICENSE.md` | 라이선스 (MIT). 저작권 표시가 사본과 함께 가야 하므로 포함합니다 |
 | `MANIFEST.txt` | 파일별 SHA-256 무결성 해시 목록 (패키징 시 자동 생성) |
 | `runtime/` | **`--with-python` 옵션 사용 시에만 포함.** python.org 공식 임베디드 배포판 zip(원본 그대로) 및 출처 명시용 `RUNTIME.md` |
 

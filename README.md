@@ -132,6 +132,7 @@ tests/                    단위 테스트 스위트 및 stdio 종단 간 스모
 tools/                    패키징·설치 검증 도구, loop_report.py (감사 로그 루프 분석)
 package_source.ps1        tools/make_package.py 실행 래퍼 (Windows)
 agents.md                 에이전트 시스템 프롬프트 원본 (AnythingLLM에 붙여 넣는 파일)
+LICENSE.md                라이선스 (MIT)
 docs/                     Phase 1~4 문서: 스키마, 아키텍처, 에이전트 프롬프트, 테스트 매트릭스
 ```
 
@@ -257,3 +258,9 @@ python tools/verify_install.py
 ```
 
 이 검증 스크립트는 Python 버전, 파일 무결성, 순수 표준 라이브러리 준수 여부, 단위 테스트 스위트, stdio 스모크 테스트를 순차적으로 검증한 후 최종 **GO / NO-GO** 결과를 판정합니다. 배포에 관한 전체 절차는 [docs/deployment-airgap-manual.md](docs/deployment-airgap-manual.md)에서 확인하실 수 있습니다.
+
+---
+
+## 라이선스
+
+[MIT License](LICENSE.md). `--with-python`으로 동봉하는 Python 런타임은 이 라이선스의 대상이 아니며, 런타임 zip 안의 `LICENSE.txt`를 따릅니다.
