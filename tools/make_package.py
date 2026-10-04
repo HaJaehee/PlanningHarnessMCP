@@ -39,6 +39,8 @@ INCLUDE_FILES = [
     # it names this file as the thing to paste - so a package without it would point
     # the operator at a file that is not there.
     "agents.md",
+    # The licence says its notice goes with every copy, and the package is the copy.
+    "LICENSE.md",
     ".gitignore",
     "anythingllm_mcp_servers.example.json",
 ]

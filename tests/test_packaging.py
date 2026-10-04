@@ -34,6 +34,13 @@ class TestWhatIsPackaged(unittest.TestCase):
         self.assertIn("[agents.md](agents.md)", (ROOT / "README.md").read_text(encoding="utf-8"))
         self.assertIn("agents.md", packaged())
 
+    def test_the_licence_is_in_the_package(self):
+        """Its own terms: the notice is included in all copies. The package is the copy
+        that reaches the corporate PC, so a package without it breaks the licence."""
+        text = (ROOT / "LICENSE.md").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("MIT License\n\nCopyright (c) "))
+        self.assertIn("LICENSE.md", packaged())
+
     def test_every_file_the_readme_links_to_is_in_the_package(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         links = set(re.findall(r"\]\(((?:docs|tools|planning|tests)/[^)#]+|[\w.-]+\.(?:md|json))\)",
