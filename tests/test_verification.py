@@ -1274,9 +1274,35 @@ class TestPageTemplate(unittest.TestCase):
         """Applied to the tasks when only some are rewritten; handed to the agent in the
         comment when the whole plan is, since no task is left to carry it."""
         self.assertIn("function revLabel(phase,ids,whole,crit){", _PAGE)
-        self.assertIn("if(crit&&!done)label+=' · 태스크 완료 기준 '+crit+'건 '+(all?'전달':'반영');",
-                      _PAGE)
-        self.assertIn("Object.keys(criteriaOf(id)).length);", _PAGE)
+        self.assertIn("lines.push('태스크 완료 기준 '+crit+'건 '+(whole?'전달':'반영'));", _PAGE)
+        self.assertIn("Object.keys(criteriaOf(id)).length)", _PAGE)
+
+    def test_a_button_says_one_thing_per_line(self):
+        """Joined by dots on one line the statements ran together. The first line is
+        what the button is; each line under it is one thing it carries."""
+        self.assertIn("function setLabel(b,label){", _PAGE)
+        self.assertIn("return lines.join('\\n');", _PAGE)
+        self.assertIn("s.className=i?'bd':'bt';", _PAGE)
+        self.assertIn(".bt,.bd{display:block}", _PAGE)
+        labels = _PAGE[_PAGE.index("function revLabel("):_PAGE.index("function setLabel(")]
+        labels += _PAGE[_PAGE.index("function okLabel("):_PAGE.index("// ---- done_when")]
+        self.assertNotIn(" · ", labels)
+
+    def test_the_whole_plan_is_named_only_when_the_request_is_about_it(self):
+        """A comment on the whole plan, or the ticked box - not the button's resting
+        label. And what is asked is what is sent: the scope follows the same test."""
+        self.assertIn("return wholePlan(id)||!!(all&&all.value.trim());", _PAGE)
+        self.assertIn("if(whole)lines.push(done?'계획 전체 다시 세우기':'계획 전체 재작성');", _PAGE)
+        self.assertIn("if(wholeOf(id))return 'PLAN';", _PAGE)
+
+    def test_no_revise_button_without_something_to_ask_for(self):
+        """Hidden as it is drawn, and shown by the first comment or the ticked box."""
+        self.assertIn('<button class="rev" hidden id="rev-', _PAGE)
+        self.assertIn("btn.hidden=!(whole||ids.length);", _PAGE)
+        self.assertIn("의견을 적으시면 [승인] 대신 [수정 요청] 버튼이 나타납니다.", _PAGE)
+        # The halt card's second button is "continue", and is always there.
+        halt = _PAGE[_PAGE.index("function haltCard(d)"):_PAGE.index("// ---- a plan that is running")]
+        self.assertNotIn("hidden", halt)
 
     def test_the_small_row_buttons_look_like_buttons(self):
         """의견, 완료 기준 추가 and 수정 were flat grey at 65% opacity and were missed.
@@ -1308,8 +1334,8 @@ class TestPageTemplate(unittest.TestCase):
             self.assertEqual(bare.findall(source), [], module.__name__)
 
     def test_the_approve_button_says_what_it_carries(self):
-        self.assertIn("' · 태스크 완료 기준 '+crit+'건 반영'", _PAGE)
-        self.assertIn("' · 변경 '+(changed.length+crit)+'건 반영'", _PAGE)
+        self.assertIn("'\\n태스크 완료 기준 '+crit+'건 반영'", _PAGE)
+        self.assertIn("'\\n변경 '+(changed.length+crit)+'건 반영'", _PAGE)
 
     def test_a_finished_task_gets_no_editor(self):
         self.assertIn("const editable=!done&&t.status!=='DONE';", _PAGE)

@@ -507,12 +507,19 @@ where 3.1 spends its effort, in two directions: ask less of the model, give the 
   approve button is hidden, and it returns when every box is empty: an approval carries no
   comment, so one typed and then approved used to be dropped unread, and on a completion
   report a request to redo a task was lost while the plan closed. The revise button now
-  says what becomes of a criterion the human wrote: `수정 요청 · 2번만 · 태스크 완료 기준
-  1건 반영` (applied to the tasks) or `수정 요청 · 계획 전체 재작성 · 태스크 완료 기준 1건
-  전달` (handed to the agent in the comment, since the tasks are rewritten). And comments on
-  particular tasks under a whole-plan revision are kept with the plan
-  (`pending_revision.comments`), so they reach the model whichever call collects the
+  says what becomes of a criterion the human wrote: `태스크 완료 기준 1건 반영` (applied to
+  the tasks) or `... 전달` (handed to the agent in the comment, since the tasks are
+  rewritten). And comments on particular tasks under a whole-plan revision are kept with the
+  plan (`pending_revision.comments`), so they reach the model whichever call collects the
   decision.
+- **The revise button: one statement per line, and only when there is something to ask.**
+  A decision button is written as a title with one line under it for each thing it carries
+  (`수정 요청` / `2번만` / `태스크 완료 기준 1건 반영`) instead of one line joined by dots.
+  `계획 전체 재작성` is said only when the request is about the whole plan - text in the box
+  for the whole plan, or the ticked box - and such a request is now sent as a whole-plan one
+  (a comment there used to ride along with a per-task request). With nothing written and
+  nothing ticked there is no revise button at all: approve or reject
+  ([06](06-human-in-the-loop.md#per-task-review-19x)).
 - **Nothing typed is dropped.** A request not yet applied can be taken back and its words
   return to the box; a stop or a note that arrives after the last task is shown on the
   completion report; one that meets a failure goes to the model with the failure; a memo

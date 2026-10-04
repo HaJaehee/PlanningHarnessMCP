@@ -1177,6 +1177,30 @@ class TestOnlyTheCardThatChangedIsRedrawn(unittest.TestCase):
         self.assertIn("if(!draw(list))return;", _PAGE)
 
 
+class TestThePageScriptParses(unittest.TestCase):
+    """The page is a Python string holding JavaScript, so a JS escape has to be written
+    twice ('\\\\n' for a newline). Written once, the page still passes every test that
+    looks for a substring - and shows nothing at all, because the script does not parse.
+    That is the approval gate with no way to approve. Checked with node where there is
+    one; the target machine has none, and the check is skipped there."""
+
+    def test_the_script_is_valid_javascript(self):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not installed")
+        from planning.approval import page_html
+        html = page_html()
+        script = html[html.index("<script>") + len("<script>"):html.index("</script>")]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "page.js"
+            path.write_text(script, encoding="utf-8")
+            done = subprocess.run([node, "--check", str(path)], capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace")
+        self.assertEqual(done.returncode, 0, done.stderr[-600:])
+
+
 class TestTheEndpoints(GateCase):
     def setUp(self) -> None:
         super().setUp()

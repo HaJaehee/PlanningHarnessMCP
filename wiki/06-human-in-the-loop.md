@@ -214,12 +214,28 @@ while still being submitted. The row therefore keeps a `filled` marker (amber bu
 has text, and the REVISE label below counts it regardless. The REVISE button **states its own
 consequence before it is clicked**:
 
-| what is typed | button label | `scope` sent |
+| what is typed | the button (title, then one line per statement) | `scope` sent |
 |---|---|---|
-| nothing per-task | `수정 요청 · 계획 전체 재작성` | `PLAN` |
-| task 3 only | `수정 요청 · 3번만` | `TASKS` |
-| tasks 2 and 3 | `수정 요청 · 2개 태스크만` | `TASKS` |
-| any, with `☐ 계획 전체를 다시 세우기` ticked | `수정 요청 · 계획 전체 재작성` | `PLAN` |
+| nothing, box not ticked | *no REVISE button* - approve or reject | - |
+| task 3 only | `수정 요청` / `3번만` | `TASKS` |
+| tasks 2 and 3 | `수정 요청` / `2개 태스크만` | `TASKS` |
+| anything in the box for the whole plan, or `☐ 계획 전체를 다시 세우기` ticked | `수정 요청` / `계획 전체 재작성` | `PLAN` |
+| ... and a criterion the human wrote | one more line: `태스크 완료 기준 1건 반영` (tasks only) or `... 전달` (whole plan) | as above |
+
+Since 3.1.0 (the rows above are its rules; before it the button was always there, reading
+`수정 요청 · 계획 전체 재작성` with nothing typed, and joined its statements with dots on one
+line):
+
+- **One statement per line.** `setLabel` writes the first line as the button's title and each
+  further line under it. Joined by dots the statements ran together and it was unclear which
+  words belonged to which. The approve button is written the same way (`승인` / `2번 B안`).
+- **"계획 전체 재작성" only when the request is about the whole plan** - text in the box for
+  the whole plan, or the ticked box (`wholeOf`). A comment in that box used to ride along with
+  a per-task request without widening it; now it makes the request a whole-plan one, and the
+  `scope` sent follows the same test, so the label and the effect cannot differ.
+- **No REVISE button without something to ask for.** It is drawn hidden and shown by the
+  first comment or the ticked box - the moment the approve button leaves, if it was a comment
+  (an approval carries none; see below). With nothing written the choice is approve or reject.
 
 That is why the server **never infers the scope**: the page already showed the human what would
 happen, and re-deriving it from "are there comments?" would overrule what they were shown.
@@ -257,7 +273,7 @@ decision is made.
 
 | what the human does | result |
 |---|---|
-| comments on task 2, clicks `다시 작업 요청 · 2번만` | task 2 → `PENDING` + `revision_note`, its old output kept as `previous_result_log`; tasks 1, 3 keep `DONE` + `result_log`; plan → `IN_EXECUTION`, **no re-approval** |
+| comments on task 2, clicks `다시 작업 요청` / `2번만` | task 2 → `PENDING` + `revision_note`, its old output kept as `previous_result_log`; tasks 1, 3 keep `DONE` + `result_log`; plan → `IN_EXECUTION`, **no re-approval** |
 | ticks `☐ 계획 자체를 다시 세우기` | plan → `DRAFTING` + `rework_from_completion`; the redraft carries evidence for tasks whose title survives, and *does* need a new approval |
 | clicks 거절 | `CANCELLED`, unchanged |
 
@@ -368,7 +384,7 @@ the button, and the click released the agent's held call within a second with
 - The recommendation (A) is pre-selected and marked 권장 with its reason; every alternative
   shows its trade-off, so the human can pick without asking.
 - The approve button states its consequence before it is clicked, like the REVISE button:
-  `승인` / `승인 · 2번 B안` / `승인 · 선택 2건 반영`. **기타** opens that task's comment box and
+  `승인` / `승인 · 2번 B안` / `승인 · 선택 2건 반영` (the dot stands for a line break since 3.1.0). **기타** opens that task's comment box and
   disables approval (`승인 · 기타는 수정 요청으로`): something other than the options on offer
   is a change to the task, which the per-task REVISE path already handles - so "what the human
   approved is what runs" stays true.

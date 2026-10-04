@@ -92,7 +92,7 @@ PASS criteria are written so they can be judged from the AnythingLLM transcript 
 
 | | |
 |---|---|
-| **U (at gate)** | On the approval page, types `요약 말고 표를 그대로 넣어주세요` into **task 3's** box only, then clicks the button now labelled `수정 요청 · 3번만` |
+| **U (at gate)** | On the approval page, types `요약 말고 표를 그대로 넣어주세요` into **task 3's** box only, then clicks the button that appears, labelled `수정 요청` / `3번만` |
 | **Expect** | `revision_scope: "TASKS"` + `revision_targets: [{task_id: 3, ...}]` → `plan_and_think` with **`task_updates`** (not `task_list`) → `ASK_USER` again |
 | **PASS** | (a) tasks 1, 2, 4 keep their exact titles **and their `task_id`**; (b) only task 3's title changed; (c) the re-approval screen marks task 3 with `↻` and shows its previous title; (d) a second approval gate occurs |
 | **FAIL mode** | Model sends a full `task_list` and rewrites all four tasks — accepted, but `input_notes` says so and the audit log records `targeted_revision_ignored`. This is the metric for whether the model is using the feature. |
@@ -105,7 +105,7 @@ PASS criteria are written so they can be judged from the AnythingLLM transcript 
 | | |
 |---|---|
 | **Setup** | Run a 3-task plan to the end so the completion report is on screen with each task's `result_log` under it |
-| **U (at gate)** | Types `표가 3개 빠졌어요` into **task 2's** box only, then clicks the button now labelled `다시 작업 요청 · 2번만` |
+| **U (at gate)** | Types `표가 3개 빠졌어요` into **task 2's** box only, then clicks the button that appears, labelled `다시 작업 요청` / `2번만` |
 | **Expect** | `plan_status: "IN_EXECUTION"`, `reopened_tasks: [2]`, `next_action: CALL_UPDATE_TASK_PROGRESS` — **no** `plan_and_think`, **no** second approval |
 | **PASS** | (a) task 2 is `PENDING` with `revision_note` and `previous_result_log`; (b) tasks 1 and 3 are still `DONE` **with their original `result_log`**; (c) `next_action_hint` quotes `표가 3개 빠졌어요` and names only task 2; (d) redoing task 2 returns the plan to `AWAITING_COMPLETION`; (e) the new report shows `↻ 요청하신 내용` and `이전 결과` on task 2 |
 | **FAIL mode (the D17 bug)** | Model calls `plan_and_think` and rewrites the task list → every `result_log` is lost and all 3 tasks must be redone. If this happens, the prompt was not repasted: Phase 3c is what tells the model this is not a re-plan. |
@@ -189,7 +189,7 @@ PASS criteria are written so they can be judged from the AnythingLLM transcript 
 |---|---|
 | **Setup** | `PLANNING_MCP_ARTIFACT_ROOTS` set to the folder the agent's tools write into. Ask for something that produces a file ("3분기 매출을 집계해서 xlsx로 저장해줘") |
 | **Expect M** | `plan_and_think` with `done_when` for the task that produces the file - what will exist, not how |
-| **Human** | On the approval page: rewrite one criterion with [수정], add one with [완료 기준 추가], press `승인 · 태스크 완료 기준 2건 반영` |
+| **Human** | On the approval page: rewrite one criterion with [수정], add one with [완료 기준 추가], press `승인` / `태스크 완료 기준 2건 반영` |
 | **S** | `APPROVED`; the message names the tasks whose criterion the user set; each `next_task` carries its `done_when` (`done_when_by: "user"` for the two) |
 | **PASS** | Each `result_log` says how the criterion was met with real values; the file task sends `files` and the completion page shows `✔ <file> · 이 태스크 중 생성/변경됨` |
 | **FAIL mode** | `result_log` is the criterion with its tense changed → refused `MISSING_RESULT_LOG`; a file named in `files` that was never written → refused `FILE_NOT_FOUND`. Both are the server working. What to watch is what the model does **next**: writing the file / giving real values is a pass; repeating the same call until `LOOP_HALTED` is a model that cannot use the feature - set `PLANNING_MCP_DONE_WHEN=off` for it |

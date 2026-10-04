@@ -737,6 +737,9 @@ button{flex:1 1 auto;min-width:140px;padding:.85rem 1rem;border:0;border-radius:
        font:inherit;font-weight:600;cursor:pointer;font-size:.95rem}
 .ok{background:#1a7f37;color:#fff}.no{background:#b42318;color:#fff}.rev{background:#8a5a00;color:#fff}
 button:disabled{opacity:.5;cursor:default}
+/* A decision button: what it is, then one line for each thing it carries. */
+.bt,.bd{display:block}
+.bd{font-size:.8rem;font-weight:500;line-height:1.4;margin-top:.1rem}
 /* Which planning-mcp is serving this page. Small, and outside #root so no re-render can
    remove it: after an upgrade "is the new version actually running?" is answered here. */
 .ver{max-width:720px;margin:0 auto .4rem;padding:0 .25rem;box-sizing:border-box;
@@ -1170,23 +1173,47 @@ function wholePlan(id){
   const box=document.getElementById('all-'+id);
   return !!(box&&box.checked);
 }
+// Whether the request is about the plan as a whole: the comment box for the whole plan
+// has text, or the "rewrite the whole plan" box is ticked. A comment on the whole plan
+// used to ride along with a per-task request without widening it; now what is written
+// there is what is asked for, and the button says so.
+function wholeOf(id){
+  const all=document.getElementById('c-'+id);
+  return wholePlan(id)||!!(all&&all.value.trim());
+}
 function scopeOf(id){
-  if(wholePlan(id))return 'PLAN';
+  if(wholeOf(id))return 'PLAN';
   return Object.keys(comments(id)).length?'TASKS':'PLAN';
 }
 // The button says what it will do BEFORE it is clicked, so choosing the scope is an
 // explicit act by the human rather than something the server infers afterwards. One
 // builder for both the first render and every relabel, so the two can never drift.
+//
+// One statement per line: what the button is, then each thing it carries. Joined by
+// dots on one line they ran together, and it was not clear which words belonged to
+// which. "계획 전체 재작성" is said only when the request really is about the whole plan
+// (wholeOf) - it used to be the button's resting label, with nothing typed at all.
 function revLabel(phase,ids,whole,crit){
-  const done=phase==='COMPLETION',all=whole||!ids.length;
-  const verb=done?'다시 작업 요청':'수정 요청';
-  let label=all?(done?'수정 요청 · 계획 전체 다시 세우기':'수정 요청 · 계획 전체 재작성')
-    :(ids.length===1?verb+' · '+ids[0]+'번만':verb+' · '+ids.length+'개 태스크만');
+  const done=phase==='COMPLETION';
+  const lines=[done&&!whole?'다시 작업 요청':'수정 요청'];
+  if(whole)lines.push(done?'계획 전체 다시 세우기':'계획 전체 재작성');
+  else if(ids.length)lines.push(ids.length===1?ids[0]+'번만':ids.length+'개 태스크만');
   // A criterion the human wrote goes with this button too, and the button has to say
   // which way: onto the tasks when only some are rewritten (반영), or to the agent as
   // part of the comment when the whole plan is, because no task is left to carry it (전달).
-  if(crit&&!done)label+=' · 태스크 완료 기준 '+crit+'건 '+(all?'전달':'반영');
-  return label;
+  if(crit&&!done&&(whole||ids.length))
+    lines.push('태스크 완료 기준 '+crit+'건 '+(whole?'전달':'반영'));
+  return lines.join('\\n');
+}
+// Writes such a label into a button: the first line as its title, the rest under it.
+function setLabel(b,label){
+  b.textContent='';
+  String(label).split('\\n').forEach((part,i)=>{
+    const s=document.createElement('span');
+    s.className=i?'bd':'bt';
+    s.textContent=part;
+    b.appendChild(s);
+  });
 }
 // The continue button on a halt card states whether it sends the agent a direction.
 function haltLabel(hasText){return hasText?'의견 전달 후 계속':'계속 진행';}
@@ -1234,14 +1261,14 @@ function anyOther(id){return checkedOf(id).some(r=>r.value==='other');}
 // clicked: which options it carries, or that 기타 needs a revision request instead.
 function okLabel(phase,id){
   const base=phase==='HALT'?'이 초안으로 승인':'승인';
-  if(anyOther(id))return base+' · 기타는 수정 요청으로';
+  if(anyOther(id))return base+'\\n기타는 수정 요청으로';
   const changed=Object.entries(choicesOf(id)).filter(([k,v])=>v!==0);
   const crit=Object.keys(criteriaOf(id)).length;
-  if(crit&&changed.length)return base+' · 변경 '+(changed.length+crit)+'건 반영';
-  if(crit)return base+' · 태스크 완료 기준 '+crit+'건 반영';
+  if(crit&&changed.length)return base+'\\n변경 '+(changed.length+crit)+'건 반영';
+  if(crit)return base+'\\n태스크 완료 기준 '+crit+'건 반영';
   if(!changed.length)return base;
-  if(changed.length===1)return base+' · '+changed[0][0]+'번 '+LETTERS[changed[0][1]]+'안';
-  return base+' · 선택 '+changed.length+'건 반영';
+  if(changed.length===1)return base+'\\n'+changed[0][0]+'번 '+LETTERS[changed[0][1]]+'안';
+  return base+'\\n선택 '+changed.length+'건 반영';
 }
 // ---- done_when (3.0.0) -----------------------------------------------------
 // What "finished" means for a task. On a plan request the human may write or rewrite
@@ -1368,7 +1395,7 @@ function hasOpinion(id){
 function relabelOk(id){
   const b=document.getElementById('ok-'+id);
   if(!b)return;
-  b.textContent=okLabel(PHASE[id],id);
+  setLabel(b,okLabel(PHASE[id],id));
   b.disabled=anyOther(id);
   // An approval carries no comment - whatever was typed would be dropped unread. So
   // while a comment is written there is no approve button to press by mistake: it is
@@ -1406,8 +1433,12 @@ function relabel(id){
   });
   const btn=document.getElementById('rev-'+id);
   if(!btn)return;
-  btn.textContent=revLabel(PHASE[id],Object.keys(comments(id)),wholePlan(id),
-    Object.keys(criteriaOf(id)).length);
+  const ids=Object.keys(comments(id)),whole=wholeOf(id);
+  setLabel(btn,revLabel(PHASE[id],ids,whole,Object.keys(criteriaOf(id)).length));
+  // No request without something to ask for. With nothing written and nothing ticked
+  // the choice is to approve or to reject; the button appears with the first comment -
+  // at the moment the approve button leaves (relabelOk).
+  btn.hidden=!(whole||ids.length);
 }
 // The header a human needs before they can judge a task list at all: what is being
 // asked, what the goal is, and the model's own overview of how it intends to get there.
@@ -1652,6 +1683,7 @@ function hintHtml(list){
     '태스크의 [의견] 또는 [다시 작업] 버튼을 누르면 해당 태스크에만 요청을 남기실 수 '+
     '있습니다. 완료 보고 단계에서는 지정하신 태스크만 다시 실행되며, 나머지 태스크의 결과는 '+
     '그대로 유지됩니다.<br>'+
+    '의견을 적으시면 [승인] 대신 [수정 요청] 버튼이 나타납니다.<br>'+
     (anyPlan?'[완료 기준 추가] 또는 [수정]으로 태스크 완료 기준을 직접 적으실 수 있습니다. '+
     '적은 기준은 승인과 함께 반영되며, 수정 요청을 거치지 않습니다.<br>':'')+
     '결정하시기 전까지 해당 에이전트는 후속 작업을 진행하지 못합니다. '+
@@ -1746,8 +1778,8 @@ function requestCard(d){
   return html+'<div class="row">'+
     '<button class="ok" id="ok-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
     '\\',\\'APPROVED\\')">승인</button>'+
-    '<button class="rev" id="rev-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
-    '\\',\\'REVISE\\')">'+(perTask?revLabel(d.phase,[],false):'수정 요청')+'</button>'+
+    '<button class="rev" hidden id="rev-'+esc(d.id)+'" onclick="decide(\\''+esc(d.id)+
+    '\\',\\'REVISE\\')">수정 요청</button>'+
     '<button class="no" onclick="decide(\\''+esc(d.id)+
     '\\',\\'REJECTED\\')">거절</button></div>';
 }
