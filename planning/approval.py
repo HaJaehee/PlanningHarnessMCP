@@ -776,8 +776,10 @@ dialog.about::backdrop{background:rgba(0,0,0,.35)}
 @media(prefers-color-scheme:dark){.task{border-top-color:#2c3038}}
 .task:first-child{border-top:0}
 .tt{display:flex;gap:.55rem;align-items:baseline;line-height:1.45;font-size:.95rem}
-.tn{opacity:.5;font-variant-numeric:tabular-nums;min-width:1.4em}
-.badge{font-size:.72rem;padding:.1rem .4rem;border-radius:4px;background:#e6e8eb;opacity:.8}
+.tt>span:not(.tn):not(.badge):not(.took){min-width:0;word-break:break-word}
+.tn{opacity:.5;font-variant-numeric:tabular-nums;min-width:1.4em;flex-shrink:0}
+.badge{font-size:.72rem;padding:.1rem .4rem;border-radius:4px;background:#e6e8eb;opacity:.8;
+       white-space:nowrap;flex-shrink:0}
 @media(prefers-color-scheme:dark){.badge{background:#2c3038}}
 .was{font-size:.82rem;opacity:.55;margin:.25rem 0 0 var(--sub);text-decoration:line-through}
 .note{font-size:.82rem;margin:.25rem 0 0 var(--sub);color:#8a5a00}
@@ -832,7 +834,7 @@ textarea.tc{flex:1 1 auto;width:auto;min-width:0;min-height:2.4rem;margin:0;font
 .opt input{margin:0;flex:0 0 auto}
 .optl{opacity:.55;min-width:1.1em;font-variant-numeric:tabular-nums}
 .rec{font-size:.72rem;padding:.05rem .4rem;border-radius:4px;background:#e6f4ea;color:#1a7f37;
-     font-weight:600;margin-left:.3rem}
+     font-weight:600;margin-left:.3rem;white-space:nowrap;flex-shrink:0}
 @media(prefers-color-scheme:dark){.rec{background:#16281c;color:#5dbb77}}
 .why{opacity:.65;font-size:.84rem}
 /* The heading of a choice: what is being chosen, then how many options. */
@@ -864,7 +866,7 @@ input.dwi{display:none;flex:1 1 auto;min-width:0;box-sizing:border-box;border-ra
 .ck{font-size:.84rem;margin:.2rem 0 0 var(--sub);line-height:1.5;word-break:break-word}
 .ck.ok{color:#1a7f37}.ck.warn{color:#8a5a00}.ck.dim{opacity:.6}
 @media(prefers-color-scheme:dark){.ck.ok{color:#5dbb77}.ck.warn{color:#d9a441}}
-.took{font-size:.76rem;opacity:.5;white-space:nowrap}
+.took{font-size:.76rem;opacity:.5;white-space:nowrap;flex-shrink:0}
 .triage{background:#f2f3f5;border-radius:8px;padding:.5rem .8rem;margin:0 0 .9rem;
         font-size:.86rem;line-height:1.5}
 @media(prefers-color-scheme:dark){.triage{background:#15171c}}
@@ -1451,6 +1453,7 @@ function header(d){
   if(d.summary)h+='<div class="summary"><span class="lbl">개요</span>'+esc(d.summary)+'</div>';
   return h;
 }
+const RUN_STATE={DONE:'완료',IN_PROGRESS:'진행중',FAILED:'실패',PENDING:'대기'};
 function taskRows(d){
   // On a completion report every task is DONE, so a DONE badge on every row is noise -
   // the evidence line below it already says so, and that is what needs the attention.
@@ -1470,7 +1473,7 @@ function taskRows(d){
     let row='<div class="task"><div class="tt"><span class="tn">'+esc(String(t.task_id))+
       '.</span>'+(choose?'<span>'+choiceHeading(t)+'</span>'
                         :'<span>'+esc(t.title)+'</span>')+picked+
-      (badge?'<span class="badge">'+esc(t.status)+'</span>':'')+
+      (badge?'<span class="badge'+(t.status==='IN_PROGRESS'?' now':'')+'">'+(RUN_STATE[t.status]||esc(t.status))+'</span>':'')+
       (took?'<span class="took">소요 '+took+'</span>':'')+
       (editable&&!t.done_when?'<button class="tcbtn dwadd" type="button" aria-expanded="false" '+
         'onclick="toggleCriterion(this,\\''+esc(d.id)+'\\',\\''+esc(String(t.task_id))+
@@ -1563,7 +1566,6 @@ function haltCard(d){
 // interrupt a tool that is already running, and the page says so.
 let RUNS=[];
 function runId(r){return 'run-'+r.plan_id;}
-const RUN_STATE={DONE:'완료',IN_PROGRESS:'진행 중',FAILED:'실패',PENDING:'대기'};
 const RUN_HINT='실행 중인 계획은 에이전트가 태스크를 보고할 때마다 갱신됩니다. [멈춤]과 '+
   '[의견 전달]은 에이전트가 진행 중인 태스크를 보고하는 시점에 적용되며, 이미 실행 중인 '+
   '도구는 중단되지 않습니다.<br>';
