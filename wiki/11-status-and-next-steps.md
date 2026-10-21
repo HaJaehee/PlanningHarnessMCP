@@ -1,7 +1,15 @@
 # 11 · Status and Next Steps
 
-## Current state (as of version 3.1.0, 2026-10-03)
+## Current state (as of version 3.2.0, 2026-10-21)
 
+- **3.2.0 - a run whose agent stopped can be cancelled.** A run card's stop waits for the
+  agent's next report, so an agent that failed mid-plan left its card on the page for good
+  ([D31](09-defects-and-lessons.md#d31)). 계획 강제 취소 takes the card off at once and
+  closes the plan on the next tool call from any session. Task rows now end on their state
+  label whether the title wraps or not. Nothing the model reads changed: no prompt repaste.
+  887 unit tests + 7 smoke, all passing. Committed on `develop`; not pushed; the package was
+  not rebuilt. Mechanism:
+  [06](06-human-in-the-loop.md#cancelling-a-run-whose-agent-stopped-320).
 - **3.1.0 - the gate on the transition, and the run in between.** For a mid-sized model that
   already thinks and remembers, on a host with no approval step. The server asks the human
   itself - the final `plan_and_think` call and the last `DONE` are the approval requests -

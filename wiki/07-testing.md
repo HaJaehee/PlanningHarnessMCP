@@ -1,6 +1,6 @@
 # 07 · Testing
 
-**873 unit tests + 7 end-to-end smoke tests, all passing** (as of 3.1.0; one unit test skips
+**887 unit tests + 7 end-to-end smoke tests, all passing** (as of 3.2.0; one unit test skips
 where the OS will not let it create a symlink). Standard-library
 `unittest` only. This project's defect history proves the rule: *test the seam before you
 trust it.* See [09-defects-and-lessons.md](09-defects-and-lessons.md).
@@ -142,7 +142,7 @@ use is never evicted; nothing is lost silently; an id is never reused.*
 
 ## Gate and run suite (`tests/test_gate_and_run.py`, 3.1.0)
 
-119 tests on the default configuration, in the order the feature is argued:
+Tests on the default configuration, in the order the feature is argued:
 - **The final task list is the request** / **the last DONE is the completion report**: the
   request opens in that call; an approval, a revision, a rejection and a rework are each the
   answer to it; choices and criteria are applied there; a slice that ends undecided says what
@@ -157,6 +157,14 @@ use is never evicted; nothing is lost silently; an id is never reused.*
   the page shows of a run**, **pause** (15 tests) and **note** (12), then the page template
   - including that only the card that changed is redrawn - and the two endpoints over real
   HTTP on an ephemeral port.
+- **Force cancel** (3.2.0, [D31](09-defects-and-lessons.md#d31)): on the board, a cancel
+  takes the card off at once, replaces a stop that was never collected, is final, and is
+  consumed once; through the handler, the next call from another session closes the plan,
+  finished work stays on record, a returning agent gets `PLAN_CANCELLED`, a new plan can
+  start, a plan that moved on first is left alone, switched off nothing happens, and an
+  unreadable board fails no call; the page has the button twice and asks before sending;
+  the real endpoint takes the card off and the next call closes the plan. Also pinned: every
+  task row ends on its state label. 135 tests in the file.
 
 **Which flow the older suites run.** They run on the new default wherever that changes
 nothing. The classes and tests that assert the model-asks call sequence step by step are

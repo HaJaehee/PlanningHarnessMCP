@@ -626,6 +626,25 @@ answer every status on purpose; a fall-through there is a transition nobody desi
 path that is rare under the default (`chunked`) but ordinary under another mode (`return`)
 needs its own test in that mode - the default suite will never walk it.
 
+<a id="d31"></a>
+## D31 — a stop the agent never collected left its run card on the page (3.2.0)
+
+**Symptom:** reported by the user on 3.1.0. An agent hit an error in the middle of a plan and
+stopped. Its run card stayed on the approval page with the task 진행중; the human pressed
+멈춤, the card said the stop was asked for, and nothing else happened - there was no button
+left that could make the card go away.
+**Root cause:** both run-card controls are requests applied at the agent's next task report
+(by design: the server cannot interrupt a tool that is running, and a stop is only safe
+between tasks). Nothing in that design covers an agent that never reports again. The only
+way out was the approval TTL (30 minutes idle), which nobody on the page could see.
+**Fix:** a third control, 계획 강제 취소 (`CANCEL`), that does not wait for the agent. The
+card leaves the page when it is pressed; the plan is closed on the next tool call of any
+kind from any session (`_apply_run_cancels`), and an agent that comes back gets
+`PLAN_CANCELLED`. `TestForceCancel`, plus board, page and real-endpoint tests.
+**Lesson:** a control that is applied "when the other side next speaks" needs a way out for
+when it never does. Every request the human can make of an agent should be answerable
+without that agent.
+
 [typescript-sdk#849]: https://github.com/modelcontextprotocol/typescript-sdk/pull/849
 
 ## Where the next bug probably is

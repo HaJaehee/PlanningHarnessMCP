@@ -167,6 +167,16 @@ PASS criteria are written so they can be judged from the AnythingLLM transcript 
 | **FAIL mode** | the model replaces the whole list. Accepted (`steer_replanned`): tasks whose wording did not change keep their results, the human re-approves everything. |
 | **Too late** | a note sent while the **last** task is running cannot be applied; it is shown on the completion report ("실행 중 남기신 의견 ..."), where [다시 작업] does what the note asked |
 
+### B9. Cancel a run whose agent stopped (3.2.0)
+
+| | |
+|---|---|
+| **Setup** | As B7, but the agent fails mid-task (stop AnythingLLM, or let the model error out) so task 1 is never reported. Press **멈춤** - it stays "asked for". Press **계획 강제 취소** and confirm. |
+| **Expect on the page** | the card disappears at once; with no other card, "현재 대기 중인 승인 요청이 없습니다" |
+| **S (to the next call of any kind, any session)** | the plan is `CANCELLED` (audit `run_cancelled` with `progress` and `task_in_progress`); a `DONE` / `IN_PROGRESS` for it gets `ok:false`, `error_code: PLAN_CANCELLED` |
+| **PASS** | (a) a new request in a new chat plans normally and is not pointed at the cancelled plan; (b) if the old agent comes back, it tells the user the plan was cancelled and does not execute its tasks; (c) finished tasks keep their `result_log` in the state file |
+| **Limit** | until some tool call arrives the plan is still `IN_EXECUTION` in the state file - only no longer shown. A cancel cannot be taken back. |
+
 ---
 
 ## Part C — Failure, revision, and recovery

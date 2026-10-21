@@ -1,6 +1,6 @@
 # planning-mcp (PlanningHarnessMCP)
 
-**버전: 3.1.0** · MCP 서버 이름: `planning-mcp` · 버전 단일 출처: `planning/config.py`의 `SERVER_VERSION` (MCP `initialize` 응답의 `serverInfo.version`으로 보고됩니다)
+**버전: 3.2.0** · MCP 서버 이름: `planning-mcp` · 버전 단일 출처: `planning/config.py`의 `SERVER_VERSION` (MCP `initialize` 응답의 `serverInfo.version`으로 보고됩니다)
 
 AnythingLLM Agent Mode용 경량 **계획·작업 관리 MCP 서버입니다**. 폐쇄망 환경에서 성능이 제한적인 사내 LLM이 기억에만 의존하여 즉각 답변하는 대신, `계획 → 사람 승인 → 실행 → 보고`의 생애주기를 준수하도록 하네스(Harness)를 제공합니다.
 
@@ -96,7 +96,7 @@ MCP 도구는 Agent Mode에서만 노출되므로, 워크스페이스의 기본 
 | 카드 | 표시되는 때 | 사용자가 할 수 있는 일 |
 |---|---|---|
 | 계획 승인 요청 | 모델이 최종 태스크 목록을 보냈을 때 | 승인, 수정 요청(전체 또는 태스크별), 거절, 대안 선택, 완료 기준 작성 |
-| 실행 중 | 계획이 승인된 뒤부터 마지막 태스크가 끝날 때까지 | 끝난 태스크의 결과 확인, **멈춤**, **의견 전달** |
+| 실행 중 | 계획이 승인된 뒤부터 마지막 태스크가 끝날 때까지 | 끝난 태스크의 결과 확인, **멈춤**, **의견 전달**, **계획 강제 취소**(3.2.0) |
 | 실행 멈춤 | 멈춤을 요청한 뒤 에이전트가 진행 중인 태스크를 보고했을 때 | 계속 진행(방향을 적을 수 있음), 계획 취소 |
 | 완료 확인 | 마지막 태스크가 끝났을 때 | 승인, 태스크별 다시 작업, 계획 다시 세우기, 거절 |
 
@@ -107,6 +107,7 @@ MCP 도구는 Agent Mode에서만 노출되므로, 워크스페이스의 기본 
 - 이미 실행 중인 도구는 서버가 중단할 수 없습니다.
 - 아직 적용되지 않은 요청은 [요청 취소]로 되돌릴 수 있고, 입력했던 내용은 입력란으로 돌아옵니다.
 - 마지막 태스크가 끝난 뒤에 도착한 요청은 적용할 대상이 없으므로, 입력한 내용이 완료 확인 카드에 표시됩니다.
+- **계획 강제 취소**(3.2.0): 에이전트가 오류로 멈춰 태스크를 보고하지 않으면, 멈춤과 의견 전달은 적용될 시점이 오지 않습니다. 이때 실행 중 카드의 [계획 강제 취소]를 누르면, 한 번 더 확인한 뒤 카드가 바로 사라집니다. 계획은 다음 도구 호출 때(어느 세션의 호출이든) `CANCELLED`로 닫힙니다. 끝난 태스크의 결과는 기록에 남고, 에이전트가 다시 보고하면 `PLAN_CANCELLED` 응답을 받습니다. 되돌릴 수 없습니다.
 
 ---
 
@@ -180,7 +181,7 @@ docs/                     Phase 1~4 문서: 스키마, 아키텍처, 에이전�
 | `PLANNING_MCP_ARTIFACT_ROOTS` | (비어 있음) | 3.0.0. 서버가 파일 존재를 확인해도 되는 폴더 목록입니다(`;`로 구분). 비어 있으면 파일을 확인하지 않고 `files` 필드도 광고하지 않습니다. 이 폴더 밖의 경로는 확인하지도, 반려하지도 않습니다. 에이전트의 도구가 결과물을 저장하는 폴더를 지정하십시오. |
 | `PLANNING_MCP_LOCAL_REPAIR` | `true` | 3.0.0. 태스크가 실패하면 그 태스크만 다시 계획합니다. `false`이면 2.0처럼 계획 전체를 다시 세웁니다. |
 | `PLANNING_MCP_AUTO_ASK` | `true` | 3.1.0. 승인 요청을 서버가 직접 엽니다. 모델이 최종 `task_list`를 보내는 호출과 마지막 태스크의 `DONE` 호출이 곧 승인 요청이 되므로, 모델이 `request_user_approval`을 따로 호출해야 하는 단계가 없어집니다. `false`이면 3.0처럼 모델이 `request_user_approval(ASK_USER)`를 `plan_summary`와 함께 호출합니다. |
-| `PLANNING_MCP_RUN_CONTROL` | `true` | 3.1.0. 실행 중인 계획을 승인 페이지에 표시하고, 사용자가 멈춤과 의견 전달을 요청할 수 있게 합니다. 요청은 에이전트가 진행 중인 태스크를 보고하는 시점에 적용됩니다. `false`이면 실행 중에는 페이지에 아무것도 표시하지 않습니다. |
+| `PLANNING_MCP_RUN_CONTROL` | `true` | 3.1.0. 실행 중인 계획을 승인 페이지에 표시하고, 사용자가 멈춤과 의견 전달을 요청할 수 있게 합니다. 요청은 에이전트가 진행 중인 태스크를 보고하는 시점에 적용됩니다. 계획 강제 취소(3.2.0)는 보고를 기다리지 않고 다음 도구 호출 때 적용됩니다. `false`이면 실행 중에는 페이지에 아무것도 표시하지 않습니다. |
 | `PLANNING_MCP_AUTOAPPROVE` | `false` | **테스트 전용 옵션**입니다. HITL 승인 게이트를 건너뜁니다. 호출 시마다 경고 로그가 기록됩니다. |
 
 CLI 옵션 지원: `--transport stdio|sse`, `--host`, `--port`, `--state-dir`, `--log-level`
@@ -198,7 +199,7 @@ approval_requested → approved → task_started → task_done → task_failed
 
 1.16.0부터는 `client_connected`(접속한 호스트), `thinking_step`의 `gap_sec`·`reconsider`, `loop_halted`·`halt_resolved`, `auto_finalized`, `replan_redirected` 이벤트도 기록됩니다. `python tools/loop_report.py`를 실행하면 계획별로 반복 징후를 요약해 줍니다.
 
-3.1.0부터는 다음 이벤트도 기록됩니다. `approval_requested`와 `completion_verification_requested`의 `by_server`(서버가 직접 연 요청), `run_paused`(사용자의 멈춤), `run_note_applied`와 `tasks_steered`(실행 중 의견과 그에 따른 태스크 수정), `run_control_moot`(적용할 대상이 없어진 요청).
+3.1.0부터는 다음 이벤트도 기록됩니다. `approval_requested`와 `completion_verification_requested`의 `by_server`(서버가 직접 연 요청), `run_paused`(사용자의 멈춤), `run_note_applied`와 `tasks_steered`(실행 중 의견과 그에 따른 태스크 수정), `run_control_moot`(적용할 대상이 없어진 요청). 3.2.0부터는 `run_cancelled`(사용자의 계획 강제 취소)도 기록됩니다.
 
 감사 로그의 `execution_blocked` 이벤트는 강제 게이트가 모델의 사전 무단 실행 시도를 차단했음을 의미합니다. 모델이 사용자 승인 없이 실행을 강행하려고 시도했는지 여부를 파악할 때 가장 먼저 확인해야 하는 항목입니다.
 

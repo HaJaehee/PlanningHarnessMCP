@@ -547,6 +547,24 @@ more follow the page drawing one card at a time (which buttons a decision switch
 and where the agent note enters a card's signature).
 Verified in a real browser - see [06](06-human-in-the-loop.md#the-run-card-310).
 
+### 3.2.0 — a run whose agent stopped can be cancelled
+
+- **계획 강제 취소.** A stop and a note are applied at the agent's next report; an agent that
+  failed mid-plan never makes one, and its card stayed on the page with the stop asked for
+  ([D31](09-defects-and-lessons.md#d31)). The run card now has a third control (`CANCEL`):
+  confirmed once, it takes the card off the page at once, and the plan is closed
+  (`CANCELLED`) on the next tool call of any kind from any session. An agent that comes back
+  gets `PLAN_CANCELLED`. Final - no stop, note or take-back after it
+  ([06](06-human-in-the-loop.md#cancelling-a-run-whose-agent-stopped-320)).
+- **Task rows end on their state.** The title fills the row, so 대기 / 진행중 / 완료 sit at
+  the right edge whether the title wraps or not (a short title used to pull the label in
+  beside itself). On a run card the time taken comes before the label; a halt card says 완료
+  rather than `DONE`.
+- New: audit event `run_cancelled`; `run_control_moot` gains `reason = "not_running"`.
+  Nothing the model reads changed - tool text, hints and `agents.md` are as in 3.1.0.
+- Tests: 14 new in `tests/test_gate_and_run.py`; the test fake keeps a cancel apart from a
+  stop as the real board does. 887 unit tests.
+
 ---
 
 ## Git commit ↔ version map

@@ -620,6 +620,46 @@ Edges, each decided so that nothing typed is lost:
 The card redraws each time the agent reports a task. What is typed is a draft like any other
 and survives the redraw; the caret is put back (`focusKey` / `refocus`).
 
+### Cancelling a run whose agent stopped (3.2.0)
+
+Both controls wait for the agent's next report. An agent that fails in the middle of a plan
+never makes one, so the card stayed on the page - task 진행중, stop "asked for", nothing
+left to press - until the approval went cold (`approval_ttl`, 30 minutes by default)
+([D31](09-defects-and-lessons.md#d31)).
+
+**계획 강제 취소 (`CANCEL`)** does not wait for the agent. It is a small button under the
+card's two buttons, and beside [요청 취소] while a stop or a note is waiting; the page asks
+once more (`confirm`) because it cannot be undone.
+
+- The board records it as the plan's control, replacing a stop or a note that was waiting.
+  The card leaves the page at once (`RunBoard.peek` skips it). It is final: a stop, a note or
+  [요청 취소] after it is refused, a second cancel from another tab is accepted.
+- The plan is closed on the next tool call of **any kind, from any session** -
+  `_apply_run_cancels`, at the top of `dispatch`, right after the late decision is collected:
+  status `CANCELLED`, halt cleared, a pending request withdrawn, loop counters forgotten.
+  Until that call the plan is still `IN_EXECUTION` in the state file, only no longer shown.
+- `pending()` / `take()` keep meaning a stop or a note, so the report path never sees or
+  spends a cancel; `cancels()` and `take(plan_id, ("CANCEL",))` serve it.
+- An agent that comes back gets `PLAN_CANCELLED` ("cancelled by the user ... start a new
+  plan"). Finished tasks keep their results in the plan; the task that was running stays
+  `IN_PROGRESS` on record.
+- Audit: `run_cancelled` (`progress`, `task_in_progress`). A cancel that reaches a plan which
+  had already left execution (finished, failed, held) changes nothing: `run_control_moot`,
+  `reason = "not_running"`.
+
+### Task rows end on their state (3.2.0)
+
+The title of a task row takes the rest of the row (`flex: 1 1 auto`), so the state label -
+대기 / 진행중 / 완료 / 실패 - sits at the right edge whether the title is one line or wraps.
+Sized to its text, a short title used to pull the label in beside itself while a wrapped one
+pushed it out to the edge. On a run card the time taken (소요 ...) comes before the label, so
+every row ends on its state. One function (`runBadge`) draws the label on every card, so a
+halt card says 완료 rather than `DONE`.
+
+Both verified in a real browser: labels aligned for a one-line and a wrapped title; a stop
+asked and never collected, 계획 강제 취소 pressed, the card gone at once; the next tool call
+closed the plan (`CANCELLED`, `ANSWER_USER`).
+
 ### One card at a time (3.1.0)
 
 A task reported by one plan must not disturb the human reading another plan's request. The
@@ -643,7 +683,7 @@ card of plan A's request stayed the same node with the same children, an opened 
 comment box stayed open, and the focus and the caret in its text box did not move; rejecting
 A removed A's card and left B's untouched, with its buttons enabled.
 
-`PLANNING_MCP_RUN_CONTROL=false` turns the card and both controls off.
+`PLANNING_MCP_RUN_CONTROL=false` turns the card and its controls off, the cancel included.
 
 Verified in a real browser against a real server: the request opened by the plan call (with
 the model's sentence as 개요), the run card appearing on approval and following each task, a
