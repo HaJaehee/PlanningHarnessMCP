@@ -312,6 +312,7 @@ class PlanningHandlers:
                 # A human may have clicked approve after the previous call timed out.
                 # Collect that first so every handler below sees the true state.
                 self._apply_late_decision()
+                self._apply_run_cancels()
                 response = self._route(tool_name, clean, notes)
                 if response is not None:
                     response = self._after_call(tool_name, clean, response, notes)
@@ -936,6 +937,57 @@ class PlanningHandlers:
             self.approval_ui.take_run_control(plan.plan_id)
         except Exception:  # noqa: BLE001 - housekeeping; the sync drops it as well
             log.debug("Could not clear the run control for %s", plan.plan_id)
+
+    def _apply_run_cancels(self) -> None:
+        """Close the plans the human cancelled from their run card (3.2.0).
+
+        A stop or a note waits for the agent's next report. An agent that failed in the
+        middle of a plan never makes one, so its card stayed on the page with the stop
+        still asked for and nothing the human could do about it. A cancel does not wait
+        for that agent: the card left the page when it was pressed, and the plan is
+        closed here, on the next call of any kind from any session - the way a late
+        decision is collected. An agent that does come back gets PLAN_CANCELLED.
+        """
+        if self.approval_ui is None or not self.config.run_control:
+            return
+        try:
+            asked = self.approval_ui.run_cancels()
+        except Exception:  # noqa: BLE001 - an unreadable board must not fail a call
+            log.debug("Could not read the run board", exc_info=True)
+            return
+        if not asked:
+            return
+        state = self.store.load()
+        closed: list[Plan] = []
+        for plan_id in asked:
+            plan = state.plans.get(plan_id)
+            if plan is not None and plan.status in EXECUTABLE_PLAN_STATUSES:
+                plan.halt = None
+                self._milestone(plan)
+                plan.set_status(PlanStatus.CANCELLED)
+                closed.append(plan)
+        if closed:
+            self.store.save(state)
+        for plan_id in asked:
+            try:
+                self.approval_ui.take_run_cancel(plan_id)
+            except Exception:  # noqa: BLE001 - housekeeping; the sync drops it as well
+                log.debug("Could not clear the run cancel for %s", plan_id)
+        for plan in closed:
+            self._withdraw_approval_request(plan)
+            self.loop.forget(plan.plan_id)
+            self._last_answered.pop(plan.plan_id, None)
+            self.store.audit(
+                "run_cancelled", plan_id=plan.plan_id, progress=plan.progress(),
+                # The task the agent was on when it stopped reporting, if any.
+                task_in_progress=next((t.task_id for t in plan.tasks
+                                       if t.status == TaskStatus.IN_PROGRESS.value), None),
+            )
+            log.warning("The user cancelled %s from the approval page", plan.plan_id)
+        for plan_id in sorted(set(asked) - {p.plan_id for p in closed}):
+            # It finished, failed or was stopped before the cancel was collected.
+            self.store.audit("run_control_moot", plan_id=plan_id, action="CANCEL",
+                             reason="not_running")
 
     @staticmethod
     def _control_words(control: dict[str, Any]) -> str:

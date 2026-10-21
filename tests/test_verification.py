@@ -1522,7 +1522,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual((cfg.done_when, cfg.max_done_when_chars, cfg.evidence_novelty,
                           cfg.artifact_roots, cfg.file_checks, cfg.local_repair),
                          (True, 200, 0.3, (), False, True))
-        self.assertEqual(SERVER_VERSION, "3.1.0")
+        self.assertEqual(SERVER_VERSION, "3.2.0")
 
     def test_from_env(self):
         with tempfile.TemporaryDirectory() as tmp:

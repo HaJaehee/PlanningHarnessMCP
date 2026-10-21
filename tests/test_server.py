@@ -1394,16 +1394,34 @@ class FakeApprovalUI:
         self.runs = merged
         return True
 
+    def _run_action(self, plan_id):
+        return ((self.runs.get(plan_id) or {}).get("control") or {}).get("action")
+
     def run_control_pending(self, plan_id):
-        return (self.runs.get(plan_id) or {}).get("control")
+        """A stop or a note; a cancel is not applied at a report (3.2.0)."""
+        if self._run_action(plan_id) in ("PAUSE", "NOTE"):
+            return self.runs[plan_id]["control"]
+        return None
 
     def take_run_control(self, plan_id):
-        return (self.runs.get(plan_id) or {}).pop("control", None)
+        if self._run_action(plan_id) in ("PAUSE", "NOTE"):
+            return self.runs[plan_id].pop("control")
+        return None
+
+    def run_cancels(self):
+        return sorted(pid for pid in self.runs if self._run_action(pid) == "CANCEL")
+
+    def take_run_cancel(self, plan_id):
+        if self._run_action(plan_id) == "CANCEL":
+            return self.runs[plan_id].pop("control")
+        return None
 
     def on_run_card(self, plan_id, action, comment=""):
         """Simulates the human pressing a button on a running plan's card."""
         if plan_id not in self.runs or (action == "NOTE" and not comment.strip()):
             return False
+        if self._run_action(plan_id) == "CANCEL":
+            return action == "CANCEL"
         self.runs[plan_id]["control"] = {
             "id": f"ctl{len(self.opened)}", "action": action, "comment": comment.strip(),
         }

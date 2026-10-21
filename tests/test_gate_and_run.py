@@ -702,6 +702,39 @@ class TestRunBoard(unittest.TestCase):
             self.assertEqual(self.board.read(), {}, junk)
             self.assertEqual(self.board.peek(), [])
 
+    # ---- the force cancel (3.2.0) -------------------------------------------
+    def test_a_cancel_takes_the_card_off_at_once(self):
+        self.board.sync({"p1": self.entry(), "p2": self.entry("p2")})
+        self.assertTrue(self.board.request("p1", "CANCEL"))
+        self.assertEqual([e["plan_id"] for e in self.board.peek()], ["p2"])
+        self.assertEqual(self.board.cancels(), ["p1"])
+
+    def test_a_cancel_replaces_a_stop_the_agent_never_collected(self):
+        self.board.sync({"p1": self.entry()})
+        self.board.request("p1", "PAUSE", "잠깐만요")
+        self.board.request("p1", "CANCEL")
+        self.assertEqual(self.board.cancels(), ["p1"])
+        # A report applies stops and notes only: it neither sees nor spends a cancel.
+        self.assertIsNone(self.board.pending("p1"))
+        self.assertIsNone(self.board.take("p1"))
+
+    def test_a_cancel_is_final(self):
+        self.board.sync({"p1": self.entry()})
+        self.board.request("p1", "CANCEL")
+        for action, words in (("PAUSE", ""), ("NOTE", "표로"), ("CLEAR", "")):
+            self.assertFalse(self.board.request("p1", action, words), action)
+        self.assertTrue(self.board.request("p1", "CANCEL"))  # a second tab, same answer
+        self.assertEqual(self.board.cancels(), ["p1"])
+
+    def test_a_cancel_waits_through_refreshes_until_it_is_taken_once(self):
+        self.board.sync({"p1": self.entry()})
+        self.board.request("p1", "CANCEL")
+        self.board.sync({"p1": self.entry(rev="r2")})
+        self.assertEqual(self.board.peek(), [])
+        self.assertEqual(self.board.take("p1", ("CANCEL",))["action"], "CANCEL")
+        self.assertIsNone(self.board.take("p1", ("CANCEL",)))
+        self.assertEqual(self.board.cancels(), [])
+
 
 class TestWhatThePageShowsOfARun(GateCase):
     def test_an_approved_plan_is_on_the_board_before_its_first_task(self):
@@ -1082,6 +1115,94 @@ class TestNote(GateCase):
 
 
 # ===========================================================================
+# B. Cancel a plan whose agent stopped reporting (3.2.0)
+# ===========================================================================
+
+
+class TestForceCancel(GateCase):
+    """The agent failed in the middle of a plan and never reported again.
+
+    A stop waits for that report, so before 3.2 the card stayed on the page with the stop
+    asked for and nothing left to press. The cancel is applied on the next call of any
+    kind - here from another session on the same state directory and page.
+    """
+
+    def abandoned(self, **cfg):
+        cfg.setdefault("approval_mode", "return")
+        h, ui, pid = self.running(**cfg)
+        self.assertTrue(ui.on_run_card(pid, "PAUSE"))  # never collected
+        self.assertTrue(ui.on_run_card(pid, "CANCEL"))
+        return h, ui, pid
+
+    def another_session(self, ui):
+        h = self.handler(ui, approval_mode="return")
+        h.dispatch("get_current_plan", {})
+        return h
+
+    def test_the_next_call_from_any_session_closes_the_plan(self):
+        h, ui, pid = self.abandoned()
+        self.another_session(ui)
+        plan = self.plan(h)
+        self.assertEqual(plan.plan_status, "CANCELLED")
+        self.assertIsNone(plan.halt)
+        self.assertEqual(ui.runs, {})
+        (line,) = self.audit("run_cancelled")
+        self.assertEqual((line["plan_id"], line["progress"], line["task_in_progress"]),
+                         (pid, "0/3 done", 1))
+
+    def test_finished_work_stays_on_record(self):
+        h, ui, pid = self.running(approval_mode="return")
+        self.done(h, 1)
+        ui.on_run_card(pid, "CANCEL")
+        self.another_session(ui)
+        tasks = self.plan(h).tasks
+        self.assertEqual([t.status for t in tasks], ["DONE", "IN_PROGRESS", "PENDING"])
+        self.assertIn("out/step1.txt", tasks[0].result_log)
+
+    def test_an_agent_that_comes_back_is_told_and_moves_nothing(self):
+        h, ui, pid = self.abandoned()
+        res = self.done(h, 1)
+        self.assertEqual(res["error_code"], "PLAN_CANCELLED")
+        self.assertIn("cancelled by the user", res["next_action_hint"])
+        self.assertEqual(self.plan(h).tasks[0].status, "IN_PROGRESS")
+        self.assertEqual(len(self.audit("run_cancelled")), 1)
+        self.assertEqual(self.audit("run_paused"), [])  # the stop went with the cancel
+
+    def test_it_frees_the_way_for_a_new_plan(self):
+        h, ui, pid = self.abandoned()
+        ui.decision = "APPROVED"
+        res = self.submit(h, tasks=["새 보고서 찾기"])
+        self.assertTrue(res["ok"], res)
+        self.assertNotEqual(res["plan_id"], pid)
+        self.assertEqual(res["plan_status"], "APPROVED")
+
+    def test_a_plan_that_moved_on_first_is_left_as_it_is(self):
+        h, ui, pid = self.running(approval_mode="return")
+        for task_id in (1, 2, 3):
+            self.done(h, task_id)
+        self.assertEqual(self.plan(h).plan_status, "AWAITING_COMPLETION")
+        ui.runs[pid] = {"control": {"id": "c", "action": "CANCEL", "comment": ""}}
+        self.another_session(ui)
+        self.assertEqual(self.plan(h).plan_status, "AWAITING_COMPLETION")
+        self.assertEqual(self.audit("run_control_moot")[-1]["reason"], "not_running")
+        self.assertEqual(self.audit("run_cancelled"), [])
+
+    def test_switched_off_nothing_is_cancelled(self):
+        h, ui, pid = self.running(run_control=False)
+        ui.runs[pid] = {"control": {"id": "c", "action": "CANCEL", "comment": ""}}
+        self.assertTrue(self.done(h, 1)["ok"])
+        self.assertEqual(self.plan(h).plan_status, "IN_EXECUTION")
+
+    def test_an_unreadable_board_never_fails_a_call(self):
+        class Broken(FakeApprovalUI):
+            def run_cancels(self):
+                raise OSError("locked")
+
+        h, ui, pid = self.running(Broken(decision="APPROVED"))
+        self.assertTrue(self.done(h, 1)["ok"])
+
+
+# ===========================================================================
 # The page and its two endpoints
 # ===========================================================================
 
@@ -1117,6 +1238,25 @@ class TestThePage(unittest.TestCase):
         self.assertIn("user=d.origin==='user'", _PAGE)
         self.assertIn("(user?'실행 멈춤':'반복 감지')", _PAGE)
         self.assertIn("(user?'계획 취소':'취소')", _PAGE)
+
+    def test_a_run_can_be_cancelled_with_or_without_a_stop_waiting(self):
+        """3.2.0: on the card as it is, and beside a stop the agent never collected."""
+        self.assertIn(">계획 강제 취소</button>", _PAGE)
+        self.assertIn("\\',\\'CANCEL\\')", _PAGE)
+        self.assertEqual(_PAGE.count("+killBtn(pid)+"), 2)
+        self.assertIn("'\\',\\'CLEAR\\')\">요청 취소</button>'+killBtn(pid)", _PAGE)
+        # Irreversible, so it is asked once more before it is sent.
+        self.assertIn("if(action==='CANCEL'&&!confirm(KILL_ASK))return;", _PAGE)
+
+    def test_every_task_row_ends_on_its_state_label(self):
+        """The title fills the row, so the label is at the right edge whether the title
+        wraps or not; on a run card the time taken comes before it."""
+        self.assertIn(".tt>span:not(.tn):not(.badge):not(.took){flex:1 1 auto;", _PAGE)
+        self.assertIn("(took?'<span class=\"took\">소요 '+took+'</span>':'')+runBadge(t)+'</div>'",
+                      _PAGE)
+        # One way to draw the label, so a halt card says 완료 rather than DONE.
+        self.assertIn("(t.status&&t.status!=='PENDING'?runBadge(t):'')", _PAGE)
+        self.assertNotIn("'<span class=\"badge\">'+esc(t.status)", _PAGE)
 
 
 class TestOnlyTheCardThatChangedIsRedrawn(unittest.TestCase):
@@ -1265,6 +1405,16 @@ class TestTheEndpoints(GateCase):
         self.assertEqual(data["runs"], [])
         (card,) = data["requests"]
         self.assertEqual((card["phase"], card["origin"]), ("HALT", "user"))
+
+    def test_a_cancel_from_the_real_page_takes_the_card_off_and_closes_the_plan(self):
+        h, pid = self.approved()
+        self.assertTrue(self.post(plan_id=pid, action="PAUSE"))
+        self.assertTrue(self.post(plan_id=pid, action="cancel"))
+        self.assertEqual(self.get()["runs"], [])
+        self.assertFalse(self.post(plan_id=pid, action="CLEAR"))
+        res = self.handler(self.ui).dispatch("get_current_plan", {"plan_id": pid})
+        self.assertEqual(res["plan_status"], "CANCELLED")
+        self.assertEqual(self.ui.runs.read(), {})
 
     def test_the_old_endpoint_still_answers(self):
         req = Request(f"{self.base}/api/decide",

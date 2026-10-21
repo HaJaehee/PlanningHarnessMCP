@@ -538,6 +538,11 @@ RUNS_LOCK_FILENAME = ".runslock"
 CONTROL_PAUSE = "PAUSE"   # stop before the next task; they then decide on a pause card
 CONTROL_NOTE = "NOTE"     # change what is left: the agent rewrites the unfinished tasks
 CONTROL_CLEAR = "CLEAR"   # withdraw a request that has not been applied yet
+# Close the plan without waiting for its agent (3.2.0). A stop and a note are applied
+# when the agent next reports a task, and an agent that failed in the middle of a plan
+# never does: its card stayed on the page with the stop "asked for" for good. A cancel
+# takes the card off at once and is applied on the next tool call of any kind.
+CONTROL_CANCEL = "CANCEL"
 CONTROLS = (CONTROL_PAUSE, CONTROL_NOTE)
 MAX_CONTROL_CHARS = 1000
 
@@ -627,7 +632,7 @@ class RunBoard:
 
     def request(self, plan_id: str, action: str, comment: Any = "") -> bool:
         """Called by the page. False = nothing was recorded, and the page says so."""
-        if action not in CONTROLS and action != CONTROL_CLEAR:
+        if action not in CONTROLS + (CONTROL_CLEAR, CONTROL_CANCEL):
             return False
         text = str(comment or "").strip()[:MAX_CONTROL_CHARS]
         if action == CONTROL_NOTE and not text:
@@ -639,6 +644,10 @@ class RunBoard:
                 # The plan is no longer running - it finished, failed or was stopped
                 # while the page still showed the card.
                 return False
+            if self._action(entry) == CONTROL_CANCEL:
+                # Final: the card has left the page. A second tab that still shows it
+                # can cancel again, but not stop, note or take the cancel back.
+                return action == CONTROL_CANCEL
             if action == CONTROL_CLEAR:
                 if entry.pop("control", None) is None:
                     return True
@@ -651,22 +660,33 @@ class RunBoard:
                 }
             return self._write(runs)
 
-    def pending(self, plan_id: str) -> dict[str, Any] | None:
-        """The control waiting for this plan, without consuming it."""
-        control = (self.read().get(plan_id) or {}).get("control")
-        if isinstance(control, dict) and control.get("action") in CONTROLS:
-            return control
-        return None
+    @staticmethod
+    def _action(entry: dict[str, Any]) -> str | None:
+        control = entry.get("control")
+        return control.get("action") if isinstance(control, dict) else None
 
-    def take(self, plan_id: str) -> dict[str, Any] | None:
+    def pending(self, plan_id: str) -> dict[str, Any] | None:
+        """The stop or note waiting for this plan, without consuming it."""
+        entry = self.read().get(plan_id) or {}
+        return entry["control"] if self._action(entry) in CONTROLS else None
+
+    def cancels(self) -> list[str]:
+        """The plans cancelled from their card that have not been closed yet."""
+        return [pid for pid, entry in sorted(self.read().items())
+                if self._action(entry) == CONTROL_CANCEL]
+
+    def take(
+        self, plan_id: str, actions: tuple[str, ...] = CONTROLS
+    ) -> dict[str, Any] | None:
         """Consume the control for a plan. Called by the handler that applies it."""
-        if self.pending(plan_id) is None:
+        if self._action(self.read().get(plan_id) or {}) not in actions:
             return None  # the common case, answered without the lock
         with exclusive(self.lock_path):
             runs = self.read()
-            control = (runs.get(plan_id) or {}).pop("control", None)
-            if not isinstance(control, dict) or control.get("action") not in CONTROLS:
+            entry = runs.get(plan_id) or {}
+            if self._action(entry) not in actions:
                 return None
+            control = entry.pop("control")
             if not self._write(runs):
                 # Not consumed, so not applied: it stays on the page as asked for and
                 # the next call tries again, rather than being applied twice.
@@ -674,10 +694,12 @@ class RunBoard:
             return control
 
     def peek(self) -> list[dict[str, Any]]:
-        """Every run that still has a live approval, in plan order."""
+        """Every run that still has a live approval and was not cancelled, in plan order."""
         now = time.time()
         out = []
         for _, entry in sorted(self.read().items()):
+            if self._action(entry) == CONTROL_CANCEL:
+                continue
             try:
                 expired = now > float(entry.get("expires_at") or now + 1)
             except (TypeError, ValueError):
@@ -776,7 +798,10 @@ dialog.about::backdrop{background:rgba(0,0,0,.35)}
 @media(prefers-color-scheme:dark){.task{border-top-color:#2c3038}}
 .task:first-child{border-top:0}
 .tt{display:flex;gap:.55rem;align-items:baseline;line-height:1.45;font-size:.95rem}
-.tt>span:not(.tn):not(.badge):not(.took){min-width:0;word-break:break-word}
+/* The title takes the rest of the row, so the labels after it sit at the right edge
+   whether the title is one line or wraps. Sized to its text, a short title pulled them
+   in beside itself and a long one pushed them out to the edge. */
+.tt>span:not(.tn):not(.badge):not(.took){flex:1 1 auto;min-width:0;word-break:break-word}
 .tn{opacity:.5;font-variant-numeric:tabular-nums;min-width:1.4em;flex-shrink:0}
 .badge{font-size:.72rem;padding:.1rem .4rem;border-radius:4px;background:#e6e8eb;opacity:.8;
        white-space:nowrap;flex-shrink:0}
@@ -897,6 +922,13 @@ input.dwi{display:none;flex:1 1 auto;min-width:0;box-sizing:border-box;border-ra
 .linkbtn{display:block;flex:none;min-width:0;margin-top:.55rem;padding:.25rem .7rem;
          font-size:.8rem;font-weight:500;border-radius:6px;background:#fff;color:inherit}
 @media(prefers-color-scheme:dark){.linkbtn{background:#2c3038}}
+/* 3.2.0 - closing a plan whose agent stopped reporting. Small and to one side: it is for
+   when the agent has failed, not the way to stop one that is working. */
+.ctlrow{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.55rem}
+.ctlrow .linkbtn{margin-top:0}
+.ctlrow.end{justify-content:flex-end}
+.linkbtn.kill{color:#b42318}
+@media(prefers-color-scheme:dark){.linkbtn.kill{color:#f97066}}
 </style></head><body><div class="ver"><span class="vt">planning-mcp __PLANNING_MCP_VERSION__</span>
 <button class="info" id="about-open" type="button" aria-label="프로그램 정보" title="정보">i</button></div>
 <div class="card" id="root">
@@ -1454,6 +1486,10 @@ function header(d){
   return h;
 }
 const RUN_STATE={DONE:'완료',IN_PROGRESS:'진행중',FAILED:'실패',PENDING:'대기'};
+function runBadge(t){
+  return '<span class="badge'+(t.status==='IN_PROGRESS'?' now':'')+'">'+
+    (RUN_STATE[t.status]||esc(t.status))+'</span>';
+}
 function taskRows(d){
   // On a completion report every task is DONE, so a DONE badge on every row is noise -
   // the evidence line below it already says so, and that is what needs the attention.
@@ -1473,7 +1509,7 @@ function taskRows(d){
     let row='<div class="task"><div class="tt"><span class="tn">'+esc(String(t.task_id))+
       '.</span>'+(choose?'<span>'+choiceHeading(t)+'</span>'
                         :'<span>'+esc(t.title)+'</span>')+picked+
-      (badge?'<span class="badge'+(t.status==='IN_PROGRESS'?' now':'')+'">'+(RUN_STATE[t.status]||esc(t.status))+'</span>':'')+
+      (badge?runBadge(t):'')+
       (took?'<span class="took">소요 '+took+'</span>':'')+
       (editable&&!t.done_when?'<button class="tcbtn dwadd" type="button" aria-expanded="false" '+
         'onclick="toggleCriterion(this,\\''+esc(d.id)+'\\',\\''+esc(String(t.task_id))+
@@ -1539,7 +1575,7 @@ function haltCard(d){
       esc(String(t.task_id))+'.</span>'+
       (hasChoice(t)&&d.draft?'<span>'+choiceHeading(t)+'</span>'
                    :'<span>'+esc(t.title)+'</span>')+
-      (t.status&&t.status!=='PENDING'?'<span class="badge">'+esc(t.status)+'</span>':'')+
+      (t.status&&t.status!=='PENDING'?runBadge(t):'')+
       '</div>'+(d.draft?optionsHtml(d,t,false):'')+dwRow(d,t,false)+
       // What is already done, for a plan the human stopped: it is what they weigh
       // when deciding whether the rest should run.
@@ -1568,7 +1604,9 @@ let RUNS=[];
 function runId(r){return 'run-'+r.plan_id;}
 const RUN_HINT='실행 중인 계획은 에이전트가 태스크를 보고할 때마다 갱신됩니다. [멈춤]과 '+
   '[의견 전달]은 에이전트가 진행 중인 태스크를 보고하는 시점에 적용되며, 이미 실행 중인 '+
-  '도구는 중단되지 않습니다.<br>';
+  '도구는 중단되지 않습니다.<br>'+
+  '에이전트가 오류로 멈춰 보고하지 않으면 [계획 강제 취소]로 계획을 닫으실 수 있습니다. '+
+  '카드는 바로 사라지고, 계획은 다음 도구 호출 때 취소됩니다.<br>';
 function clock(ts){
   if(typeof ts!=='number')return '';
   const d=new Date(ts*1000);
@@ -1579,10 +1617,10 @@ function runRows(r){
   return '<p class="tasklabel">태스크 '+tasks.length+'개 · 완료 '+fin+'개</p>'+
     '<div class="tasks">'+tasks.map(t=>{
     const took=t.status==='DONE'?tookText(t.duration_sec):'';
+    // The time taken goes before the state, so every row ends on its state label.
     let row='<div class="task"><div class="tt"><span class="tn">'+esc(String(t.task_id))+
-      '.</span><span>'+esc(t.title)+'</span><span class="badge'+
-      (t.status==='IN_PROGRESS'?' now':'')+'">'+(RUN_STATE[t.status]||esc(t.status))+
-      '</span>'+(took?'<span class="took">소요 '+took+'</span>':'')+'</div>';
+      '.</span><span>'+esc(t.title)+'</span>'+
+      (took?'<span class="took">소요 '+took+'</span>':'')+runBadge(t)+'</div>';
     row+=dwRow({id:runId(r)},t,false);
     if(t.status==='DONE'){
       const ev=(t.result_log||'').trim();
@@ -1600,21 +1638,33 @@ function runCard(r){
   const h='<h1>실행 중 · '+pid+'</h1>'+verNote(r)+
     '<p class="goal"><span class="lbl">목표</span>'+esc(r.goal)+'</p>'+runRows(r)+
     (seenAt?'<p class="seen">에이전트의 마지막 보고 '+seenAt+'</p>':'');
-  // Asked for, not yet applied: say exactly that, and let it be taken back.
+  // Asked for, not yet applied: say exactly that, and let it be taken back - or, when
+  // the agent is not coming back to apply it, close the plan without it.
   if(c)return h+'<div class="pendingctl">'+(c.action==='PAUSE'
     ?'멈춤을 요청하셨습니다. 에이전트가 진행 중인 태스크를 보고하면 다음 태스크를 시작하지 '+
      '않고 멈춥니다.'
     :'의견을 전달하셨습니다. 에이전트가 진행 중인 태스크를 보고하면, 남은 태스크를 의견에 맞게 '+
      '고쳐 다시 승인을 요청합니다.')+
+    ' 에이전트가 오류로 멈춰 보고하지 않으면 계획을 강제로 취소하실 수 있습니다.'+
     (c.comment?'<span class="q">'+esc(c.comment)+'</span>':'')+
-    '<button class="linkbtn" type="button" onclick="control(\\''+pid+
-    '\\',\\'CLEAR\\')">요청 취소</button></div>';
+    '<div class="ctlrow"><button class="linkbtn" type="button" onclick="control(\\''+pid+
+    '\\',\\'CLEAR\\')">요청 취소</button>'+killBtn(pid)+'</div></div>';
   return h+'<textarea id="c-'+esc(id)+'" placeholder="남은 태스크를 바꾸고 싶으실 때 의견을 '+
     '입력해 주십시오 (예: 요약은 표로 정리해 주세요)"></textarea>'+
     '<div class="row"><button class="rev" type="button" onclick="control(\\''+pid+
     '\\',\\'NOTE\\')">의견 전달</button><button class="no" type="button" onclick="control(\\''+
-    pid+'\\',\\'PAUSE\\')">멈춤</button></div>';
+    pid+'\\',\\'PAUSE\\')">멈춤</button></div><div class="ctlrow end">'+killBtn(pid)+'</div>';
 }
+// 3.2.0 - a stop and a note wait for the agent's next report. An agent that failed in
+// the middle of a plan never makes one, and its card stayed here for good. This closes
+// the plan without it: the card goes at once, the plan on the next tool call.
+function killBtn(pid){
+  return '<button class="linkbtn kill" type="button" onclick="control(\\''+pid+
+    '\\',\\'CANCEL\\')">계획 강제 취소</button>';
+}
+const KILL_ASK='실행 중인 계획을 강제로 취소하시겠습니까?\\n\\n에이전트의 보고를 기다리지 않고 '+
+  '계획을 닫습니다. 되돌릴 수 없으며, 에이전트가 다시 보고하면 계획이 취소되었다는 '+
+  '답을 받습니다.';
 function restoreRun(r){
   const box=document.getElementById('c-'+runId(r));
   if(box)box.value=dget(runId(r),'_all');
@@ -1627,6 +1677,7 @@ async function control(pid,action){
     if(box){box.placeholder='전달하실 의견을 먼저 입력해 주십시오';box.focus();}
     return;
   }
+  if(action==='CANCEL'&&!confirm(KILL_ASK))return;
   busy=true;
   lock(id);
   // Taking a request back puts its words back in the box: nothing typed is dropped.
@@ -2016,6 +2067,12 @@ class ApprovalServer:
     def run_control_pending(self, plan_id: str) -> dict[str, Any] | None:
         return self.runs.pending(plan_id)
 
+    def run_cancels(self) -> list[str]:
+        return self.runs.cancels()
+
+    def take_run_cancel(self, plan_id: str) -> dict[str, Any] | None:
+        return self.runs.take(plan_id, (CONTROL_CANCEL,))
+
     def claim(self, request_id: str) -> Verdict | None:
         return self.store.claim(request_id)
 
@@ -2228,7 +2285,8 @@ class ApprovalServer:
                     self.send_error(400)
                     return
                 if route == "/api/control":
-                    # A running plan: stop it, change what is left, or take that back.
+                    # A running plan: stop it, change what is left, take that back, or
+                    # cancel it without waiting for its agent.
                     self._json({"ok": server.runs.request(
                         str(body.get("plan_id", "")),
                         str(body.get("action", "")).upper(),

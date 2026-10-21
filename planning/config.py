@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SERVER_NAME = "planning-mcp"
-SERVER_VERSION = "3.1.0"
+SERVER_VERSION = "3.2.0"
 # Shown in the approval page's information dialog (the small "i" beside the version).
 SERVER_AUTHOR = "Ha, Jaehee"
 SERVER_AUTHOR_EMAIL = "lovesm135@naver.com"
@@ -235,7 +235,9 @@ class Config:
     auto_ask: bool = True
     # Show the plan on the approval page while it runs, with a way for the human
     # to stop it or change what is left. Takes effect when the agent next reports
-    # a task; a tool that is already running is not interrupted.
+    # a task; a tool that is already running is not interrupted. The human can also
+    # cancel it outright (3.2.0), for an agent that stopped reporting: the card goes
+    # at once and the plan is closed on the next tool call of any kind.
     run_control: bool = True
 
     @property
