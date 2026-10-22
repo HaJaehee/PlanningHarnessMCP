@@ -1750,14 +1750,17 @@ function draw(list){
                             after:()=>restore(d)}))
     .concat(RUNS.map(r=>({key:runId(r),sig:runSig(r),html:()=>runCard(r),
                           after:()=>restoreRun(r)})));
+  // The idle text is a child of #root itself. Only that one: an agent that stopped
+  // waiting shows a chip with the class "chip idle" inside its card, and a search of the
+  // whole tree removed one such chip on every poll until none was left.
   if(!items.length){
-    if(root.querySelector('.idle'))return false;
+    if(root.querySelector(':scope>.idle'))return false;
     root.innerHTML=IDLE_HTML;
     Object.keys(NODES).forEach(k=>{delete NODES[k];delete SHOWN[k];});
     return true;
   }
   let changed=false;
-  const idle=root.querySelector('.idle');
+  const idle=root.querySelector(':scope>.idle');
   if(idle)idle.remove();
   // The line that says a click could not be recorded. Its own element, so showing or
   // clearing it redraws no card.

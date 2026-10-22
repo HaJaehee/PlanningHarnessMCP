@@ -1316,6 +1316,15 @@ class TestOnlyTheCardThatChangedIsRedrawn(unittest.TestCase):
     def test_a_poll_that_changes_nothing_touches_nothing(self):
         self.assertIn("if(!draw(list))return;", _PAGE)
 
+    def test_the_idle_text_is_found_without_taking_a_chip_with_it(self):
+        """The chip of an agent that stopped waiting has the class "chip idle". Looking
+        for the idle text with root.querySelector('.idle') found that chip instead and
+        removed it - one chip per poll, so within seconds no card said the agent had
+        stopped waiting. Found by comparing the page against tests/web/fixtures.json."""
+        self.assertEqual(_PAGE.count("root.querySelector(':scope>.idle')"), 2)
+        self.assertNotIn("root.querySelector('.idle')", _PAGE)
+        self.assertIn("'<div class=\"chip idle\">", _PAGE)
+
 
 class TestThePageScriptParses(unittest.TestCase):
     """The page is a Python string holding JavaScript, so a JS escape has to be written
