@@ -1,0 +1,265 @@
+{
+  "_about": [
+    "What GET /api/pending answers, one entry for every kind of card the approval page draws.",
+    "Rendered by the page tests (tests/test_page.py) and served by tools/page_preview.py.",
+    "\"@page\" as a version means the version of the page itself: a request it shows no",
+    "version note for. Request ids are r<n><kind>; run cards are keyed by plan_id."
+  ],
+  "requests": [
+    {
+      "id": "r1plan",
+      "plan_id": "plan_20261022_0001",
+      "goal": "3분기 매출 보고서를 요약해 팀장에게 메일로 보낸다",
+      "summary": "보고서 파일을 찾아 매출 표를 옮기고, 다섯 줄로 요약한 뒤 팀장에게 보냅니다.",
+      "display": "",
+      "phase": "PLAN",
+      "draft": false,
+      "origin": "",
+      "agent_note": "",
+      "version": "@page",
+      "decided": null,
+      "agent_waiting": true,
+      "tasks": [
+        {"task_id": 1, "title": "3분기 매출 보고서 파일 찾기", "status": "PENDING"},
+        {"task_id": 2, "title": "매출 표를 엑셀 서식 그대로 옮기기", "status": "PENDING",
+         "topic": "집계 방식",
+         "options": [
+           {"title": "매출 표를 엑셀 서식 그대로 옮기기", "reason": "서식이 유지됨"},
+           {"title": "CSV로 내보내 스크립트로 합산", "reason": "빠르지만 서식이 사라짐"},
+           {"title": "표를 직접 다시 입력", "reason": "느림"}
+         ]},
+        {"task_id": 3, "title": "다섯 줄 요약 작성", "status": "PENDING",
+         "done_when": "요약이 정확히 5줄이다", "done_when_by": "user"},
+        {"task_id": 4, "title": "요약을 팀장에게 메일로 보내기", "status": "PENDING",
+         "done_when": "보낸편지함에 메일이 있다"}
+      ]
+    },
+    {
+      "id": "r2plan",
+      "plan_id": "plan_20261022_0002",
+      "goal": "태그가 든 목표 <script>alert(\"goal\")</script> & 'quote'",
+      "summary": "첫 계획을 의견대로 고쳤습니다.\n이 줄은 개요의 줄바꿈이 보이는지 확인합니다 <b>굵게 보이면 안 됨</b>.",
+      "display": "",
+      "phase": "PLAN",
+      "draft": false,
+      "origin": "",
+      "agent_note": "4번은 공유 폴더 권한부터 확인하는 편이 낫겠습니다 <i>기울임 아님</i>.",
+      "version": "3.0.0",
+      "decided": null,
+      "agent_waiting": false,
+      "tasks": [
+        {"task_id": 1, "title": "원본 데이터 내려받기", "status": "DONE",
+         "result_log": "data.csv 를 받았습니다.", "done_when": "data.csv 가 있다"},
+        {"task_id": 2, "title": "차트를 PNG 파일로 저장", "status": "PENDING",
+         "previous_title": "차트를 화면에 띄우기", "revision_note": "화면 말고 파일로 저장해 주세요"},
+        {"task_id": 3, "title": "<b>굵게</b> 보이면 안 되는 제목 <script>alert(1)</script>",
+         "status": "PENDING",
+         "failure_note": "권한이 없어 \"공유 폴더\"에 쓸 수 없었습니다",
+         "done_when": "<i>기울임</i> 기준 & 'quote'"},
+        {"task_id": 4, "title": "결과 공유", "status": "PENDING",
+         "options": [
+           {"title": "메일로 보내기"},
+           {"title": "공유 폴더에 올리기", "reason": "메일 용량 제한이 없음"}
+         ]}
+      ]
+    },
+    {
+      "id": "r3done",
+      "plan_id": "plan_20261022_0003",
+      "goal": "3분기 매출 보고서를 요약해 팀장에게 메일로 보낸다",
+      "summary": "네 태스크를 모두 마쳤습니다.",
+      "display": "",
+      "phase": "COMPLETION",
+      "draft": false,
+      "origin": "",
+      "agent_note": "",
+      "version": "@page",
+      "decided": null,
+      "agent_waiting": true,
+      "tasks": [
+        {"task_id": 1, "title": "3분기 매출 보고서 파일 찾기", "status": "DONE",
+         "result_log": "D:/reports/q3_sales.xlsx 를 찾았습니다.",
+         "done_when": "보고서 파일 경로가 확인되었다",
+         "checks": [{"path": "D:/reports/q3_sales.xlsx", "state": "old", "size": 48213,
+                     "source": "declared"}],
+         "duration_sec": 12},
+        {"task_id": 2, "title": "매출 표 추출", "status": "DONE",
+         "result_log": "CSV로 내보내 4분기 열까지 합산했습니다.",
+         "previous_result_log": "표의 절반만 옮겼습니다.",
+         "revision_note": "4분기 열도 포함해 주세요",
+         "topic": "집계 방식",
+         "options": [
+           {"title": "매출 표를 엑셀 서식 그대로 옮기기", "reason": "서식이 유지됨"},
+           {"title": "CSV로 내보내 스크립트로 합산", "reason": "빠르지만 서식이 사라짐"},
+           {"title": "표를 직접 다시 입력", "reason": "느림"}
+         ],
+         "chosen": 2,
+         "checks": [{"path": "D:/work/q3_table.csv", "state": "found", "size": 2048,
+                     "source": "declared"},
+                    {"path": "D:/work/tmp", "state": "folder", "source": "declared"}],
+         "duration_sec": 125},
+        {"task_id": 3, "title": "다섯 줄 요약 작성", "status": "DONE",
+         "result_log": "요약이 정확히 5줄이다",
+         "done_when": "요약이 정확히 5줄이다",
+         "echo": true,
+         "checks": [{"path": "D:/work/summary.txt", "state": "empty", "size": 0,
+                     "source": "declared"},
+                    {"path": "D:/work/summary_old.txt", "state": "missing",
+                     "source": "declared"}],
+         "claims_withdrawn": ["D:\\work\\draft.docx"],
+         "duration_sec": 3725},
+        {"task_id": 4, "title": "요약을 팀장에게 메일로 보내기", "status": "DONE",
+         "options": [{"title": "메일로 보내기"}, {"title": "메신저로 보내기"}],
+         "chosen": 0,
+         "checks": [{"path": "C:/Windows/system.ini", "state": "outside", "source": "declared"},
+                    {"path": "D:/work/mail.eml", "state": "unknown", "source": "declared"},
+                    {"path": "D:/work/sent.txt", "state": "found", "size": 1536000,
+                     "gone": true, "source": "declared"}],
+         "duration_sec": 3}
+      ]
+    },
+    {
+      "id": "r4halt",
+      "plan_id": "plan_20261022_0004",
+      "goal": "서버 오류 로그를 원인별로 분류한다",
+      "summary": "같은 단계를 세 번 반복해서 멈췄습니다. 계획 초안이 더 바뀌지 않습니다.",
+      "display": "",
+      "phase": "HALT",
+      "draft": true,
+      "origin": "",
+      "agent_note": "분류 기준을 먼저 정해 주시면 좋겠습니다.",
+      "version": "@page",
+      "decided": null,
+      "agent_waiting": true,
+      "tasks": [
+        {"task_id": 1, "title": "로그 파일 모으기", "status": "PENDING"},
+        {"task_id": 2, "title": "정규식으로 오류 원인 분류", "status": "PENDING",
+         "topic": "분류 방법",
+         "options": [
+           {"title": "정규식으로 오류 원인 분류", "reason": "빠름"},
+           {"title": "사람이 직접 분류", "reason": "정확함"}
+         ],
+         "done_when": "원인별 개수 표가 있다"}
+      ]
+    },
+    {
+      "id": "r5user",
+      "plan_id": "plan_20261022_0005",
+      "goal": "개발용 PC에 빌드 도구를 설치한다",
+      "summary": "실행 중인 계획을 멈춰 달라는 요청을 받았습니다.",
+      "display": "",
+      "phase": "HALT",
+      "draft": false,
+      "origin": "user",
+      "agent_note": "",
+      "version": "@page",
+      "decided": null,
+      "agent_waiting": false,
+      "tasks": [
+        {"task_id": 1, "title": "설치 파일 받기", "status": "DONE",
+         "result_log": "build-tools.zip 을 받았습니다."},
+        {"task_id": 2, "title": "압축 풀기", "status": "DONE"},
+        {"task_id": 3, "title": "설치 스크립트 실행", "status": "IN_PROGRESS"},
+        {"task_id": 4, "title": "버전 확인", "status": "PENDING"}
+      ]
+    },
+    {
+      "id": "r6legacy",
+      "plan_id": "plan_20261022_0006",
+      "goal": "이전 버전 서버가 보낸 요청",
+      "summary": "",
+      "display": "[승인 요청] plan_20261022_0006\n목표: 이전 버전 서버가 보낸 요청\n1. 첫 태스크\n2. 둘째 태스크 <b>태그</b>",
+      "phase": null,
+      "draft": false,
+      "origin": "",
+      "agent_note": "",
+      "version": null,
+      "decided": null,
+      "agent_waiting": false,
+      "tasks": [
+        {"task_id": 1, "title": "첫 태스크", "status": "PENDING"},
+        {"task_id": 2, "title": "둘째 태스크", "status": "PENDING"}
+      ]
+    },
+    {
+      "id": "r7decided",
+      "plan_id": "plan_20261022_0007",
+      "goal": "결정이 끝난 계획",
+      "summary": "",
+      "display": "",
+      "phase": "PLAN",
+      "draft": false,
+      "origin": "",
+      "agent_note": "",
+      "version": "@page",
+      "decided": "APPROVED",
+      "agent_waiting": true,
+      "tasks": [{"task_id": 1, "title": "한 가지 일", "status": "PENDING"}]
+    },
+    {
+      "id": "r8halted",
+      "plan_id": "plan_20261022_0008",
+      "goal": "계속 진행하기로 한 계획",
+      "summary": "같은 단계를 반복해서 멈췄습니다.",
+      "display": "",
+      "phase": "HALT",
+      "draft": false,
+      "origin": "",
+      "agent_note": "",
+      "version": "@page",
+      "decided": "REVISE",
+      "agent_waiting": true,
+      "tasks": [{"task_id": 1, "title": "한 가지 일", "status": "PENDING"}]
+    }
+  ],
+  "runs": [
+    {
+      "plan_id": "plan_20261022_0011",
+      "goal": "사내 위키 문서 세 개를 하나로 합친다",
+      "tasks": [
+        {"task_id": 1, "title": "문서 세 개 내려받기", "status": "DONE",
+         "result_log": "a.md, b.md, c.md 를 받았습니다.",
+         "done_when": "세 파일이 모두 있다",
+         "checks": [{"path": "D:/wiki/a.md", "state": "found", "size": 900,
+                     "source": "declared"}],
+         "duration_sec": 40},
+        {"task_id": 2, "title": "중복 문단 정리", "status": "DONE", "duration_sec": 65},
+        {"task_id": 3, "title": "목차 다시 만들기", "status": "IN_PROGRESS",
+         "done_when": "목차 항목이 10개 이상이다", "done_when_by": "user"},
+        {"task_id": 4, "title": "합친 문서 올리기", "status": "PENDING"},
+        {"task_id": 5, "title": "링크 검사", "status": "FAILED",
+         "result_log": "FAILED: 링크 검사 도구가 없습니다."}
+      ],
+      "rev": "run11-r3",
+      "version": "@page",
+      "updated_at": 1792630800,
+      "control": null
+    },
+    {
+      "plan_id": "plan_20261022_0012",
+      "goal": "주간 보고서를 만든다",
+      "tasks": [
+        {"task_id": 1, "title": "지난주 일정 모으기", "status": "DONE",
+         "result_log": "일정 12건을 모았습니다.", "duration_sec": 8},
+        {"task_id": 2, "title": "보고서 초안 쓰기", "status": "IN_PROGRESS"}
+      ],
+      "rev": "run12-r2",
+      "version": "@page",
+      "updated_at": 1792631100,
+      "control": {"id": "ctl12", "action": "PAUSE", "comment": ""}
+    },
+    {
+      "plan_id": "plan_20261022_0013",
+      "goal": "회의록을 정리한다",
+      "tasks": [
+        {"task_id": 1, "title": "녹취 받아쓰기", "status": "IN_PROGRESS"},
+        {"task_id": 2, "title": "요약 쓰기", "status": "PENDING"}
+      ],
+      "rev": "run13-r1",
+      "version": "3.1.0",
+      "updated_at": 1792631400,
+      "control": {"id": "ctl13", "action": "NOTE",
+                  "comment": "요약은 표로 정리해 주세요\n<b>태그</b>는 글자로 보여야 합니다"}
+    }
+  ]
+}

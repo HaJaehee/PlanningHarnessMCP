@@ -47,6 +47,8 @@ INCLUDE_FILES = [
 INCLUDE_DIRS = [
     ("planning", "*.py"),
     ("tests", "*.py"),
+    # The sample data tools/page_preview.py serves and the page tests render.
+    ("tests", "*.json"),
     ("tools", "*.py"),
     ("docs", "*.md"),
 ]

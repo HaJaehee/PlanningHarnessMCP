@@ -56,6 +56,11 @@ class TestWhatIsPackaged(unittest.TestCase):
                 self.assertIn(f"{folder}/{path.name}", files)
         self.assertIn("server.py", files)
 
+    def test_the_page_preview_ships_with_its_data(self):
+        """tools/ ships whole, and the preview tool reads the page fixtures."""
+        self.assertIn("tools/page_preview.py", packaged())
+        self.assertIn("tests/web/fixtures.json", packaged())
+
     def test_nothing_private_is_in_the_package(self):
         for path in packaged():
             parts = set(path.split("/"))
