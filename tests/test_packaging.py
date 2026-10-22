@@ -65,10 +65,12 @@ class TestWhatIsPackaged(unittest.TestCase):
         for name in page:
             self.assertIn(f"planning/web/{name}", files)
 
-    def test_the_page_preview_ships_with_its_data(self):
-        """tools/ ships whole, and the preview tool reads the page fixtures."""
-        self.assertIn("tools/page_preview.py", packaged())
-        self.assertIn("tests/web/fixtures.json", packaged())
+    def test_the_page_preview_and_the_page_tests_ship_with_their_data(self):
+        """tools/ and tests/ ship whole; the preview and the page tests read tests/web."""
+        files = packaged()
+        self.assertIn("tools/page_preview.py", files)
+        for path in (ROOT / "tests" / "web").iterdir():
+            self.assertIn(f"tests/web/{path.name}", files)
 
     def test_nothing_private_is_in_the_package(self):
         for path in packaged():

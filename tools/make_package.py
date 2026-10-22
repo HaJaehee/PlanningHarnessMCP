@@ -51,8 +51,11 @@ INCLUDE_DIRS = [
     ("planning/web", "*.css"),
     ("planning/web", "*.js"),
     ("tests", "*.py"),
-    # The sample data tools/page_preview.py serves and the page tests render.
+    # The sample data tools/page_preview.py serves and the page tests render, what the
+    # page draws from it, and the script that runs the page's code under node.
     ("tests", "*.json"),
+    ("tests", "*.txt"),
+    ("tests", "*.js"),
     ("tools", "*.py"),
     ("docs", "*.md"),
 ]

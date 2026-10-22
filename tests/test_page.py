@@ -5,6 +5,8 @@ response with all of it inline - no static routes. tests/web/fixtures.json holds
 entry for every kind of card the page draws, in the shape GET /api/pending answers;
 tools/page_preview.py serves it for a look in a browser. Both are only worth anything
 while that shape is the server's, so it is checked here against the real endpoint.
+tests/web/golden.txt is what the page draws from it (see TestEveryCardDrawsAsRecorded);
+what each card means to show is in test_page_cards.py.
 
     python -m unittest discover -s tests
 """
@@ -13,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import sys
 import tempfile
@@ -24,7 +27,9 @@ from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import pagejs  # noqa: E402
 from planning import approval  # noqa: E402
 from planning.approval import ApprovalServer, ApprovalStore, page_html  # noqa: E402
 
@@ -121,6 +126,28 @@ class TestTheFixtures(unittest.TestCase):
     def test_page_version_is_filled_in(self):
         versions = {r["version"] for r in page_preview.load_fixtures("9.9.9")["requests"]}
         self.assertEqual(versions, {"9.9.9", "3.0.0", None})
+
+
+@unittest.skipUnless(pagejs.NODE, "node is not installed")
+class TestEveryCardDrawsAsRecorded(unittest.TestCase):
+    """tests/web/golden.txt is the HTML every card of the fixtures draws to, a tag a line.
+
+    A change to how the page is built must leave it exactly as it is: that is what makes
+    rewriting the page's code safe. A change meant to alter what the page shows records
+    it again - PLANNING_MCP_RECORD_GOLDEN=1 - and the diff of golden.txt is then exactly
+    what the human will see differently."""
+
+    def test_every_card(self):
+        text = pagejs.golden_text(pagejs.drawn())
+        if os.environ.get("PLANNING_MCP_RECORD_GOLDEN"):
+            with open(pagejs.GOLDEN, "w", encoding="utf-8", newline="") as fh:
+                fh.write(text)
+        recorded = pagejs.golden_blocks(pagejs.GOLDEN.read_text(encoding="utf-8"))
+        drawn = pagejs.golden_blocks(text)
+        self.assertEqual(list(recorded), list(drawn))
+        for name, body in drawn.items():
+            with self.subTest(card=name):
+                self.assertEqual(recorded[name], body)
 
 
 if __name__ == "__main__":
