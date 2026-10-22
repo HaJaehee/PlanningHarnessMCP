@@ -13,12 +13,16 @@ check has always followed. One node process serves the whole test run.
 from __future__ import annotations
 
 import atexit
+import copy
+import functools
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import unittest
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterator
@@ -29,6 +33,8 @@ sys.path.insert(0, str(ROOT))
 from planning import approval  # noqa: E402
 
 NODE = shutil.which("node")
+# For a test that draws the page: skipped where there is no JavaScript engine to draw it.
+needs_node = unittest.skipUnless(NODE, "node is not installed")
 RUNNER = ROOT / "tests" / "web" / "runner.js"
 GOLDEN = ROOT / "tests" / "web" / "golden.txt"
 # What the page under test calls its own version. Fixtures marked "@page" get the same.
@@ -39,9 +45,25 @@ page_preview = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(page_preview)
 
 
+@functools.lru_cache(maxsize=1)
+def _fixtures() -> dict[str, Any]:
+    return page_preview.load_fixtures(PAGE_VERSION)
+
+
 def fixtures() -> dict[str, Any]:
     """tests/web/fixtures.json, as a server of PAGE_VERSION would send it."""
-    return page_preview.load_fixtures(PAGE_VERSION)
+    return copy.deepcopy(_fixtures())
+
+
+def source(name: str) -> str:
+    """One of the page's files as it is on disk. For what only a browser can run - what
+    happens on a click, a keystroke, a redraw - the tests check the code that does it."""
+    return (approval.WEB_DIR / name).read_text(encoding="utf-8")
+
+
+def scripts() -> str:
+    """All of the page's JavaScript, in load order."""
+    return "".join(source(name) for name in approval.PAGE_SCRIPTS)
 
 
 def by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -111,18 +133,38 @@ def card(item: dict[str, Any]) -> str:
 
 def hint(requests: list[dict[str, Any]], runs: list[dict[str, Any]]) -> str:
     """The notes under the cards, for this queue and these runs."""
-    page().set("RUNS", runs)
-    try:
-        return page().call("hintHtml", requests)
-    finally:
-        page().set("RUNS", [])
+    return page().call("hintHtml", requests, runs)
 
 
 def idle() -> str:
     return page().get("IDLE_HTML")
 
 
-def drawn() -> dict[str, str]:
+def card_of(key: str, **changes: Any) -> Node:
+    """A fixture's card, drawn and parsed; `changes` replace fields of the fixture."""
+    return parse(card(dict(by_id(fixtures())[key], **changes)))
+
+
+def rows_of(key: str, **changes: Any) -> list[Node]:
+    """The task rows of a fixture's card."""
+    return card_of(key, **changes).one(cls="tasks").elements()
+
+
+def action_of(button: Node) -> tuple[str, ...]:
+    """What a button does when clicked, as (what, *its arguments): ("decide", "r1plan",
+    "APPROVED"), ("control", plan_id, "CANCEL"), ("toggleComment",) and so on - however
+    the card wires it, so a test of what a button does outlives a change of wiring."""
+    handler = button.attrs.get("onclick")
+    if handler is None:
+        raise AssertionError(f"<{button.tag} class={button.classes}> does nothing on a click")
+    match = re.fullmatch(r"(\w+)\((.*)\)", handler)
+    if not match:
+        raise AssertionError(f"cannot read the click handler {handler!r}")
+    args = [a.strip() for a in match.group(2).split(",") if a.strip()]
+    return (match.group(1), *(a.strip("'") for a in args if a != "this"))
+
+
+def draw_all() -> dict[str, str]:
     """Everything the fixtures draw, by name, in a fixed order."""
     data = fixtures()
     out = {key: card(item) for key, item in by_id(data).items()}

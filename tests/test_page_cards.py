@@ -19,24 +19,73 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pagejs  # noqa: E402
-from pagejs import NODE, parse  # noqa: E402
+from pagejs import action_of, needs_node  # noqa: E402
 
 
-@unittest.skipUnless(NODE, "node is not installed")
+@needs_node
 class CardCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.items = pagejs.by_id(pagejs.fixtures())
 
     def card(self, key: str, **changes):
-        item = dict(self.items[key], **changes)
-        return parse(pagejs.card(item))
+        return pagejs.card_of(key, **changes)
 
     def rows(self, key: str, **changes):
-        return self.card(key, **changes).one(cls="tasks").elements()
+        return pagejs.rows_of(key, **changes)
 
     def call(self, fn: str, *args):
         return pagejs.page().call(fn, *args)
+
+
+class TestEveryButtonDoesWhatItSays(CardCase):
+    """What a button says and what it does are written in two places of a card; this ties
+    them together, whichever way the card wires its clicks."""
+
+    def actions(self, node):
+        return [(b.text(), action_of(b)) for b in node.find_all("button")]
+
+    def test_no_button_on_any_card_is_inert(self):
+        for key in self.items:
+            for button in self.card(key).find_all("button"):
+                action_of(button)
+
+    def test_a_request_decides_itself(self):
+        for key in ("r1plan", "r2plan", "r3done", "r6legacy"):
+            self.assertEqual(self.actions(self.card(key).one("div", "row")),
+                             [("승인", ("decide", key, "APPROVED")),
+                              ("수정 요청", ("decide", key, "REVISE")),
+                              ("거절", ("decide", key, "REJECTED"))])
+
+    def test_a_halt_card_continues_or_cancels(self):
+        self.assertEqual(self.actions(self.card("r4halt").one("div", "row")),
+                         [("이 초안으로 승인", ("decide", "r4halt", "APPROVED")),
+                          ("계속 진행", ("decide", "r4halt", "REVISE")),
+                          ("취소", ("decide", "r4halt", "REJECTED"))])
+        self.assertEqual(self.actions(self.card("r5user").one("div", "row")),
+                         [("계속 진행", ("decide", "r5user", "REVISE")),
+                          ("계획 취소", ("decide", "r5user", "REJECTED"))])
+
+    def test_a_task_row_opens_its_own_fields(self):
+        rows = self.rows("r1plan")
+        self.assertEqual(self.actions(rows[0]),
+                         [("완료 기준 추가", ("toggleCriterion", "r1plan", "1")),
+                          ("의견", ("toggleComment",)),
+                          ("수정", ("editCriterion", "r1plan", "1"))])
+        self.assertEqual(self.actions(rows[2]),
+                         [("의견", ("toggleComment",)), ("수정", ("editCriterion", "r1plan", "3"))])
+        self.assertEqual(self.actions(self.rows("r3done")[0]), [("다시 작업", ("toggleComment",))])
+
+    def test_a_running_plan_is_controlled_by_its_id(self):
+        pid = "plan_20261022_0011"
+        self.assertEqual(self.actions(self.card("run-" + pid)),
+                         [("의견 전달", ("control", pid, "NOTE")),
+                          ("멈춤", ("control", pid, "PAUSE")),
+                          ("계획 강제 취소", ("control", pid, "CANCEL"))])
+        pid = "plan_20261022_0012"
+        self.assertEqual(self.actions(self.card("run-" + pid)),
+                         [("요청 취소", ("control", pid, "CLEAR")),
+                          ("계획 강제 취소", ("control", pid, "CANCEL"))])
 
 
 class TestAPlanRequest(CardCase):

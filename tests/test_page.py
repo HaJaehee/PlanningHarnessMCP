@@ -67,7 +67,8 @@ class TestThePageFiles(unittest.TestCase):
 
     def test_a_file_that_would_end_its_tag_early_is_refused(self):
         real = approval._web_file
-        for name, bad in (("page.js", "const s='</SCRIPT>';\n"), ("page.css", "/* </style> */\n")):
+        for name, bad in ((approval.PAGE_SCRIPTS[-1], "const s='</SCRIPT>';\n"),
+                          ("page.css", "/* </style> */\n")):
             def fake(asked, name=name, bad=bad):
                 return bad if asked == name else real(asked)
             with mock.patch.object(approval, "_web_file", fake):
@@ -138,7 +139,7 @@ class TestEveryCardDrawsAsRecorded(unittest.TestCase):
     what the human will see differently."""
 
     def test_every_card(self):
-        text = pagejs.golden_text(pagejs.drawn())
+        text = pagejs.golden_text(pagejs.draw_all())
         if os.environ.get("PLANNING_MCP_RECORD_GOLDEN"):
             with open(pagejs.GOLDEN, "w", encoding="utf-8", newline="") as fh:
                 fh.write(text)

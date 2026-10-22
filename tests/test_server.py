@@ -24,13 +24,16 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # The server logs expected warnings (lock files, quarantined state, autoapprove) that would
 # otherwise drown the test output. The tests assert on responses and the audit log instead.
 logging.disable(logging.CRITICAL)
 
 from planning import approval  # noqa: E402
-from planning.approval import _PAGE, ApprovalServer, ApprovalStore, Verdict  # noqa: E402
+import pagejs  # noqa: E402
+from pagejs import needs_node  # noqa: E402
+from planning.approval import ApprovalServer, ApprovalStore, Verdict  # noqa: E402
 from planning.config import CALL_BUDGET_SEC, SDK_REQUEST_TIMEOUT_SEC, Config  # noqa: E402
 from planning.filelock import exclusive  # noqa: E402
 from planning.handlers import PlanningHandlers  # noqa: E402
@@ -3657,41 +3660,51 @@ class TestPerTaskPageSurface(HandlerTestCase):
 
 
 class TestCompletionPageTemplate(unittest.TestCase):
-    """The completion report's per-task review, asserted against the template itself.
+    """The completion report's per-task review, drawn by the page's own code.
 
-    No socket: the page is a constant, so these run wherever the suite runs, and they
-    cover the branch that decides whether finished work can be sent back one task at a
-    time at all. The click-through was verified in a real browser.
+    No socket: the cards are drawn under node (tests/pagejs.py), and they cover the
+    branch that decides whether finished work can be sent back one task at a time at
+    all. The click-through was verified in a real browser.
     """
 
+    @needs_node
     def test_a_completion_report_is_reviewed_task_by_task(self):
-        self.assertIn("d.phase==='PLAN'||d.phase==='COMPLETION'", _PAGE)
+        rows = pagejs.rows_of("r3done")
+        self.assertEqual([r.one("textarea", "tc").attrs["data-tid"] for r in rows],
+                         ["1", "2", "3", "4"])
 
     def test_the_phase_is_kept_so_the_two_can_be_labelled_differently(self):
-        self.assertIn("const PHASE={}", _PAGE)
-        self.assertIn("PHASE[d.id]=d.phase", _PAGE)
+        self.assertIn("phase:{}", pagejs.source("state.js"))
+        self.assertIn("state.phase[d.id]=d.phase", pagejs.source("form.js"))
 
     def test_one_builder_labels_the_button_everywhere(self):
         """First render and every relabel must agree, or the button lies about scope."""
-        self.assertIn("function revLabel(", _PAGE)
-        self.assertIn("revLabel(PHASE[id],ids,whole,Object.keys(criteriaOf(id)).length)", _PAGE)
+        self.assertIn("function revLabel(", pagejs.source("labels.js"))
+        self.assertIn("revLabel(state.phase[id],ids,whole,Object.keys(criteriaOf(id)).length)",
+                      pagejs.source("form.js"))
 
+    @needs_node
     def test_the_button_asks_for_rework_not_for_a_rewrite(self):
-        self.assertIn("다시 작업 요청", _PAGE)
+        self.assertEqual(pagejs.page().call("revLabel", "COMPLETION", ["2"], False, 0),
+                         "다시 작업 요청\n2번만")
 
+    @needs_node
     def test_the_evidence_is_what_the_human_judges(self):
-        self.assertIn("t.result_log", _PAGE)
-        self.assertIn("증거 기록 없음", _PAGE)
+        rows = pagejs.rows_of("r3done")
+        self.assertEqual(rows[0].one("div", "ev").text(), "\u2192 D:/reports/q3_sales.xlsx 를 찾았습니다.")
+        self.assertEqual(rows[3].one("div", "ev").text(), "(증거 기록 없음)")
 
+    @needs_node
     def test_a_row_sent_back_shows_the_request_and_the_old_output(self):
         """Both surfaces must agree. The request alone shows what was asked; only the
         previous output shows whether the new one answers it."""
-        self.assertIn("요청하신 내용", _PAGE)
-        self.assertIn("t.previous_result_log", _PAGE)
-        self.assertIn("이전 결과", _PAGE)
+        row = pagejs.rows_of("r3done")[1]
+        self.assertIn("요청하신 내용", row.one("div", "note").text())
+        self.assertEqual(row.one("div", "ev old").text(), "이전 결과: 표의 절반만 옮겼습니다.")
 
+    @needs_node
     def test_the_whole_plan_escape_hatch_survives(self):
-        self.assertIn("계획 자체를 다시 세우기", _PAGE)
+        self.assertIn("계획 자체를 다시 세우기", pagejs.card_of("r3done").one("label", "scope").text())
 
 
 class TestDraftSurvivalTemplate(unittest.TestCase):
@@ -3700,45 +3713,51 @@ class TestDraftSurvivalTemplate(unittest.TestCase):
     A card is redrawn whenever what it shows changes (until 3.1.0 every card was, on
     any change - a second session asking for approval was enough), and a reload or a
     second tab starts from nothing. Keeping drafts in the DOM meant losing them, so they
-    live in localStorage instead. Asserted against the template; the click-through,
-    including two tabs and a mid-typing rebuild, was verified in a real browser.
+    live in localStorage instead. Asserted against drafts.js and form.js; the
+    click-through, including two tabs and a mid-typing rebuild, was verified in a real
+    browser.
     """
 
     def test_drafts_are_stored_outside_the_dom(self):
-        self.assertIn("planning-mcp:draft:", _PAGE)
-        self.assertIn("localStorage.setItem", _PAGE)
-        self.assertIn("function restore(", _PAGE)
+        drafts = pagejs.source("drafts.js")
+        self.assertIn("planning-mcp:draft:", drafts)
+        self.assertIn("localStorage.setItem", drafts)
+        self.assertIn("function restore(", pagejs.source("form.js"))
 
     def test_an_emptied_box_stays_empty(self):
         """Removing the key instead of storing '' would resurrect the deleted text."""
-        self.assertIn("localStorage.setItem(dkey(req,tid),value)", _PAGE)
+        self.assertIn("localStorage.setItem(dkey(req,tid),value)", pagejs.source("drafts.js"))
 
     def test_every_tab_shows_the_same_draft(self):
-        self.assertIn("window.addEventListener('storage',onStorage)", _PAGE)
-        self.assertIn("function onStorage(", _PAGE)
+        self.assertIn("window.addEventListener('storage',onStorage)", pagejs.source("app.js"))
+        self.assertIn("function onStorage(", pagejs.source("form.js"))
 
     def test_listeners_are_bound_to_a_node_that_outlives_a_rebuild(self):
-        self.assertIn("document.getElementById('root').addEventListener('input',onInput)", _PAGE)
-        self.assertNotIn("oninput=", _PAGE)
+        self.assertIn("document.getElementById('root').addEventListener('input',onInput)",
+                      pagejs.source("app.js"))
+        self.assertNotIn("oninput=", pagejs.scripts())
 
     def test_drafts_are_cleared_once_submitted_and_pruned_when_stale(self):
-        self.assertIn("dclear(id)", _PAGE)
-        self.assertIn("function dprune(", _PAGE)
+        self.assertIn("dclear(id)", pagejs.source("app.js"))
+        self.assertIn("function dprune(", pagejs.source("drafts.js"))
 
+    @needs_node
     def test_the_liveness_chip_replaces_a_countdown(self):
         """A countdown would measure the tool call, not the request - and the request
         outlives the call, so the number would be a lie that also creates false rush."""
-        self.assertIn("d.agent_waiting", _PAGE)
-        self.assertIn("에이전트가 대기 중입니다", _PAGE)
-        self.assertIn("에이전트가 대기를 멈췄습니다", _PAGE)
+        self.assertIn("에이전트가 대기 중입니다", pagejs.card_of("r1plan").one("div", "chip").text())
+        self.assertIn("에이전트가 대기를 멈췄습니다", pagejs.card_of("r2plan").one("div", "chip").text())
         # No per-request timer, and no wording that implies a deadline.
+        drawn = "".join(pagejs.draw_all().values()) + pagejs.scripts()
         for banned in ("남은 시간", "초 남음", "초 후 만료", "deadline"):
-            self.assertNotIn(banned, _PAGE)
+            self.assertNotIn(banned, drawn)
         # The only recurring timers are the 1.5s poll and the 700ms title flash.
-        self.assertEqual(_PAGE.count("setInterval("), 2)
+        self.assertEqual(pagejs.scripts().count("setInterval("), 2)
 
+    @needs_node
     def test_the_page_still_promises_the_request_will_wait(self):
-        self.assertIn("요청은 응답하실 때까지 사라지지 않으니", _PAGE)
+        self.assertIn("요청은 응답하실 때까지 사라지지 않으니",
+                      pagejs.hint(pagejs.fixtures()["requests"], []))
 
 
 class TestPlanStateEdges(HandlerTestCase):

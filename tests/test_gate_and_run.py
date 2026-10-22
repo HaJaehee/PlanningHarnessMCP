@@ -32,8 +32,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import pagejs  # noqa: E402
+from pagejs import action_of, needs_node  # noqa: E402
 from planning.approval import (  # noqa: E402
-    _PAGE,
     ApprovalServer,
     ApprovalStore,
     RunBoard,
@@ -1208,55 +1209,90 @@ class TestForceCancel(GateCase):
 
 
 class TestThePage(unittest.TestCase):
+    @needs_node
     def test_a_running_plan_has_a_card_with_both_controls(self):
-        for piece in ("실행 중 · ", "function runCard(r)", "의견 전달", ">멈춤</button>",
-                      "요청 취소", "control(", "/api/control", "에이전트의 마지막 보고"):
-            self.assertIn(piece, _PAGE, piece)
+        pid = "plan_20261022_0011"
+        card = pagejs.card_of("run-" + pid)
+        self.assertEqual(card.one("h1").text(), "실행 중 · " + pid)
+        self.assertEqual([action_of(b) for b in card.one("div", "row").find_all("button")],
+                         [("control", pid, "NOTE"), ("control", pid, "PAUSE")])
+        self.assertIn("에이전트의 마지막 보고", card.one("p", "seen").text())
+        asked = pagejs.card_of("run-plan_20261022_0012").one("div", "pendingctl")
+        self.assertEqual(asked.find_all("button")[0].text(), "요청 취소")
+        self.assertIn("fetch('/api/control'", pagejs.source("app.js"))
 
+    @needs_node
     def test_it_says_when_a_control_takes_effect_and_what_it_cannot_do(self):
-        self.assertIn("이미 실행 중인 '+\n  '도구는 중단되지 않습니다", _PAGE)
-        self.assertIn("다음 태스크를 시작하지 '+\n     '않고 멈춥니다", _PAGE)
+        runs = pagejs.fixtures()["runs"]
+        self.assertIn("이미 실행 중인 도구는 중단되지 않습니다", pagejs.hint([], runs))
+        asked = pagejs.card_of("run-plan_20261022_0012").one("div", "pendingctl").text()
+        self.assertIn("다음 태스크를 시작하지 않고 멈춥니다", asked)
 
     def test_a_run_never_raises_the_alarm(self):
-        self.assertIn("if(undecided.length)alertOn();else alertOff();", _PAGE)
+        app = pagejs.source("app.js")
+        self.assertIn("if(undecided.length)alertOn();else alertOff();", app)
         # Runs are counted as something to show, never as something waiting.
-        self.assertIn("const undecided=list.filter(x=>!x.decided);", _PAGE)
-        self.assertIn(".concat(RUNS.map(r=>({key:runId(r)", _PAGE)
+        self.assertIn("const undecided=list.filter(x=>!x.decided);", app)
+        self.assertIn(".concat(state.runs.map(r=>({key:runId(r)", pagejs.source("board.js"))
 
+    @needs_node
     def test_everything_shown_on_it_is_escaped(self):
-        for piece in ("esc(r.goal)", "esc(c.comment)", "esc(t.title)", "esc(ev)",
-                      "pid=esc(r.plan_id)"):
-            self.assertIn(piece, _PAGE, piece)
+        card = pagejs.card_of(
+            "run-plan_20261022_0013", plan_id="plan_<i>x</i>", goal="<b>목표</b>",
+            control={"id": "c", "action": "NOTE", "comment": "<script>x</script>"},
+            tasks=[{"task_id": 1, "title": "<b>t</b>", "status": "DONE",
+                    "result_log": "<i>e</i>"}])
+        for tag in ("b", "i", "script"):
+            self.assertFalse(card.has(tag), tag)
+        self.assertEqual(card.one("h1").text(), "실행 중 · plan_<i>x</i>")
+        self.assertIn("<b>목표</b>", card.one("p", "goal").text())
+        self.assertEqual(card.one("span", "q").text(), "<script>x</script>")
+        self.assertEqual(card.one("div", "ev").text(), "→ <i>e</i>")
+        self.assertEqual(action_of(card.find_all("button")[0]),
+                         ("control", "plan_<i>x</i>", "CLEAR"))
 
     def test_what_is_typed_survives_a_redraw_and_a_withdrawal(self):
-        self.assertIn("dprune(list.map(x=>x.id).concat(RUNS.map(runId)))", _PAGE)
-        self.assertIn("box.value=dget(runId(r),'_all')", _PAGE)
-        self.assertIn("if(action==='CLEAR'){if(back)dset(id,'_all',back);}else dclear(id);", _PAGE)
-        self.assertIn("refocus(focus);", _PAGE)
+        app = pagejs.source("app.js")
+        self.assertIn("dprune(list.map(x=>x.id).concat(state.runs.map(runId)))", app)
+        self.assertIn("if(action==='CLEAR'){if(back)dset(id,'_all',back);}else dclear(id);", app)
+        self.assertIn("box.value=dget(runId(r),'_all')", pagejs.source("form.js"))
+        self.assertIn("refocus(focus);", pagejs.source("board.js"))
 
+    @needs_node
     def test_a_plan_the_human_stopped_is_not_called_a_loop(self):
-        self.assertIn("user=d.origin==='user'", _PAGE)
-        self.assertIn("(user?'실행 멈춤':'반복 감지')", _PAGE)
-        self.assertIn("(user?'계획 취소':'취소')", _PAGE)
+        stopped, looped = pagejs.card_of("r5user"), pagejs.card_of("r4halt")
+        self.assertTrue(stopped.one("h1").text().startswith("실행 멈춤 · "))
+        self.assertTrue(looped.one("h1").text().startswith("반복 감지 · "))
+        self.assertEqual(stopped.one("button", "no").text(), "계획 취소")
+        self.assertEqual(looped.one("button", "no").text(), "취소")
 
+    @needs_node
     def test_a_run_can_be_cancelled_with_or_without_a_stop_waiting(self):
         """3.2.0: on the card as it is, and beside a stop the agent never collected."""
-        self.assertIn(">계획 강제 취소</button>", _PAGE)
-        self.assertIn("\\',\\'CANCEL\\')", _PAGE)
-        self.assertEqual(_PAGE.count("+killBtn(pid)+"), 2)
-        self.assertIn("'\\',\\'CLEAR\\')\">요청 취소</button>'+killBtn(pid)", _PAGE)
+        for key in ("run-plan_20261022_0011", "run-plan_20261022_0012"):
+            kill = pagejs.card_of(key).one("button", "kill")
+            self.assertEqual(kill.text(), "계획 강제 취소")
+            self.assertEqual(action_of(kill), ("control", key[4:], "CANCEL"))
+        asked = pagejs.card_of("run-plan_20261022_0012").one("div", "pendingctl")
+        self.assertEqual([action_of(b)[2] for b in asked.find_all("button")], ["CLEAR", "CANCEL"])
         # Irreversible, so it is asked once more before it is sent.
-        self.assertIn("if(action==='CANCEL'&&!confirm(KILL_ASK))return;", _PAGE)
+        self.assertIn("if(action==='CANCEL'&&!confirm(KILL_ASK))return;", pagejs.source("app.js"))
 
+    @needs_node
     def test_every_task_row_ends_on_its_state_label(self):
         """The title fills the row, so the label is at the right edge whether the title
         wraps or not; on a run card the time taken comes before it."""
-        self.assertIn(".tt>span:not(.tn):not(.badge):not(.took){flex:1 1 auto;", _PAGE)
-        self.assertIn("(took?'<span class=\"took\">소요 '+took+'</span>':'')+runBadge(t)+'</div>'",
-                      _PAGE)
+        self.assertIn(".tt>span:not(.tn):not(.badge):not(.took){flex:1 1 auto;",
+                      pagejs.source("page.css"))
+        for row in pagejs.rows_of("run-plan_20261022_0011"):
+            title = row.one("div", "tt").elements()
+            self.assertIn("badge", title[-1].classes)
+            took = row.find_all("span", "took")
+            if took:
+                self.assertIs(title[-2], took[0])
         # One way to draw the label, so a halt card says 완료 rather than DONE.
-        self.assertIn("(t.status&&t.status!=='PENDING'?runBadge(t):'')", _PAGE)
-        self.assertNotIn("'<span class=\"badge\">'+esc(t.status)", _PAGE)
+        self.assertEqual([b.text() for b in pagejs.card_of("r5user").find_all(cls="badge")],
+                         ["완료", "완료", "진행중"])
 
 
 class TestOnlyTheCardThatChangedIsRedrawn(unittest.TestCase):
@@ -1265,65 +1301,73 @@ class TestOnlyTheCardThatChangedIsRedrawn(unittest.TestCase):
     With run cards the page changes every time any agent reports a task. Rebuilding
     every card on each change closed a comment box the human had just opened on a
     different card, dropped their selection, and moved the focus out and back. Asserted
-    against the template; the behaviour itself - two plans on one page, one reporting
-    tasks while the other's request is being typed into - was verified in a real browser.
+    against board.js, which does the drawing; the behaviour itself - two plans on one
+    page, one reporting tasks while the other's request is being typed into - was
+    verified in a real browser.
     """
+
+    def setUp(self) -> None:
+        self.board = pagejs.source("board.js")
 
     def test_each_request_and_each_run_is_its_own_card(self):
         for piece in ("function draw(list)", "const NODES={};", "const SHOWN={};",
                       "node.className='item';", "key:reqKey(d),sig:reqSig(d)",
                       "key:runId(r),sig:runSig(r)"):
-            self.assertIn(piece, _PAGE, piece)
+            self.assertIn(piece, self.board, piece)
 
     def test_a_card_whose_signature_is_unchanged_is_left_alone(self):
-        self.assertIn("if(SHOWN[it.key]===it.sig)return;", _PAGE)
+        self.assertIn("if(SHOWN[it.key]===it.sig)return;", self.board)
         # One place redraws a card, and one resets the page - to the idle text.
-        self.assertEqual(_PAGE.count("node.innerHTML=it.html();"), 1)
-        self.assertEqual(_PAGE.count("root.innerHTML="), 1)
-        self.assertIn("root.innerHTML=IDLE_HTML;", _PAGE)
-        self.assertNotIn(".join('<hr", _PAGE)
+        everything = pagejs.scripts()
+        self.assertEqual(everything.count("node.innerHTML=it.html();"), 1)
+        self.assertEqual(everything.count("root.innerHTML="), 1)
+        self.assertIn("root.innerHTML=IDLE_HTML;", self.board)
+        self.assertNotIn(".join('<hr", everything)
 
     def test_the_signature_is_what_can_change_under_one_key(self):
         self.assertIn("return (d.decided||'')+':'+(d.agent_waiting?1:0)+':'+"
-                      "(d.agent_note||'').length;", _PAGE)
+                      "(d.agent_note||'').length;", self.board)
         self.assertIn("function runSig(r){return (r.rev||'')+':'+(r.control?r.control.id:'');}",
-                      _PAGE)
+                      self.board)
 
     def test_a_card_already_in_place_is_not_moved(self):
         """Moving a node takes the focus out of it just as redrawing would."""
-        self.assertIn("if(node!==cursor)root.insertBefore(node,cursor||hint);", _PAGE)
+        self.assertIn("if(node!==cursor)root.insertBefore(node,cursor||hint);", self.board)
 
     def test_what_was_typed_is_put_back_only_into_the_card_that_was_drawn(self):
-        self.assertIn("after:()=>restore(d)", _PAGE)
-        self.assertIn("after:()=>restoreRun(r)", _PAGE)
-        self.assertIn("function restore(d){", _PAGE)
+        self.assertIn("after:()=>restore(d)", self.board)
+        self.assertIn("after:()=>restoreRun(r)", self.board)
+        self.assertIn("function restore(d){", pagejs.source("form.js"))
         self.assertIn("const focus=node.contains(document.activeElement)?focusKey():null;",
-                      _PAGE)
+                      self.board)
 
     def test_a_decision_switches_off_and_redraws_its_own_card_only(self):
-        self.assertIn("lock('q-'+id);", _PAGE)
-        self.assertIn("busy=false;stale('q-'+id);poll();", _PAGE)
-        self.assertIn("busy=false;stale(id);poll();", _PAGE)
-        self.assertNotIn("#root button", _PAGE)
+        app = pagejs.source("app.js")
+        self.assertIn("lock('q-'+id);", app)
+        self.assertIn("state.busy=false;stale('q-'+id);poll();", app)
+        self.assertIn("state.busy=false;stale(id);poll();", app)
+        self.assertNotIn("#root button", pagejs.scripts())
 
     def test_the_line_between_cards_and_the_notices_are_not_cards(self):
         """The rule belongs to the second of two cards; the error line and the hint are
         their own elements, so showing or changing them redraws nothing."""
-        self.assertIn(".item+.item{border-top:1px solid #ccd0d5;", _PAGE)
-        self.assertIn("if(err.textContent!==lastError)err.textContent=lastError;", _PAGE)
-        self.assertIn("if(hint.getAttribute('data-src')!==text)", _PAGE)
+        self.assertIn(".item+.item{border-top:1px solid #ccd0d5;", pagejs.source("page.css"))
+        self.assertIn("if(err.textContent!==state.lastError)err.textContent=state.lastError;",
+                      self.board)
+        self.assertIn("if(hint.getAttribute('data-src')!==text)", self.board)
 
     def test_a_poll_that_changes_nothing_touches_nothing(self):
-        self.assertIn("if(!draw(list))return;", _PAGE)
+        self.assertIn("if(!draw(list))return;", pagejs.source("app.js"))
 
+    @needs_node
     def test_the_idle_text_is_found_without_taking_a_chip_with_it(self):
         """The chip of an agent that stopped waiting has the class "chip idle". Looking
         for the idle text with root.querySelector('.idle') found that chip instead and
         removed it - one chip per poll, so within seconds no card said the agent had
         stopped waiting. Found by comparing the page against tests/web/fixtures.json."""
-        self.assertEqual(_PAGE.count("root.querySelector(':scope>.idle')"), 2)
-        self.assertNotIn("root.querySelector('.idle')", _PAGE)
-        self.assertIn("'<div class=\"chip idle\">", _PAGE)
+        self.assertEqual(self.board.count("root.querySelector(':scope>.idle')"), 2)
+        self.assertNotIn("root.querySelector('.idle')", pagejs.scripts())
+        self.assertEqual(pagejs.card_of("r2plan").one("div", "chip").classes, ["chip", "idle"])
 
 
 class TestThePageScriptParses(unittest.TestCase):

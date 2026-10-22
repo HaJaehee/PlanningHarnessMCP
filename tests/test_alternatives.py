@@ -28,7 +28,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from planning.approval import _PAGE, PHASE_COMPLETION, PHASE_HALT, PHASE_PLAN, ApprovalStore  # noqa: E402
+import pagejs  # noqa: E402
+from pagejs import action_of, needs_node  # noqa: E402
+from planning.approval import PHASE_COMPLETION, PHASE_HALT, PHASE_PLAN, ApprovalStore  # noqa: E402
 from planning.choices import (  # noqa: E402
     build_options,
     letter,
@@ -211,11 +213,15 @@ class TestTopic(AltCase):
         task.clear_choice()
         self.assertIsNone(task.choice_topic)
 
+    @needs_node
     def test_the_page_template(self):
-        self.assertIn("function choiceHeading(t)", _PAGE)
-        self.assertIn("||'진행 방법')", _PAGE)
-        self.assertIn("'가지 중 선택</span>'", _PAGE)
-        self.assertNotIn("다음 중 하나를 고르십시오", _PAGE)
+        """The page heads a choice with its topic, or a neutral phrase when there is none,
+        and how many options there are - not an instruction to pick one."""
+        self.assertEqual(pagejs.rows_of("r1plan")[1].one("span", "pick").text(), "집계 방식")
+        heading = pagejs.rows_of("r2plan")[3]
+        self.assertEqual(heading.one("span", "pick").text(), "진행 방법")
+        self.assertEqual(heading.one("span", "cnt").text(), " · 2가지 중 선택")
+        self.assertNotIn("다음 중 하나를 고르십시오", "".join(pagejs.draw_all().values()))
 
     def test_the_schema_offers_it(self):
         props = {t["name"]: t for t in build_tool_definitions()}["plan_and_think"][
@@ -705,45 +711,76 @@ class TestSchema(unittest.TestCase):
 
 
 class TestPageTemplate(unittest.TestCase):
-    """The choice UI, asserted against the template (no socket); clicked through in a
-    real browser separately."""
+    """The choice UI. What it shows is drawn by the page's own code (tests/pagejs.py);
+    what a click does is in form.js, and was clicked through in a real browser."""
 
+    @needs_node
     def test_options_render_with_the_recommendation_marked(self):
-        self.assertIn("function optionsHtml(d,t,allowOther)", _PAGE)
-        self.assertIn("<span class=\"rec\">권장</span>", _PAGE)
-        self.assertIn("(i===0?' checked':'')", _PAGE)
+        row = pagejs.rows_of("r1plan")[1]
+        radios = row.find_all("input", type="radio")
+        self.assertEqual(["checked" in r.attrs for r in radios], [True, False, False, False])
+        self.assertEqual([s.text() for s in row.find_all("span", "rec")], ["권장"])
+        self.assertTrue(row.find_all("label", "opt")[0].has("span", "rec"))
 
+    @needs_node
     def test_other_opens_the_comment_and_blocks_approval(self):
-        self.assertIn("기타 (직접 입력)", _PAGE)
-        self.assertIn("if(el.value==='other')openComment(req,tid,true);", _PAGE)
-        self.assertIn("b.disabled=anyOther(id);", _PAGE)
+        other = pagejs.rows_of("r1plan")[1].find_all("label", "opt")[-1]
+        self.assertEqual(other.one("input").attrs["value"], "other")
+        self.assertIn("기타 (직접 입력)", other.text())
+        form = pagejs.source("form.js")
+        self.assertIn("if(el.value==='other')openComment(req,tid,true);", form)
+        self.assertIn("b.disabled=anyOther(id);", form)
 
+    @needs_node
     def test_the_approve_button_states_its_consequence(self):
-        self.assertIn("function okLabel(phase,id)", _PAGE)
-        self.assertIn("'번 '+LETTERS[changed[0][1]]+'안'", _PAGE)
-        self.assertIn("id=\"ok-'+esc(d.id)+'\"", _PAGE)
+        def label(phase="PLAN", other=False, changed=(), crit=0):
+            return pagejs.page().call("okLabel", phase, {"other": other, "changed": list(changed),
+                                                         "crit": crit})
+        self.assertEqual(label(), "승인")
+        self.assertEqual(label(changed=[["2", 1]]), "승인\n2번 B안")
+        self.assertEqual(label(changed=[["2", 1], ["4", 2]]), "승인\n선택 2건 반영")
+        self.assertEqual(label(other=True, changed=[["2", 1]]), "승인\n기타는 수정 요청으로")
+        self.assertEqual(label("HALT"), "이 초안으로 승인")
+        self.assertEqual(label("HALT", changed=[["2", 1]]), "이 초안으로 승인\n2번 B안")
+        # And it is told what is picked: every choice moved off the recommendation.
+        self.assertIn("changed:Object.entries(choicesOf(id)).filter(([k,v])=>v!==0)",
+                      pagejs.source("form.js"))
+        self.assertEqual(action_of(pagejs.card_of("r1plan").one("button", id="ok-r1plan")),
+                         ("decide", "r1plan", "APPROVED"))
 
+    @needs_node
     def test_the_halt_card_offers_the_choice_without_other(self):
-        self.assertIn("(d.draft?optionsHtml(d,t,false):'')", _PAGE)
+        values = [r.attrs["value"] for r in pagejs.card_of("r4halt").find_all("input", type="radio")]
+        self.assertEqual(values, ["0", "1"])
+        # No draft, nothing to approve as it stands: no options either.
+        self.assertFalse(pagejs.card_of("r4halt", draft=False).has("input", type="radio"))
 
     def test_picks_travel_with_the_decision(self):
-        self.assertIn("choices:choicesOf(id)", _PAGE)
+        self.assertIn("choices:choicesOf(id)", pagejs.source("app.js"))
 
     def test_picks_survive_a_rebuild_and_mirror_across_tabs(self):
-        self.assertIn("dset(req,'ch'+tid,el.value);", _PAGE)
-        self.assertIn("if(tid.indexOf('ch')===0){", _PAGE)
-        self.assertIn("dget(d.id,'ch'+r.getAttribute('data-ctid'))", _PAGE)
+        form = pagejs.source("form.js")
+        self.assertIn("dset(req,'ch'+tid,el.value);", form)
+        self.assertIn("if(tid.indexOf('ch')===0){", form)
+        self.assertIn("dget(d.id,'ch'+r.getAttribute('data-ctid'))", form)
 
     def test_a_refused_decision_keeps_the_drafts_and_says_so(self):
-        self.assertIn("if(j&&j.ok){dclear(id);lastError='';}", _PAGE)
-        self.assertIn("결정을 기록하지 못했습니다", _PAGE)
+        app = pagejs.source("app.js")
+        self.assertIn("if(j&&j.ok){dclear(id);state.lastError='';}", app)
+        self.assertIn("결정을 기록하지 못했습니다", app)
 
+    @needs_node
     def test_the_completion_report_shows_the_pick(self):
-        self.assertIn("'안 선택'", _PAGE)
+        rows = pagejs.rows_of("r3done")
+        self.assertEqual(rows[1].one(cls="badge").text(), "C안 선택")
+        self.assertEqual(rows[3].one(cls="badge").text(), "권장안")
 
+    @needs_node
     def test_radios_are_named_by_their_option(self):
         """Found in the browser check: without it the accessibility tree read "0" / "1"."""
-        self.assertIn("' aria-label=\"'+LETTERS[i]+'. '+esc(o.title)", _PAGE)
+        radios = pagejs.rows_of("r1plan")[1].find_all("input", type="radio")
+        self.assertEqual(radios[0].attrs["aria-label"], "A. 매출 표를 엑셀 서식 그대로 옮기기 (권장)")
+        self.assertEqual(radios[1].attrs["aria-label"], "B. CSV로 내보내 스크립트로 합산")
 
 
 class TestPersistence(unittest.TestCase):

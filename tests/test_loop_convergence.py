@@ -25,7 +25,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from planning.approval import _PAGE, PHASE_HALT, ApprovalStore  # noqa: E402
+import pagejs  # noqa: E402
+from pagejs import action_of, needs_node  # noqa: E402
+from planning.approval import PHASE_HALT, ApprovalStore  # noqa: E402
 from planning.config import Config  # noqa: E402
 from planning.handlers import PlanningHandlers, reconsider_markers  # noqa: E402
 from planning.loopguard import LoopGuard, call_signature  # noqa: E402
@@ -879,25 +881,36 @@ class TestLoopReport(LoopCase):
 
 
 class TestHaltPageTemplate(unittest.TestCase):
-    """The halt card, asserted against the template (no socket)."""
+    """The halt card, drawn by the page's own code (tests/pagejs.py) - no socket."""
 
+    @needs_node
     def test_the_halt_card_exists_and_is_routed(self):
-        self.assertIn("function haltCard(d)", _PAGE)
-        self.assertIn("if(d.phase==='HALT')return haltCard(d);", _PAGE)
+        card = pagejs.card_of("r4halt")
+        self.assertEqual(card.one("h1").text(), "반복 감지 · plan_20261022_0004")
+        self.assertEqual(card.one("div", "summary warn").one("span", "lbl").text(),
+                         "에이전트가 멈춘 이유")
 
+    @needs_node
     def test_the_draft_decides_the_buttons(self):
-        self.assertIn("if(d.draft)", _PAGE)
-        self.assertIn("이 초안으로 승인", _PAGE)
-        self.assertIn("haltLabel(false)", _PAGE)
+        def buttons(**changes):
+            row = pagejs.card_of("r4halt", **changes).one("div", "row")
+            return [(b.text(), action_of(b)[2]) for b in row.find_all("button")]
+        self.assertEqual(buttons(), [("이 초안으로 승인", "APPROVED"), ("계속 진행", "REVISE"),
+                                     ("취소", "REJECTED")])
+        self.assertEqual(buttons(draft=False), [("계속 진행", "REVISE"), ("취소", "REJECTED")])
 
+    @needs_node
     def test_the_continue_button_says_whether_it_carries_a_direction(self):
-        self.assertIn("의견 전달 후 계속", _PAGE)
-        self.assertIn("if(PHASE[id]==='HALT')", _PAGE)
+        self.assertEqual(pagejs.page().call("haltLabel", True), "의견 전달 후 계속")
+        self.assertEqual(pagejs.page().call("haltLabel", False), "계속 진행")
+        self.assertIn("if(state.phase[id]==='HALT')", pagejs.source("form.js"))
 
+    @needs_node
     def test_the_agent_note_is_shown_and_rerenders(self):
-        self.assertIn("에이전트 추가 의견", _PAGE)
+        note = pagejs.card_of("r2plan").one("div", "summary agent")
+        self.assertEqual(note.one("span", "lbl").text(), "에이전트 추가 의견")
         # Part of the card's signature, so a new note redraws that card.
-        self.assertIn("(d.agent_note||'').length", _PAGE)
+        self.assertIn("(d.agent_note||'').length", pagejs.source("board.js"))
 
 
 class TestHaltAtTheStore(LoopCase):

@@ -724,8 +724,20 @@ class RunBoard:
 # talking to its old endpoints would be a page that half works. Held in memory, the page
 # and the endpoints always come from the same code.
 WEB_DIR = Path(__file__).with_name("web")
-# In load order: a script may use what an earlier one defined.
-PAGE_SCRIPTS = ("page.js",)
+# In load order. Every script but the last only defines things; app.js starts the page,
+# so it comes last. The views and labels (format, html, labels, views) touch nothing on
+# the page, which is what lets tests/pagejs.py draw the cards under node.
+PAGE_SCRIPTS = (
+    "state.js",   # what the page keeps between polls
+    "html.js",    # escaping
+    "format.js",  # sizes, durations, times, option letters
+    "labels.js",  # what the decision buttons say
+    "views.js",   # the cards, as HTML
+    "drafts.js",  # what is typed, kept in localStorage
+    "form.js",    # comment boxes, choices, criteria, and the labels that follow them
+    "board.js",   # putting cards on the page, one at a time
+    "app.js",     # polling, decisions, controls; starts the page
+)
 _STYLE_SLOT = "<!-- planning-mcp:style -->"
 _SCRIPTS_SLOT = "<!-- planning-mcp:scripts -->"
 

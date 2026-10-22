@@ -35,6 +35,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import pagejs  # noqa: E402
+from pagejs import action_of, needs_node  # noqa: E402
 from planning import evidence  # noqa: E402
 from planning.approval import (  # noqa: E402
     _PAGE,
@@ -1197,60 +1199,78 @@ class TestToolTextIsLean(unittest.TestCase):
 
 
 class TestPageTemplate(unittest.TestCase):
-    def test_the_page_can_write_a_criterion_and_send_it(self):
-        for piece in ("criteria:criteriaOf(id)", "function criteriaOf(id)", "function dwRow(",
-                      "data-orig=", "'dw'+", "row+=dwRow(d,t,editable)"):
-            self.assertIn(piece, _PAGE, piece)
+    """The criterion and evidence on the approval page. What a card shows is drawn by
+    the page's own code (tests/pagejs.py); what a keystroke or click does is form.js,
+    clicked through in a real browser."""
 
+    @needs_node
+    def test_the_page_can_write_a_criterion_and_send_it(self):
+        field = pagejs.rows_of("r1plan")[3].one("input", "dwi")
+        self.assertEqual((field.attrs["data-req"], field.attrs["data-dtid"]), ("r1plan", "4"))
+        self.assertEqual(field.attrs["data-orig"], "보낸편지함에 메일이 있다")
+        self.assertIn("criteria:criteriaOf(id)", pagejs.source("app.js"))
+        form = pagejs.source("form.js")
+        self.assertIn("function criteriaOf(id)", form)
+        self.assertIn("dset(req,'dw'+el.getAttribute('data-dtid'),el.value);", form)
+
+    @needs_node
     def test_the_criterion_row_is_named_for_what_it_is(self):
         """The label says whose criterion it is, the button says what it adds, and the
         field carries no sample sentence - the label beside it already says what goes
         in, and a grey example read as if something had been filled in."""
-        self.assertIn('<span class="dwl">태스크 완료 기준</span>', _PAGE)
-        self.assertIn(">완료 기준 추가</button>", _PAGE)
-        self.assertIn("[완료 기준 추가] 또는 [수정]으로", _PAGE)
-        self.assertIn("번 태스크 완료 기준\">", _PAGE)
-        row = _PAGE[_PAGE.index("function dwRow("):_PAGE.index("// ---- what the server found")]
-        self.assertNotIn("placeholder", row)
-        self.assertNotIn("이 태스크가 끝났다고 볼 기준", _PAGE)
+        row = pagejs.rows_of("r1plan")[0]
+        self.assertEqual(row.one("div", "dw").one("span", "dwl").text(), "태스크 완료 기준")
+        self.assertEqual(row.one("button", "dwadd").text(), "완료 기준 추가")
+        field = row.one("input", "dwi")
+        self.assertEqual(field.attrs["aria-label"], "1번 태스크 완료 기준")
+        self.assertNotIn("placeholder", field.attrs)
+        self.assertIn("[완료 기준 추가] 또는 [수정]으로", pagejs.hint(pagejs.fixtures()["requests"], []))
+        self.assertNotIn("이 태스크가 끝났다고 볼 기준", "".join(pagejs.draw_all().values()))
 
+    @needs_node
     def test_the_comment_box_is_labelled_and_carries_no_sample_sentence(self):
         """Like the criterion: the label beside the box is the name of the button that
         opens it (의견, or 다시 작업 on a completion report), so nothing is written inside."""
-        self.assertIn("const what=done?'다시 작업':'의견';", _PAGE)
-        self.assertIn("<div class=\"tcrow\"><span class=\"dwl\">'+what+'</span><textarea "
-                      "class=\"tc\"", _PAGE)
-        self.assertIn("번 '+what+'\"></textarea></div>'", _PAGE)
-        rows = _PAGE[_PAGE.index("function taskRows(d)"):_PAGE.index("function chip(d)")]
-        self.assertNotIn("placeholder", rows)
+        for key, name in (("r1plan", "의견"), ("r3done", "다시 작업")):
+            for n, row in enumerate(pagejs.rows_of(key), 1):
+                box = row.one("div", "tcrow")
+                self.assertEqual(box.one("span", "dwl").text(), name)
+                area = box.one("textarea", "tc")
+                self.assertEqual(area.attrs["aria-label"], f"{n}번 {name}")
+                self.assertNotIn("placeholder", area.attrs)
+        drawn = "".join(pagejs.draw_all().values())
         for gone in ("해당 태스크에 대한 의견을 입력해 주십시오",
                      "해당 태스크의 재작업 요청 사항을 입력해 주십시오"):
-            self.assertNotIn(gone, _PAGE)
+            self.assertNotIn(gone, drawn)
 
+    @needs_node
     def test_the_add_button_toggles_an_empty_criterion_field(self):
         """Open and still empty, the button closes it again - like 의견. With something
         typed it stays open: that text travels with the approval."""
-        self.assertIn("function toggleCriterion(btn,req,tid)", _PAGE)
-        self.assertIn("if(row&&row.classList.contains('edit')&&!dwValue(i)){", _PAGE)
-        self.assertIn("row.classList.remove('edit');row.classList.add('hid');", _PAGE)
-        self.assertIn('<button class="tcbtn dwadd" type="button" aria-expanded="false" ', _PAGE)
-        self.assertIn("'onclick=\"toggleCriterion(this,", _PAGE)
+        form = pagejs.source("form.js")
+        self.assertIn("function toggleCriterion(btn,req,tid)", form)
+        self.assertIn("if(row&&row.classList.contains('edit')&&!dwValue(i)){", form)
+        self.assertIn("row.classList.remove('edit');row.classList.add('hid');", form)
+        rows = pagejs.rows_of("r1plan")
+        add = rows[0].one("button", "dwadd")
+        self.assertEqual(add.attrs["aria-expanded"], "false")
+        self.assertEqual(action_of(add), ("toggleCriterion", "r1plan", "1"))
         # 수정, on a criterion that already exists, only ever opens.
-        self.assertIn("'<button class=\"dwbtn\" type=\"button\" onclick=\"editCriterion(this,",
-                      _PAGE)
+        self.assertEqual(action_of(rows[2].one("button", "dwbtn")), ("editCriterion", "r1plan", "3"))
 
     def test_each_button_shows_the_state_of_its_own_field(self):
         """Both buttons of a row are .tcbtn; the one that opens the comment box must not
         be found by 'the first .tcbtn', which is 완료 기준 추가 when there is one."""
-        self.assertEqual(_PAGE.count("task.querySelector('.tcbtn:not(.dwadd)')"), 2)
-        self.assertNotIn("task.querySelector('.tcbtn')", _PAGE)
-        self.assertIn("if(add)add.setAttribute('aria-expanded','true');", _PAGE)
+        form = pagejs.source("form.js")
+        self.assertEqual(form.count("task.querySelector('.tcbtn:not(.dwadd)')"), 2)
+        self.assertNotIn("task.querySelector('.tcbtn')", pagejs.scripts())
+        self.assertIn("if(add)add.setAttribute('aria-expanded','true');", form)
 
     def test_everything_under_a_task_title_starts_on_one_line(self):
         """Each row under a title has its own font size, so an indent in em gave each its
         own left edge - the criterion label and the comment label sat 4px apart. One
         length in rem, said once."""
-        css = _PAGE[:_PAGE.index("</style>")]
+        css = pagejs.source("page.css")
         self.assertIn("--sub:1.88rem", css)
         for selector in (".was{", ".note{", ".ev{", ".tcrow{", ".opts{", ".dw{", ".ck{"):
             at = css.index(selector)
@@ -1262,57 +1282,74 @@ class TestPageTemplate(unittest.TestCase):
         unread - and, on a completion report, a request to redo a task was lost while
         the plan closed. The button is hidden while any comment box of the request has
         text, and comes back when all of them are empty."""
-        self.assertIn("function hasOpinion(id){", _PAGE)
+        form = pagejs.source("form.js")
+        self.assertIn("function hasOpinion(id){", form)
         self.assertIn("return !!(all&&all.value.trim())||Object.keys(comments(id)).length>0;",
-                      _PAGE)
-        self.assertIn("b.hidden=PHASE[id]!=='HALT'&&hasOpinion(id);", _PAGE)
+                      form)
+        self.assertIn("b.hidden=state.phase[id]!=='HALT'&&hasOpinion(id);", form)
         # Decided on every keystroke, and again whenever a card is drawn from its drafts.
-        self.assertIn("dset(id,'_all',el.value);", _PAGE)
-        self.assertIn("relabel(d.id);", _PAGE)
+        self.assertIn("dset(id,'_all',el.value);", form)
+        self.assertIn("relabel(d.id);", form)
 
+    @needs_node
     def test_the_revise_button_says_what_becomes_of_a_criterion(self):
         """Applied to the tasks when only some are rewritten; handed to the agent in the
         comment when the whole plan is, since no task is left to carry it."""
-        self.assertIn("function revLabel(phase,ids,whole,crit){", _PAGE)
-        self.assertIn("lines.push('태스크 완료 기준 '+crit+'건 '+(whole?'전달':'반영'));", _PAGE)
-        self.assertIn("Object.keys(criteriaOf(id)).length)", _PAGE)
+        label = lambda *a: pagejs.page().call("revLabel", *a)  # noqa: E731
+        self.assertEqual(label("PLAN", ["2"], False, 1), "수정 요청\n2번만\n태스크 완료 기준 1건 반영")
+        self.assertEqual(label("PLAN", [], True, 1), "수정 요청\n계획 전체 재작성\n태스크 완료 기준 1건 전달")
+        self.assertIn("Object.keys(criteriaOf(id)).length)", pagejs.source("form.js"))
 
+    @needs_node
     def test_a_button_says_one_thing_per_line(self):
         """Joined by dots on one line the statements ran together. The first line is
         what the button is; each line under it is one thing it carries."""
-        self.assertIn("function setLabel(b,label){", _PAGE)
-        self.assertIn("return lines.join('\\n');", _PAGE)
-        self.assertIn("s.className=i?'bd':'bt';", _PAGE)
-        self.assertIn(".bt,.bd{display:block}", _PAGE)
-        labels = _PAGE[_PAGE.index("function revLabel("):_PAGE.index("function setLabel(")]
-        labels += _PAGE[_PAGE.index("function okLabel("):_PAGE.index("// ---- done_when")]
-        self.assertNotIn(" · ", labels)
+        form = pagejs.source("form.js")
+        self.assertIn("function setLabel(b,label){", form)
+        self.assertIn("s.className=i?'bd':'bt';", form)
+        self.assertIn(".bt,.bd{display:block}", pagejs.source("page.css"))
+        page = pagejs.page()
+        labels = [page.call("revLabel", "PLAN", ["2", "3"], False, 2),
+                  page.call("revLabel", "COMPLETION", [], True, 0),
+                  page.call("okLabel", "PLAN", {"other": False, "changed": [["2", 1]], "crit": 1}),
+                  page.call("okLabel", "HALT", {"other": True, "changed": [], "crit": 0})]
+        for label in labels:
+            self.assertGreater(label.count("\n"), 0, label)
+            self.assertNotIn(" · ", label)
+        self.assertNotIn(" · ", pagejs.source("labels.js"))
 
+    @needs_node
     def test_the_whole_plan_is_named_only_when_the_request_is_about_it(self):
         """A comment on the whole plan, or the ticked box - not the button's resting
         label. And what is asked is what is sent: the scope follows the same test."""
-        self.assertIn("return wholePlan(id)||!!(all&&all.value.trim());", _PAGE)
-        self.assertIn("if(whole)lines.push(done?'계획 전체 다시 세우기':'계획 전체 재작성');", _PAGE)
-        self.assertIn("if(wholeOf(id))return 'PLAN';", _PAGE)
+        form = pagejs.source("form.js")
+        self.assertIn("return wholePlan(id)||!!(all&&all.value.trim());", form)
+        self.assertIn("if(wholeOf(id))return 'PLAN';", form)
+        self.assertEqual(pagejs.page().call("revLabel", "PLAN", [], False, 0), "수정 요청")
+        self.assertEqual(pagejs.page().call("revLabel", "COMPLETION", [], True, 0),
+                         "수정 요청\n계획 전체 다시 세우기")
 
+    @needs_node
     def test_no_revise_button_without_something_to_ask_for(self):
         """Hidden as it is drawn, and shown by the first comment or the ticked box."""
-        self.assertIn('<button class="rev" hidden id="rev-', _PAGE)
-        self.assertIn("btn.hidden=!(whole||ids.length);", _PAGE)
-        self.assertIn("의견을 적으시면 [승인] 대신 [수정 요청] 버튼이 나타납니다.", _PAGE)
+        self.assertIn("hidden", pagejs.card_of("r1plan").one("button", id="rev-r1plan").attrs)
+        self.assertIn("btn.hidden=!(whole||ids.length);", pagejs.source("form.js"))
+        self.assertIn("의견을 적으시면 [승인] 대신 [수정 요청] 버튼이 나타납니다.",
+                      pagejs.hint(pagejs.fixtures()["requests"], []))
         # The halt card's second button is "continue", and is always there.
-        halt = _PAGE[_PAGE.index("function haltCard(d)"):_PAGE.index("// ---- a plan that is running")]
-        self.assertNotIn("hidden", halt)
+        for key in ("r4halt", "r5user"):
+            for button in pagejs.card_of(key).find_all("button"):
+                self.assertNotIn("hidden", button.attrs, key)
 
     def test_the_small_row_buttons_look_like_buttons(self):
         """의견, 완료 기준 추가 and 수정 were flat grey at 65% opacity and were missed.
         They are bold and slightly raised, in both colour schemes."""
-        start = _PAGE.index(".tcbtn,.dwbtn{")
-        rule = _PAGE[start:_PAGE.index("}", start)]
+        css = pagejs.source("page.css")
+        start = css.index(".tcbtn,.dwbtn{")
+        rule = css[start:css.index("}", start)]
         for piece in ("font-weight:700", "border:1px solid", "linear-gradient(",
                       "box-shadow:0 1px 2px"):
             self.assertIn(piece, rule, piece)
-        css = _PAGE[:_PAGE.index("</style>")]
         for selector in (".tcbtn{", ".dwbtn{", ".tcbtn,.dwbtn{"):
             at = css.index(selector)
             self.assertNotIn("opacity", css[at:css.index("}", at)], selector)
@@ -1333,33 +1370,54 @@ class TestPageTemplate(unittest.TestCase):
             source = Path(module.__file__).read_text(encoding="utf-8")
             self.assertEqual(bare.findall(source), [], module.__name__)
 
+    @needs_node
     def test_the_approve_button_says_what_it_carries(self):
-        self.assertIn("'\\n태스크 완료 기준 '+crit+'건 반영'", _PAGE)
-        self.assertIn("'\\n변경 '+(changed.length+crit)+'건 반영'", _PAGE)
+        def label(changed, crit):
+            return pagejs.page().call("okLabel", "PLAN",
+                                      {"other": False, "changed": changed, "crit": crit})
+        self.assertEqual(label([], 2), "승인\n태스크 완료 기준 2건 반영")
+        self.assertEqual(label([["2", 1]], 2), "승인\n변경 3건 반영")
 
+    @needs_node
     def test_a_finished_task_gets_no_editor(self):
-        self.assertIn("const editable=!done&&t.status!=='DONE';", _PAGE)
+        done, todo = pagejs.rows_of("r2plan")[:2]
+        self.assertFalse(done.has("input", "dwi") or done.has("button", "dwadd"))
+        self.assertTrue(todo.has("input", "dwi"))
 
+    @needs_node
     def test_the_completion_row_shows_what_the_server_found(self):
-        for piece in ("row+=checksHtml(t);", "function checkLine(c)", "function triage(d)",
-                      "이 태스크 중 생성/변경됨", "작업 전부터 있던 파일", "찾을 수 없음",
+        card = pagejs.card_of("r3done")
+        self.assertIn("에이전트의 보고가 근거입니다", card.one("div", "triage").text())
+        lines = " ".join(c.text() for c in card.find_all("div", "ck"))
+        for piece in ("이 태스크 중 생성/변경됨", "작업 전부터 있던 파일", "찾을 수 없음",
                       "보고 당시에는 있었으나 지금은 없음", "서버의 확인 범위 밖",
-                      "에이전트의 보고가 근거입니다", "소요 ", "거의 그대로 반복합니다",
-                      "결과 파일로 적었다가 뺐습니다", "function producedCheck(c)"):
-            self.assertIn(piece, _PAGE, piece)
+                      "거의 그대로 반복합니다", "결과 파일로 적었다가 뺐습니다"):
+            self.assertIn(piece, lines, piece)
+        self.assertEqual(card.find_all("span", "took")[0].text(), "소요 12초")
 
+    @needs_node
     def test_the_page_and_the_chat_text_word_a_check_the_same_way(self):
         for state in ("found", "old", "folder", "empty", "missing", "unknown", "outside"):
             line = evidence.describe_check({"path": "a.txt", "state": state})
-            self.assertIn(line.split(" · ", 1)[1].split(" (")[0], _PAGE, state)
+            drawn = pagejs.parse(pagejs.page().call("checkLine", {"path": "a.txt", "state": state}))
+            self.assertIn(line.split(" · ", 1)[1].split(" (")[0], drawn.text(), state)
 
+    @needs_node
     def test_the_halt_card_shows_the_criterion_read_only(self):
-        self.assertIn("(d.draft?optionsHtml(d,t,false):'')+dwRow(d,t,false)+", _PAGE)
+        row = pagejs.rows_of("r4halt")[1]
+        self.assertEqual(row.one("span", "dwt").text(), "원인별 개수 표가 있다")
+        self.assertFalse(row.has("input", "dwi") or row.has("button"))
 
+    @needs_node
     def test_everything_typed_is_escaped(self):
-        self.assertIn("esc(t.done_when||'')", _PAGE)
-        self.assertIn("esc(t.failure_note)", _PAGE)
-        self.assertIn("esc(c.path)", _PAGE)
+        rows = pagejs.rows_of("r2plan")
+        self.assertEqual(rows[2].one("span", "dwt").text(), "<i>기울임</i> 기준 & 'quote'")
+        self.assertIn('"공유 폴더"', rows[2].one("div", "note").text())
+        task = {"task_id": 1, "title": "t", "status": "DONE", "result_log": "r",
+                "checks": [{"path": "D:/<b>x</b>.txt", "state": "found", "size": 1}]}
+        row = pagejs.rows_of("r3done", tasks=[task])[0]
+        self.assertFalse(row.has("b"))
+        self.assertEqual(row.one("div", "ck").attrs["title"], "D:/<b>x</b>.txt")
 
 
 class TestVersionOnThePage(ContractCase):
@@ -1405,15 +1463,19 @@ class TestVersionOnThePage(ContractCase):
         rid = store.publish("p", "g", "d", [], "fp", PHASE_PLAN)
         self.assertEqual(store.entry(rid)["server_version"], SERVER_VERSION)
 
+    @needs_node
     def test_the_page_says_so_when_another_version_asked(self):
         """Silent when the versions agree; a line on the card when they do not, or when
-        the asking process is too old to say."""
-        self.assertIn("if(d.version===VERSION)return '';", _PAGE)
-        self.assertIn("버전을 남기지 않는 이전 버전입니다", _PAGE)
-        self.assertIn("esc(d.version)", _PAGE)
-        # Its definition, and the three places a request is drawn: the plan / completion
-        # header, the halt card, and the fallback form for an entry with no phase.
-        self.assertEqual(_PAGE.count("verNote(d)"), 4)
+        the asking process is too old to say - on every kind of card a request draws."""
+        for key in ("r1plan", "r3done", "r4halt", "r6legacy", "run-plan_20261022_0011"):
+            same = pagejs.card_of(key, version=pagejs.PAGE_VERSION)
+            self.assertFalse(same.has(cls="vernote"), key)
+            other = pagejs.card_of(key, version="1.0<b>")
+            self.assertEqual(other.one("p", "vernote").text(),
+                             "이 요청은 planning-mcp 1.0<b> 서버가 보냈습니다. 이 페이지는 9.9.9입니다.",
+                             key)
+            self.assertIn("버전을 남기지 않는 이전 버전입니다",
+                          pagejs.card_of(key, version=None).one("p", "vernote").text())
 
     def test_over_http_on_the_idle_page_and_with_a_request(self):
         with socket.socket() as probe:
