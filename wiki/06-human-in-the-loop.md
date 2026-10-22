@@ -192,9 +192,12 @@ Blocking approval adds a third, physical layer on top of these.
   `display`. It briefly did not: when the page stopped rendering `display` for PLAN requests, the
   overview went with it and the human was left judging a bare task list. A field the page can
   compose with is the fix; `display` remains what the model echoes into chat.
-- **HTML/XSS escaping** is client-side (`esc()`), verified in a real browser: a `<script>` in
-  plan text renders as inert text, no console error. The `onclick` handlers pass the request's
-  hex id (safe), so escaped plan content cannot break routing.
+- **HTML/XSS escaping** is client-side and not optional: every card is written as an
+  `` html`...` `` template (`planning/web/html.js`), which escapes every value put into it -
+  only another template goes in as markup. Verified in a real browser: a `<script>` in plan
+  text renders as inert text, no console error. Buttons carry no inline handler: a
+  `data-act` and its arguments as `data-*` attributes, run by one click listener on `#root`
+  (`app.js`), so no id is ever written into a JavaScript string inside an attribute.
 - **Surfacing is best-effort.** The browser is auto-opened once at startup and on each request,
   but a blocked popup / second monitor / missing default browser can defeat it — so the
   approval URL is also printed to stderr (`APPROVE PLANS AT -> ...`) and included in the chat

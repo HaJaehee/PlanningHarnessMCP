@@ -104,9 +104,27 @@ function aboutOpen(){
 }
 function aboutClose(){const d=document.getElementById('about');if(d.open)d.close();}
 
+// ---- clicks -------------------------------------------------------------------
+// A button on a card says what it does in data-act and carries its arguments in data-*
+// (views.js). One listener runs it, so no handler is written into the markup - an id
+// there once had to be escaped three times over: for HTML, for JavaScript, for Python.
+const ACTIONS={
+  decide:b=>decide(b.dataset.id,b.dataset.decision),
+  control:b=>control(b.dataset.plan,b.dataset.control),
+  toggleComment:b=>toggleComment(b),
+  toggleCriterion:b=>toggleCriterion(b,b.dataset.id,b.dataset.task),
+  editCriterion:b=>editCriterion(b,b.dataset.id,b.dataset.task),
+};
+function onClick(ev){
+  const b=ev.target.closest&&ev.target.closest('button[data-act]');
+  if(!b||b.disabled||!Object.prototype.hasOwnProperty.call(ACTIONS,b.dataset.act))return;
+  ACTIONS[b.dataset.act](b);
+}
+
 // ---- start --------------------------------------------------------------------
-// Bound to #root rather than to each textarea: #root outlives every redraw, so the
+// Bound to #root rather than to each card: #root outlives every redraw, so the
 // listeners survive whichever cards come, go or are drawn again.
+document.getElementById('root').addEventListener('click',onClick);
 document.getElementById('root').addEventListener('input',onInput);
 document.getElementById('root').addEventListener('change',onInput);
 window.addEventListener('storage',onStorage);

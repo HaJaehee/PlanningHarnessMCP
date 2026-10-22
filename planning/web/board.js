@@ -108,7 +108,7 @@ function draw(list){
     refocus(focus);
     changed=true;
   });
-  const text=hintHtml(list,state.runs);
+  const text=String(hintHtml(list,state.runs));
   if(hint.getAttribute('data-src')!==text){hint.innerHTML=text;hint.setAttribute('data-src',text);}
   return changed;
 }

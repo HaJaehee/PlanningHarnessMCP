@@ -2742,7 +2742,9 @@ class TestApprovalPageSurface(HandlerTestCase):
             self.assertIn(".tcrow{display:none", html)
             self.assertIn(".task.open .tcrow{display:flex}", html)
             self.assertIn("function toggleComment(", html)
-            self.assertIn('onclick="toggleComment(this)"', html)
+            # The row's button asks for it, and the page's one click listener runs it.
+            self.assertIn('data-act="toggleComment"', html)
+            self.assertIn("toggleComment:b=>toggleComment(b),", html)
             # Hidden boxes are still submitted, so a filled row must stay marked.
             self.assertIn(".task.filled .tcbtn", html)
             self.assertIn("classList.toggle('filled'", html)

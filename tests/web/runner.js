@@ -59,6 +59,12 @@ for (const file of process.argv.slice(2)) {
   vm.runInContext(code, context, { filename: file });
 }
 
+// The page builds its HTML as Html objects (html.js); a test reads it as the text it is.
+const Html = vm.runInContext("typeof Html === 'undefined' ? null : Html", context);
+function plain(key, value) {
+  return Html && value instanceof Html ? String(value) : value;
+}
+
 function answer(request) {
   if (request.fn) {
     const fn = vm.runInContext(request.fn, context);
@@ -82,5 +88,5 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   } catch (e) {
     reply = { error: String(e && e.stack || e) };
   }
-  process.stdout.write(JSON.stringify(reply) + '\n');
+  process.stdout.write(JSON.stringify(reply, plain) + '\n');
 });

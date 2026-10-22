@@ -150,18 +150,26 @@ def rows_of(key: str, **changes: Any) -> list[Node]:
     return card_of(key, **changes).one(cls="tasks").elements()
 
 
+# Each data-act a card may carry, and the data-* attributes app.js passes to it.
+ACTIONS = {
+    "decide": ("data-id", "data-decision"),
+    "control": ("data-plan", "data-control"),
+    "toggleComment": (),
+    "toggleCriterion": ("data-id", "data-task"),
+    "editCriterion": ("data-id", "data-task"),
+}
+
+
 def action_of(button: Node) -> tuple[str, ...]:
     """What a button does when clicked, as (what, *its arguments): ("decide", "r1plan",
-    "APPROVED"), ("control", plan_id, "CANCEL"), ("toggleComment",) and so on - however
-    the card wires it, so a test of what a button does outlives a change of wiring."""
-    handler = button.attrs.get("onclick")
-    if handler is None:
+    "APPROVED"), ("control", plan_id, "CANCEL"), ("toggleComment",) and so on - read from
+    its data-act and the data-* attributes app.js hands to the function of that name."""
+    act = button.attrs.get("data-act")
+    if act is None:
         raise AssertionError(f"<{button.tag} class={button.classes}> does nothing on a click")
-    match = re.fullmatch(r"(\w+)\((.*)\)", handler)
-    if not match:
-        raise AssertionError(f"cannot read the click handler {handler!r}")
-    args = [a.strip() for a in match.group(2).split(",") if a.strip()]
-    return (match.group(1), *(a.strip("'") for a in args if a != "this"))
+    if act not in ACTIONS:
+        raise AssertionError(f"no action is called {act!r}")
+    return (act, *(button.attrs[name] for name in ACTIONS[act]))
 
 
 def draw_all() -> dict[str, str]:

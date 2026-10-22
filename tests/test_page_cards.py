@@ -50,6 +50,24 @@ class TestEveryButtonDoesWhatItSays(CardCase):
             for button in self.card(key).find_all("button"):
                 action_of(button)
 
+    def test_one_listener_runs_every_action_and_no_markup_carries_a_handler(self):
+        """A handler written into the markup had to carry its ids inside a quoted
+        JavaScript string inside an HTML attribute - escaped for both, and once more for
+        Python while the page was a string there."""
+        app = pagejs.source("app.js")
+        self.assertIn("document.getElementById('root').addEventListener('click',onClick);", app)
+        for line in ("decide:b=>decide(b.dataset.id,b.dataset.decision),",
+                     "control:b=>control(b.dataset.plan,b.dataset.control),",
+                     "toggleComment:b=>toggleComment(b),",
+                     "toggleCriterion:b=>toggleCriterion(b,b.dataset.id,b.dataset.task),",
+                     "editCriterion:b=>editCriterion(b,b.dataset.id,b.dataset.task),"):
+            self.assertIn(line, app)
+        self.assertEqual(len(pagejs.ACTIONS), app.count(":b=>"))
+        drawn = "".join(pagejs.draw_all().values())
+        for handler in ("onclick", "oninput", "onchange"):
+            self.assertNotIn(handler, drawn)
+            self.assertNotIn(handler + "=", pagejs.scripts())
+
     def test_a_request_decides_itself(self):
         for key in ("r1plan", "r2plan", "r3done", "r6legacy"):
             self.assertEqual(self.actions(self.card(key).one("div", "row")),
