@@ -36,7 +36,8 @@ SSE transport.
 | `responses.py` | The **single response builder**. Every handler returns through `build()`/`error()`. |
 | `handlers.py` | The 4 tool implementations + plan routing + blocking-approval wait + late-decision collection. |
 | `store.py` | `plan_state.json` persistence: atomic writes, corruption quarantine, retention pruning, audit log, **transactions** (thread + cross-process). |
-| `approval.py` | `ApprovalStore` (shared file-backed queue) + `ApprovalServer` (the single localhost page). |
+| `approval.py` | `ApprovalStore` (shared file-backed queue) + `ApprovalServer` (the single localhost page) + `RunBoard`. Assembles the page from `web/` once, at import. |
+| `web/` | The approval page as plain files: `page.html`, `page.css`, and the scripts listed in `approval.PAGE_SCRIPTS`, in load order. Served inline as one response - no static routes. |
 | `filelock.py` | OS-level advisory locking (`msvcrt` / `fcntl`), non-blocking with a retry loop. Shared by both stores. |
 | `protocol.py` | Minimal MCP / JSON-RPC 2.0. `initialize`, `tools/list`, `tools/call`, `ping`, batch. |
 | `transport.py` | `serve_stdio` (threaded) and `serve_sse`, plus notifiers for progress heartbeats. |

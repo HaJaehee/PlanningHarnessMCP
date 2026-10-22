@@ -1,0 +1,211 @@
+/* --sub: where everything under a task title starts - the title's own left edge, which
+   is the number column (.tn, 1.4em at .95rem) plus the gap of .tt (.55rem). In rem on
+   purpose. These rows used to be indented 1.95em each, and since each has its own
+   font size, each got its own indent: the 태스크 완료 기준 label, the 의견 label, the
+   options and the evidence lines all started a few pixels apart. */
+:root{color-scheme:light dark;--sub:1.88rem}
+body{font-family:system-ui,"Segoe UI","Malgun Gothic",sans-serif;margin:0;padding:2rem 1rem;
+     background:#f6f7f9;color:#16181d}
+@media(prefers-color-scheme:dark){body{background:#15171c;color:#e8eaed}}
+.card{max-width:720px;margin:0 auto;background:#fff;border-radius:12px;padding:1.75rem;
+      box-shadow:0 1px 3px rgba(0,0,0,.12)}
+@media(prefers-color-scheme:dark){.card{background:#1e2126;box-shadow:none;border:1px solid #2c3038}}
+h1{font-size:1.05rem;margin:0 0 .35rem;letter-spacing:.02em;text-transform:uppercase;opacity:.6}
+.goal{font-size:1.15rem;font-weight:600;margin:0 0 1rem;line-height:1.4}
+.goal .lbl{font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+           opacity:.5;margin-right:.5rem;vertical-align:.08em}
+.summary{background:#f2f3f5;border-radius:8px;padding:.85rem 1rem;margin:0 0 1.25rem;
+         font-size:.94rem;line-height:1.65;white-space:pre-wrap;word-break:break-word}
+@media(prefers-color-scheme:dark){.summary{background:#15171c}}
+/* Why the circuit breaker stopped the agent, and what the agent was still weighing.
+   Amber, not red: nothing is broken, a person is simply needed. */
+.summary.warn{background:#fdf0e3}
+.summary.agent{border-left:3px solid #8a5a00}
+@media(prefers-color-scheme:dark){.summary.warn{background:#2a2115}}
+.summary .lbl{display:block;font-size:.72rem;font-weight:600;text-transform:uppercase;
+              letter-spacing:.04em;opacity:.5;margin-bottom:.35rem}
+.tasklabel{font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+           opacity:.5;margin:0 0 .2rem}
+pre{white-space:pre-wrap;word-break:break-word;background:#f2f3f5;border-radius:8px;
+    padding:1rem;font-size:.92rem;line-height:1.6;margin:0 0 1.25rem;
+    font-family:ui-monospace,Consolas,monospace}
+@media(prefers-color-scheme:dark){pre{background:#15171c}}
+textarea{width:100%;box-sizing:border-box;min-height:64px;border-radius:8px;padding:.6rem;
+         border:1px solid #ccd0d5;font:inherit;font-size:.92rem;margin-bottom:1rem;
+         background:transparent;color:inherit}
+@media(prefers-color-scheme:dark){textarea{border-color:#3a3f47}}
+.row{display:flex;gap:.6rem;flex-wrap:wrap}
+button{flex:1 1 auto;min-width:140px;padding:.85rem 1rem;border:0;border-radius:8px;
+       font:inherit;font-weight:600;cursor:pointer;font-size:.95rem}
+.ok{background:#1a7f37;color:#fff}.no{background:#b42318;color:#fff}.rev{background:#8a5a00;color:#fff}
+button:disabled{opacity:.5;cursor:default}
+/* A decision button: what it is, then one line for each thing it carries. */
+.bt,.bd{display:block}
+.bd{font-size:.8rem;font-weight:500;line-height:1.4;margin-top:.1rem}
+/* Which planning-mcp is serving this page. Small, and outside #root so no re-render can
+   remove it: after an upgrade "is the new version actually running?" is answered here. */
+.ver{max-width:720px;margin:0 auto .4rem;padding:0 .25rem;box-sizing:border-box;
+     display:flex;justify-content:flex-end;align-items:center;gap:.4rem;
+     font-size:.72rem;letter-spacing:.02em}
+.vt{opacity:.45}
+/* The information icon beside it, and the dialog it opens. Every rule here undoes the
+   page-wide `button` style, which is sized for the three decision buttons. */
+.info{flex:0 0 auto;min-width:0;width:1.1rem;height:1.1rem;padding:0;border-radius:50%;
+      border:1px solid currentColor;background:transparent;color:inherit;opacity:.5;
+      font:italic 700 .68rem/1 Georgia,"Times New Roman",serif;cursor:pointer}
+.info:hover,.info:focus-visible{opacity:1}
+dialog.about{border:0;border-radius:12px;padding:0;min-width:270px;max-width:90vw;
+             background:#fff;color:#16181d;box-shadow:0 8px 30px rgba(0,0,0,.25);
+             font-size:.92rem}
+@media(prefers-color-scheme:dark){
+  dialog.about{background:#1e2126;color:#e8eaed;border:1px solid #2c3038}
+}
+dialog.about::backdrop{background:rgba(0,0,0,.35)}
+.aboutin{padding:1.25rem 1.5rem}
+.aboutin h2{font-size:1rem;margin:0 0 .8rem}
+.aboutin p{margin:.3rem 0;line-height:1.5;word-break:break-word}
+.aboutin .k{display:inline-block;min-width:4.4em;opacity:.6}
+.aboutin button{display:block;flex:none;min-width:0;margin:1.1rem 0 0 auto;padding:.4rem 1rem;
+                font-size:.85rem;background:#e6e8eb;color:inherit}
+@media(prefers-color-scheme:dark){.aboutin button{background:#2c3038}}
+.vernote{font-size:.78rem;color:#8a5a00;margin:-.1rem 0 .7rem;line-height:1.5}
+@media(prefers-color-scheme:dark){.vernote{color:#d9a441}}
+.idle{text-align:center;opacity:.6;padding:2.5rem 0;font-size:.95rem}
+.done{text-align:center;padding:2rem 0;font-size:1.05rem;font-weight:600}
+.hint{margin-top:1rem;font-size:.82rem;opacity:.55;line-height:1.5}
+.tasks{margin:0 0 1.25rem}
+.task{padding:.7rem 0;border-top:1px solid #e6e8eb}
+@media(prefers-color-scheme:dark){.task{border-top-color:#2c3038}}
+.task:first-child{border-top:0}
+.tt{display:flex;gap:.55rem;align-items:baseline;line-height:1.45;font-size:.95rem}
+/* The title takes the rest of the row, so the labels after it sit at the right edge
+   whether the title is one line or wraps. Sized to its text, a short title pulled them
+   in beside itself and a long one pushed them out to the edge. */
+.tt>span:not(.tn):not(.badge):not(.took){flex:1 1 auto;min-width:0;word-break:break-word}
+.tn{opacity:.5;font-variant-numeric:tabular-nums;min-width:1.4em;flex-shrink:0}
+.badge{font-size:.72rem;padding:.1rem .4rem;border-radius:4px;background:#e6e8eb;opacity:.8;
+       white-space:nowrap;flex-shrink:0}
+@media(prefers-color-scheme:dark){.badge{background:#2c3038}}
+.was{font-size:.82rem;opacity:.55;margin:.25rem 0 0 var(--sub);text-decoration:line-through}
+.note{font-size:.82rem;margin:.25rem 0 0 var(--sub);color:#8a5a00}
+@media(prefers-color-scheme:dark){.note{color:#d9a441}}
+/* The agent's evidence for a finished task. Shown only on a completion report - it is
+   the thing the human is actually being asked to judge. */
+.ev{font-size:.86rem;opacity:.75;margin:.25rem 0 0 var(--sub);line-height:1.55;
+    white-space:pre-wrap;word-break:break-word}
+.ev.none{opacity:.45;font-style:italic}
+/* Superseded output on a row the human sent back. Muted rather than struck through -
+   a struck-out sentence is unreadable, and this one has to be compared, not dismissed. */
+.ev.old{opacity:.45}
+/* Per-task comment boxes are collapsed by default. Nine open textareas turn a task list
+   into a form; the plan itself is what the human came here to read. */
+.tcrow{display:none;gap:.5rem;align-items:baseline;margin:.4rem 0 0 var(--sub)}
+.task.open .tcrow{display:flex}
+/* The box sits beside its label, the way a criterion does - which is why it needs no
+   sample sentence inside it. */
+textarea.tc{flex:1 1 auto;width:auto;min-width:0;min-height:2.4rem;margin:0;font-size:.86rem;
+            padding:.4rem .55rem}
+/* The small buttons on a task row - 의견 / 다시 작업, 완료 기준 추가, 수정. They used to be
+   flat grey at 65% opacity and read as labels rather than as something to press. Bold
+   now, and slightly raised: a light edge on top, a shadow underneath, pressed in while
+   held - and while the comment box the button opens is open. */
+.tcbtn,.dwbtn{flex:0 0 auto;min-width:0;font-weight:700;border-radius:6px;color:inherit;
+              border:1px solid #c2c7ce;background:linear-gradient(#fff,#e1e4e8);
+              box-shadow:0 1px 2px rgba(0,0,0,.2),inset 0 1px 0 #fff}
+.tcbtn:hover,.dwbtn:hover{background:linear-gradient(#fff,#d5d9df)}
+.tcbtn:active,.dwbtn:active,.tcbtn[aria-expanded="true"]{
+  background:#dfe2e6;box-shadow:inset 0 1px 2px rgba(0,0,0,.28)}
+.tcbtn:active,.dwbtn:active{transform:translateY(1px)}
+.tcbtn{margin-left:auto;align-self:center;padding:.15rem .5rem;font-size:.76rem}
+/* A comment written and then collapsed is still submitted, so the row has to keep saying
+   so - otherwise the human sends a targeted revision they can no longer see. */
+.task.filled .tcbtn:not(.dwadd){background:#8a5a00;border-color:#6d4700;color:#fff;
+  box-shadow:0 1px 2px rgba(0,0,0,.25),inset 0 1px 0 rgba(255,255,255,.25)}
+@media(prefers-color-scheme:dark){
+  .tcbtn,.dwbtn{border-color:#4a505b;background:linear-gradient(#3b414b,#2a2e36);
+                box-shadow:0 1px 2px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.1)}
+  .tcbtn:hover,.dwbtn:hover{background:linear-gradient(#454b56,#30353e)}
+  .tcbtn:active,.dwbtn:active,.tcbtn[aria-expanded="true"]{
+    background:#23272e;box-shadow:inset 0 1px 2px rgba(0,0,0,.6)}
+  .task.filled .tcbtn:not(.dwadd){background:#8a5a00;border-color:#b07a14}
+}
+.scope{display:flex;align-items:center;gap:.45rem;margin:-.5rem 0 1rem;font-size:.86rem;
+       opacity:.75}
+.scope input{margin:0}
+/* 2.0.0 - a task that offers a choice. The recommendation is pre-selected and marked;
+   each option carries its trade-off, so the human can pick without asking. */
+.opts{display:flex;flex-direction:column;gap:.3rem;margin:.4rem 0 0 var(--sub);font-size:.9rem}
+.opt{display:flex;gap:.45rem;align-items:baseline;cursor:pointer;line-height:1.45}
+.opt input{margin:0;flex:0 0 auto}
+.optl{opacity:.55;min-width:1.1em;font-variant-numeric:tabular-nums}
+.rec{font-size:.72rem;padding:.05rem .4rem;border-radius:4px;background:#e6f4ea;color:#1a7f37;
+     font-weight:600;margin-left:.3rem;white-space:nowrap;flex-shrink:0}
+@media(prefers-color-scheme:dark){.rec{background:#16281c;color:#5dbb77}}
+.why{opacity:.65;font-size:.84rem}
+/* The heading of a choice: what is being chosen, then how many options. */
+.pick{font-weight:600}
+.cnt{opacity:.55;font-size:.84rem;font-weight:400}
+.err{background:#fdecea;color:#b42318;border-radius:8px;padding:.6rem .9rem;margin:0 0 1rem;
+     font-size:.9rem}
+/* 3.0.0 - the verification contract. What "finished" means for a task, as the human
+   approved it or wrote it, and what the server itself found on disk. A task with no
+   criterion shows only a small button, for the reason the comment boxes are collapsed:
+   the plan is what the human came to read. */
+.dw{display:flex;gap:.5rem;align-items:baseline;margin:.3rem 0 0 var(--sub);font-size:.86rem;
+    line-height:1.5}
+.dw.hid{display:none}
+.dwl{flex:0 0 auto;font-size:.72rem;font-weight:600;letter-spacing:.04em;opacity:.5}
+.dwt{flex:1 1 auto;word-break:break-word}
+.dwby{font-size:.72rem;opacity:.6;margin-left:.35rem}
+.dwbtn{padding:.1rem .45rem;font-size:.74rem}
+input.dwi{display:none;flex:1 1 auto;min-width:0;box-sizing:border-box;border-radius:6px;
+          padding:.3rem .5rem;border:1px solid #ccd0d5;font:inherit;font-size:.86rem;
+          background:transparent;color:inherit}
+@media(prefers-color-scheme:dark){input.dwi{border-color:#3a3f47}}
+.dw.edit input.dwi{display:block}
+.dw.edit .dwt,.dw.edit .dwbtn{display:none}
+/* An edited criterion travels with the approval, so the row has to keep saying so. */
+.dw.changed .dwl{color:#8a5a00;opacity:1}
+.tcbtn.dwadd{margin-left:auto}
+.tcbtn.dwadd+.tcbtn{margin-left:0}
+.ck{font-size:.84rem;margin:.2rem 0 0 var(--sub);line-height:1.5;word-break:break-word}
+.ck.ok{color:#1a7f37}.ck.warn{color:#8a5a00}.ck.dim{opacity:.6}
+@media(prefers-color-scheme:dark){.ck.ok{color:#5dbb77}.ck.warn{color:#d9a441}}
+.took{font-size:.76rem;opacity:.5;white-space:nowrap;flex-shrink:0}
+.triage{background:#f2f3f5;border-radius:8px;padding:.5rem .8rem;margin:0 0 .9rem;
+        font-size:.86rem;line-height:1.5}
+@media(prefers-color-scheme:dark){.triage{background:#15171c}}
+/* Whether an agent is still holding a call open for this request. Not a countdown:
+   the request outlives any one tool call, so the honest thing to show is not how long
+   is left but whether deciding right now resumes the conversation by itself. */
+.chip{display:inline-block;font-size:.78rem;padding:.2rem .55rem;border-radius:999px;
+      margin:0 0 .9rem;line-height:1.5}
+.chip.live{background:#e6f4ea;color:#1a7f37}
+.chip.idle{background:#fdf0e3;color:#8a5a00}
+@media(prefers-color-scheme:dark){
+  .chip.live{background:#16281c;color:#5dbb77}
+  .chip.idle{background:#2a2115;color:#d9a441}
+}
+/* 3.1.0 - a plan that is running. Not a question: the human may watch, stop it before
+   its next task, or change what is left. */
+.badge.now{background:#e6f4ea;color:#1a7f37;opacity:1}
+@media(prefers-color-scheme:dark){.badge.now{background:#16281c;color:#5dbb77}}
+.seen{font-size:.76rem;opacity:.5;margin:-.6rem 0 .9rem}
+.pendingctl{background:#fdf0e3;border-radius:8px;padding:.75rem .95rem;margin:0 0 1rem;
+            font-size:.9rem;line-height:1.6}
+@media(prefers-color-scheme:dark){.pendingctl{background:#2a2115}}
+.pendingctl .q{display:block;margin-top:.3rem;opacity:.8;white-space:pre-wrap;
+               word-break:break-word}
+/* One card per request and per running plan, each drawn on its own. The rule between two
+   cards belongs to the second of them, so a card that comes or goes takes its rule along. */
+.item+.item{border-top:1px solid #ccd0d5;margin-top:1.75rem;padding-top:1.75rem}
+.linkbtn{display:block;flex:none;min-width:0;margin-top:.55rem;padding:.25rem .7rem;
+         font-size:.8rem;font-weight:500;border-radius:6px;background:#fff;color:inherit}
+@media(prefers-color-scheme:dark){.linkbtn{background:#2c3038}}
+/* 3.2.0 - closing a plan whose agent stopped reporting. Small and to one side: it is for
+   when the agent has failed, not the way to stop one that is working. */
+.ctlrow{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.55rem}
+.ctlrow .linkbtn{margin-top:0}
+.ctlrow.end{justify-content:flex-end}
+.linkbtn.kill{color:#b42318}
+@media(prefers-color-scheme:dark){.linkbtn.kill{color:#f97066}}

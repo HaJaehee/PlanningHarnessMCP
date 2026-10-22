@@ -230,7 +230,7 @@ Get-ChildItem C:\ -Recurse -Filter python.exe -ErrorAction SilentlyContinue -Dep
 |---|---|---|
 | 외부 통신 | **일절 없음.** 아웃바운드 네트워크 호출 로직 자체가 존재하지 않음 | `Select-String -Path planning\*.py -Pattern "urllib\.request\|socket\|http\.client\|requests"` → URL 문자열 파싱 유틸리티인 `urllib.parse`만 검출됨 |
 | 수신 대기 | **로컬 루프백 한정.** 사용자 승인 웹 UI를 위해 `127.0.0.1`에 한해 1개의 TCP 포트를 바인딩함 (기본 8765, 포트 충돌 시 8766~8774 순차 탐색). 외부 네트워크 인터페이스(0.0.0.0 등)에는 바인딩하지 않음. SSE 전송 모드 사용 시 추가로 8931 루프백 포트 활용 | `planning/approval.py`의 `_ExclusiveHTTPServer`, `planning/transport.py`의 `serve_sse()` |
-| 승인 웹 UI 서비스 범위 | 자체 인라인 HTML 1페이지와 2개의 경량 JSON API(`/api/pending` 대기 목록 조회, `/api/decide` 승인 결정 처리)만 제공. 파일 시스템 탐색 기능이 없으며, 정적 리소스 경로도 존재하지 않음 | `planning/approval.py`의 `_PAGE`, `Handler` |
+| 승인 웹 UI 서비스 범위 | 자체 인라인 HTML 1페이지와 2개의 경량 JSON API(`/api/pending` 대기 목록 조회, `/api/decide` 승인 결정 처리)만 제공. 파일 시스템 탐색 기능이 없으며, 정적 리소스 경로도 존재하지 않음 | `planning/web/`(페이지 원본), `planning/approval.py`의 `_assemble_page()`, `Handler` |
 | 승인 웹 UI 사용자 인증 | **별도 인증 없음.** 로컬 루프백 전용 바인딩이므로 동일 PC의 로컬 사용자만 접속 가능함. 공용 PC 환경일 경우 `PLANNING_MCP_BLOCKING_APPROVAL=false` 설정으로 웹 UI 팝업 비활성화 가능 | 공용 PC라면 환경변수 설정으로 비활성화 가능 |
 | 웹 브라우저 자동 실행 | 승인 요청 접수 시 시스템 기본 웹 브라우저를 1회 자동 호출 (`os.startfile` 함수 경유). `PLANNING_MCP_APPROVAL_OPEN_BROWSER=false` 설정 시 비활성화되며, 이 경우 콘솔(stderr) 로그에 접속 URL이 출력됨 | `planning/approval.py`의 `_surface()` |
 | 외부 라이브러리 의존성 | **외부 의존성 0개.** 순수 Python 표준 라이브러리만 사용 | `tools/verify_install.py` 실행 시 "No third-party packages required" 검증 출력 |
@@ -244,7 +244,7 @@ Get-ChildItem C:\ -Recurse -Filter python.exe -ErrorAction SilentlyContinue -Dep
 
 **승인 웹 UI(내장 웹 서버)에 대한 보안 보충 설명**
 
-- **추가 외부 의존성이 전혀 없습니다.** 웹 서버는 Python 표준 라이브러리인 `http.server`를 사용하며, UI 화면(HTML/CSS/JS)은 `planning/approval.py` 내부에 문자열 상수로 인라인 임베딩되어 있습니다. 별도의 정적 파일 폴더나 웹 번들러, 외부 CDN 조회가 일절 없으며, 반입 산출물은 여전히 100% 순수 파이썬 평문 코드뿐입니다.
+- **추가 외부 의존성이 전혀 없습니다.** 웹 서버는 Python 표준 라이브러리인 `http.server`를 사용하며, UI 화면(HTML/CSS/JS)은 `planning/web/` 폴더의 평문 파일로 들어 있으며, 서버가 시작할 때 한 번 읽어 하나의 HTML 응답 안에 인라인으로 조립합니다. 브라우저가 따로 내려받는 정적 파일 경로는 없고(URL로 디스크의 파일을 찾는 코드 자체가 없음), 웹 번들러·빌드 단계·외부 CDN 조회도 일절 없습니다. 반입 산출물은 Python 코드와, 사람이 그대로 읽을 수 있는 HTML/CSS/JavaScript 평문 파일뿐입니다.
 - **통신 방향은 로컬 인바운드 전용입니다.** 본 서버는 승인 요청을 수신하기만 할 뿐 외부 네트워크로 어떤 패킷도 발신하지 않습니다 (아웃바운드 호출 0건은 상기 검증 명령으로 증명 가능).
 - **사내 보안 정책(방화벽/EDR)에 미리 공지하십시오.** 로컬 프로세스가 수신 대기(Listening) 소켓을 여는 행위가 사내 보안 관제 정책상 신고 대상일 수 있습니다. 외부 네트워크 접근이 차단된 로컬 루프백(`127.0.0.1`) 전용 소켓임을 소명하면 예외 승인이 수월합니다.
 - 포트가 이미 타 프로세스에 의해 점유되어 있다면 다음 번호 포트로 자동 이동하며, 허용 대역 전체 바인딩에 실패할 경우 **경고를 응답에 포함**하여 하드 일시정지 가드가 비활성화되었음을 명확히 알립니다(감사 로그 `approval_ui_unavailable`).

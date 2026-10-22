@@ -171,8 +171,12 @@ Blocking approval adds a third, physical layer on top of these.
 ## The approval web page (`approval.py`)
 
 - Loopback-only HTTP on `127.0.0.1:8765` (configurable). Serves one self-contained HTML page
-  (CSS/JS inlined as string constants — **zero static files, zero dependencies**) plus three
-  JSON endpoints: `GET /api/health`, `GET /api/pending`, `POST /api/decide`.
+  plus JSON endpoints: `GET /api/health`, `GET /api/pending`, `POST /api/decide`,
+  `POST /api/control`. The page's source is plain files in `planning/web/`, read once at
+  import and served with the CSS and every script inline — **no static routes, zero
+  dependencies**. Each script carries a `sourceURL`, so the browser's developer tools show
+  it as its own file. Because the page is held in memory, a process always serves the page
+  that matches its own endpoints, even after the files on disk were upgraded under it.
 - Renders the **whole queue** (multiple concurrent sessions), each with 승인/수정요청/거절
   buttons and a comment box. Polls every 1.5 s. Tab title flashes `⚠ 승인 대기 N건` and a short
   tone plays on a new request.

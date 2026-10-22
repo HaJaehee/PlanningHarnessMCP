@@ -46,6 +46,10 @@ INCLUDE_FILES = [
 ]
 INCLUDE_DIRS = [
     ("planning", "*.py"),
+    # The approval page, served inline from these files (planning/web/).
+    ("planning/web", "*.html"),
+    ("planning/web", "*.css"),
+    ("planning/web", "*.js"),
     ("tests", "*.py"),
     # The sample data tools/page_preview.py serves and the page tests render.
     ("tests", "*.json"),

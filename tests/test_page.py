@@ -1,9 +1,10 @@
-"""The approval page: the sample data it is checked against.
+"""The approval page: the files it is made of, and the sample data it is checked against.
 
-tests/web/fixtures.json holds one entry for every kind of card the page draws, in the
-shape GET /api/pending answers. tools/page_preview.py serves it for a look in a browser.
-Both are only worth anything while that shape is the server's, so it is checked here
-against the real endpoint.
+The page lives in planning/web/ as plain HTML, CSS and JavaScript, and is served as one
+response with all of it inline - no static routes. tests/web/fixtures.json holds one
+entry for every kind of card the page draws, in the shape GET /api/pending answers;
+tools/page_preview.py serves it for a look in a browser. Both are only worth anything
+while that shape is the server's, so it is checked here against the real endpoint.
 
     python -m unittest discover -s tests
 """
@@ -12,20 +13,75 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+from urllib.error import HTTPError
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from planning.approval import ApprovalServer, ApprovalStore  # noqa: E402
+from planning import approval  # noqa: E402
+from planning.approval import ApprovalServer, ApprovalStore, page_html  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("page_preview", ROOT / "tools" / "page_preview.py")
 page_preview = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(page_preview)
+
+
+class TestThePageFiles(unittest.TestCase):
+    def test_every_script_in_the_folder_is_loaded_and_only_those(self):
+        """A script added to planning/web but not to PAGE_SCRIPTS would never run."""
+        on_disk = sorted(p.name for p in approval.WEB_DIR.glob("*.js"))
+        self.assertEqual(sorted(approval.PAGE_SCRIPTS), on_disk)
+        self.assertEqual(sorted(p.name for p in approval.WEB_DIR.glob("*.css")), ["page.css"])
+
+    def test_the_page_is_one_response_with_everything_inline(self):
+        html = page_html()
+        self.assertEqual(html.count("<style>"), 1)
+        # Nothing for the browser to fetch: the server has no route that would answer.
+        for external in ("<link", " src=", "@import", "url("):
+            self.assertNotIn(external, html)
+        self.assertNotIn("planning-mcp:style", html)
+        self.assertNotIn("planning-mcp:scripts", html)
+
+    def test_each_file_has_its_own_tag_and_name_in_order(self):
+        """So the browser's developer tools list each file under its name, at its own line
+        numbers: the file starts right after its tag, not one line below it."""
+        names = re.findall(r"//# sourceURL=planning-mcp/([\w.-]+)\n</script>", page_html())
+        self.assertEqual(names, list(approval.PAGE_SCRIPTS))
+        for name in approval.PAGE_SCRIPTS:
+            code = (approval.WEB_DIR / name).read_text(encoding="utf-8")
+            self.assertIn("<script>" + code + "//# sourceURL=", approval._PAGE)
+        css = (approval.WEB_DIR / "page.css").read_text(encoding="utf-8")
+        self.assertIn("<style>" + css + "/*# sourceURL=planning-mcp/page.css */", approval._PAGE)
+
+    def test_a_file_that_would_end_its_tag_early_is_refused(self):
+        real = approval._web_file
+        for name, bad in (("page.js", "const s='</SCRIPT>';\n"), ("page.css", "/* </style> */\n")):
+            def fake(asked, name=name, bad=bad):
+                return bad if asked == name else real(asked)
+            with mock.patch.object(approval, "_web_file", fake):
+                with self.assertRaises(ValueError):
+                    approval._assemble_page()
+
+    def test_the_server_serves_no_file_by_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ui = ApprovalServer(ApprovalStore(Path(tmp)), port=0, open_browser=False)
+            self.assertTrue(ui.start())
+            try:
+                port = ui._httpd.server_address[1]
+                for path in ("/page.js", "/web/page.js", "/planning/web/page.css",
+                             "/../approval.py"):
+                    with self.assertRaises(HTTPError) as caught:
+                        urlopen(f"http://127.0.0.1:{port}{path}", timeout=5)
+                    self.assertEqual(caught.exception.code, 404, path)
+            finally:
+                ui.shutdown()
 
 
 class TestTheFixtures(unittest.TestCase):

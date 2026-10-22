@@ -56,6 +56,15 @@ class TestWhatIsPackaged(unittest.TestCase):
                 self.assertIn(f"{folder}/{path.name}", files)
         self.assertIn("server.py", files)
 
+    def test_the_approval_page_is_in_the_package(self):
+        """The page is read from planning/web when the server starts. A package without
+        it is a server that cannot start - and an approval gate with no page."""
+        files = packaged()
+        page = sorted(p.name for p in (ROOT / "planning" / "web").iterdir() if p.is_file())
+        self.assertIn("page.html", page)
+        for name in page:
+            self.assertIn(f"planning/web/{name}", files)
+
     def test_the_page_preview_ships_with_its_data(self):
         """tools/ ships whole, and the preview tool reads the page fixtures."""
         self.assertIn("tools/page_preview.py", packaged())

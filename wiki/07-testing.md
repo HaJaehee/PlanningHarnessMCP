@@ -223,7 +223,9 @@ The page's HTML/JS was verified in a real browser: multi-request rendering, XSS 
 execution, no console error), tab-title alert, textarea comment, all three buttons → POST →
 recorded decision, `\'` onclick escaping routing to the correct id, queue removal after
 decision. `TestApprovalPageSurface` guards the template against regression without a browser.
-Re-run the manual browser check if you change `_PAGE` in `approval.py`.
+Re-run the manual browser check if you change the page in `planning/web/`.
+`python tools/page_preview.py` serves every kind of card from `tests/web/fixtures.json` on
+port 8810, with working buttons.
 
 3.0.0 was checked the same way, against a real server driven through all three requests of one
 plan: a criterion written with [완료 기준 추가] and another rewritten with [수정] relabel the button

@@ -1327,27 +1327,30 @@ class TestOnlyTheCardThatChangedIsRedrawn(unittest.TestCase):
 
 
 class TestThePageScriptParses(unittest.TestCase):
-    """The page is a Python string holding JavaScript, so a JS escape has to be written
-    twice ('\\\\n' for a newline). Written once, the page still passes every test that
-    looks for a substring - and shows nothing at all, because the script does not parse.
-    That is the approval gate with no way to approve. Checked with node where there is
-    one; the target machine has none, and the check is skipped there."""
+    """A script that does not parse passes every test that looks for a substring - and
+    the page shows nothing at all. That is the approval gate with no way to approve.
+    (Until the page moved to planning/web, every JS escape also had to be written twice
+    inside a Python string, which is how one came close.) Every script tag of the page
+    as served is checked with node where there is one; the target machine has none, and
+    the check is skipped there."""
 
-    def test_the_script_is_valid_javascript(self):
+    def test_every_script_is_valid_javascript(self):
+        import re
         import shutil
         import subprocess
         node = shutil.which("node")
         if node is None:
             self.skipTest("node is not installed")
-        from planning.approval import page_html
-        html = page_html()
-        script = html[html.index("<script>") + len("<script>"):html.index("</script>")]
+        from planning.approval import PAGE_SCRIPTS, page_html
+        scripts = re.findall(r"<script>(.*?)</script>", page_html(), re.S)
+        self.assertEqual(len(scripts), len(PAGE_SCRIPTS))
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "page.js"
-            path.write_text(script, encoding="utf-8")
-            done = subprocess.run([node, "--check", str(path)], capture_output=True,
-                                  text=True, encoding="utf-8", errors="replace")
-        self.assertEqual(done.returncode, 0, done.stderr[-600:])
+            for name, script in zip(PAGE_SCRIPTS, scripts):
+                path = Path(tmp) / name
+                path.write_text(script, encoding="utf-8")
+                done = subprocess.run([node, "--check", str(path)], capture_output=True,
+                                      text=True, encoding="utf-8", errors="replace")
+                self.assertEqual(done.returncode, 0, f"{name}: {done.stderr[-600:]}")
 
 
 class TestTheEndpoints(GateCase):
