@@ -90,6 +90,43 @@ class TestThePageFiles(unittest.TestCase):
                 ui.shutdown()
 
 
+class TestThePalette(unittest.TestCase):
+    """Every colour of the page is named once at the top of page.css, and the dark scheme
+    is one block that renames some of them - so what the dark scheme changes, and what it
+    does not, can be read in one place."""
+
+    def setUp(self) -> None:
+        self.css = re.sub(r"/\*.*?\*/", "", pagejs.source("page.css"), flags=re.S)
+        self.light, self.dark = pagejs.palette()
+
+    def test_the_dark_scheme_is_one_block_of_names(self):
+        self.assertEqual(self.css.count("prefers-color-scheme"), 1)
+        block = re.search(r"@media\(prefers-color-scheme:dark\)\{(.*?\})\}", self.css, re.S).group(1)
+        self.assertTrue(block.startswith(":root{"))
+        declared = [d.split(":", 1)[0].strip() for d in block[6:-1].split(";") if ":" in d]
+        self.assertTrue(declared and all(name.startswith("--") for name in declared), declared)
+        # It only renames: nothing appears in the dark that the light did not name.
+        self.assertLessEqual(set(declared), set(self.light))
+
+    def test_no_rule_writes_a_colour_of_its_own(self):
+        rules = re.sub(r"(?<![\w-]):root\{.*?\}|@media\(prefers-color-scheme:dark\)\{.*?\}\}", "",
+                       self.css, flags=re.S)
+        literals = re.findall(r"[^{};]*(?:#[0-9a-fA-F]{3,8}\b|rgba?\()[^;}]*", rules)
+        # The one exception, explained where it is: ::backdrop inherits nothing until
+        # Chrome 122, not even the names in :root.
+        self.assertEqual([x.strip() for x in literals], ["background:rgba(0,0,0,.35)"])
+
+    def test_every_name_used_is_defined_and_every_name_defined_is_used(self):
+        used = set(re.findall(r"var\((--[\w-]+)\)", self.css))
+        self.assertLessEqual(used, set(self.light))
+        self.assertEqual(set(self.light) - used, set())
+
+    def test_both_schemes_keep_their_words_readable(self):
+        """The two ends of the palette, as they were before it was named."""
+        self.assertEqual((self.light["--page"], self.light["--ink"]), ("#f6f7f9", "#16181d"))
+        self.assertEqual((self.dark["--page"], self.dark["--ink"]), ("#15171c", "#e8eaed"))
+
+
 class TestTheFixtures(unittest.TestCase):
     def test_they_are_what_the_server_answers(self):
         """Seeded into a state directory and read back through the real endpoint, every

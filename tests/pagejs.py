@@ -66,6 +66,20 @@ def scripts() -> str:
     return "".join(source(name) for name in approval.PAGE_SCRIPTS)
 
 
+def palette() -> tuple[dict[str, str], dict[str, str]]:
+    """The page's colour names, as the light scheme has them and as the dark one does
+    (the light ones with the dark block's on top) - see the top of page.css."""
+    css = re.sub(r"/\*.*?\*/", "", source("page.css"), flags=re.S)
+    light = re.search(r"(?<![\w-]):root\{(.*?)\}", css, re.S).group(1)
+    dark = re.search(r"@media\(prefers-color-scheme:dark\)\{:root\{(.*?)\}\}", css, re.S).group(1)
+
+    def names(body: str) -> dict[str, str]:
+        pairs = (d.split(":", 1) for d in body.split(";") if ":" in d)
+        return {k.strip(): " ".join(v.split()) for k, v in pairs if k.strip().startswith("--")}
+
+    return names(light), {**names(light), **names(dark)}
+
+
 def by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Every fixture by its card key: the request id, or run-<plan_id> for a run."""
     out = {d["id"]: d for d in data["requests"]}

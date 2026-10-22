@@ -1351,7 +1351,7 @@ class TestOnlyTheCardThatChangedIsRedrawn(unittest.TestCase):
     def test_the_line_between_cards_and_the_notices_are_not_cards(self):
         """The rule belongs to the second of two cards; the error line and the hint are
         their own elements, so showing or changing them redraws nothing."""
-        self.assertIn(".item+.item{border-top:1px solid #ccd0d5;", pagejs.source("page.css"))
+        self.assertIn(".item+.item{border-top:1px solid var(--rule);", pagejs.source("page.css"))
         self.assertIn("if(err.textContent!==state.lastError)err.textContent=state.lastError;",
                       self.board)
         self.assertIn("if(hint.getAttribute('data-src')!==text)", self.board)

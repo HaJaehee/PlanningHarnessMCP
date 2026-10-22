@@ -1347,17 +1347,20 @@ class TestPageTemplate(unittest.TestCase):
         css = pagejs.source("page.css")
         start = css.index(".tcbtn,.dwbtn{")
         rule = css[start:css.index("}", start)]
-        for piece in ("font-weight:700", "border:1px solid", "linear-gradient(",
-                      "box-shadow:0 1px 2px"):
+        for piece in ("font-weight:700", "border:1px solid var(--btn-edge)",
+                      "background:var(--btn-face)", "box-shadow:var(--btn-shadow)"):
             self.assertIn(piece, rule, piece)
+        light, dark = pagejs.palette()
+        self.assertEqual(light["--btn-face"], "linear-gradient(#fff,#e1e4e8)")
+        self.assertEqual(dark["--btn-face"], "linear-gradient(#3b414b,#2a2e36)")
+        for scheme in (light, dark):
+            self.assertTrue(scheme["--btn-shadow"].startswith("0 1px 2px"))
         for selector in (".tcbtn{", ".dwbtn{", ".tcbtn,.dwbtn{"):
             at = css.index(selector)
             self.assertNotIn("opacity", css[at:css.index("}", at)], selector)
         self.assertIn('.tcbtn[aria-expanded="true"]', css)
-        dark = css[css.index("@media(prefers-color-scheme:dark){\n  .tcbtn,.dwbtn{"):]
-        self.assertIn("linear-gradient(#3b414b,#2a2e36)", dark[:400])
         # Only the button whose comment is filled turns amber - not the one beside it.
-        self.assertIn(".task.filled .tcbtn:not(.dwadd){", css)
+        self.assertIn(".task.filled .tcbtn:not(.dwadd){background:var(--amber);", css)
 
     def test_the_criterion_has_one_name_wherever_the_user_reads_it(self):
         """Page and chat text alike say 태스크 완료 기준. The one place the shorter form
