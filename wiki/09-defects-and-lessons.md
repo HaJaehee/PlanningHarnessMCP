@@ -645,6 +645,23 @@ kind from any session (`_apply_run_cancels`), and an agent that comes back gets
 when it never does. Every request the human can make of an agent should be answerable
 without that agent.
 
+<a id="d32"></a>
+## D32 — the "agent stopped waiting" chip was taken off by the next poll (3.1.0)
+
+**Symptom:** found while building sample data for the page, not reported. A request whose
+agent had stopped waiting showed its amber chip (에이전트가 대기를 멈췄습니다 · … 채팅창에
+메시지를 입력하시면 진행이 재개됩니다) for one poll; seconds later it was gone, one card at a
+time, until no card on the page said it - and the human lost the one hint that deciding
+needs a nudge in chat to resume.
+**Root cause:** since 3.1.0 `draw()` found the idle text it replaces with
+`root.querySelector('.idle')`. The chip's classes are `chip idle`, so once cards were on the
+page that query found the first chip instead and removed it, on every poll.
+**Fix:** both lookups take only a direct child of `#root` (`':scope>.idle'`).
+**Lesson:** a class name used for two things is a selector that matches both. Source pins could
+not have shown it - the chip's code was there; the page just took the chip away. It showed up
+by drawing fixed sample data for every card and comparing two captures of the same page taken
+seconds apart: the same card had its chip in one and not in the other.
+
 [typescript-sdk#849]: https://github.com/modelcontextprotocol/typescript-sdk/pull/849
 
 ## Where the next bug probably is
@@ -666,6 +683,10 @@ areas still are:
   once (each derives it from the same state file, but only the single-process path is
   tested); `_sync_runs` reads the plan state once more per call, so it shares the
   transient-read weakness below.
+- **What a click does on the approval page** (`form.js`, `board.js`, `app.js`). The cards
+  are tested by drawing them; what a click, a keystroke or a redraw does is pinned by its
+  code and checked by hand in a browser, never run by a test. [D32](#d32) lived there. A
+  test DOM, or a browser driven from the suite, would close it.
 - **`Store.load` treats a read error like a corrupt file.** A transient `OSError` (a sharing
   violation on Windows) quarantines a state file that may be perfectly good. Seen once as a
   one-off test failure during 3.0 and not reproduced; not fixed here.

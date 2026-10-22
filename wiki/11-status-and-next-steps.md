@@ -2,6 +2,14 @@
 
 ## Current state (as of version 3.2.0, 2026-10-21)
 
+- **Unreleased, 2026-10-22 - the approval page rebuilt as files.** `planning/web/` holds the
+  page as HTML, CSS and nine scripts; cards are `html` templates, buttons use `data-act`,
+  every colour is named once with the dark scheme in one block. Nothing on screen changed
+  (shown step by step - [07](07-testing.md#the-approval-page-planningweb)), except one fix:
+  the "agent stopped waiting" chip no longer vanishes ([D32](09-defects-and-lessons.md#d32)).
+  948 unit tests + 7 smoke. Committed on `develop` in steps; not pushed; no version bump,
+  the package was not rebuilt. Four colours have no dark variant and never had (top of
+  `page.css`) - a candidate for a small visible change of its own.
 - **3.2.0 - a run whose agent stopped can be cancelled.** A run card's stop waits for the
   agent's next report, so an agent that failed mid-plan left its card on the page for good
   ([D31](09-defects-and-lessons.md#d31)). 계획 강제 취소 takes the card off at once and

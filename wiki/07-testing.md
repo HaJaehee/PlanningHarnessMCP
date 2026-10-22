@@ -1,7 +1,8 @@
 # 07 · Testing
 
 **887 unit tests + 7 end-to-end smoke tests, all passing** (as of 3.2.0; one unit test skips
-where the OS will not let it create a symlink). Standard-library
+where the OS will not let it create a symlink). 948 since the approval page was rebuilt as
+files (unreleased); the page tests among them skip where node is missing. Standard-library
 `unittest` only. This project's defect history proves the rule: *test the seam before you
 trust it.* See [09-defects-and-lessons.md](09-defects-and-lessons.md).
 
@@ -216,6 +217,44 @@ catch things unit tests cannot (threading, real ports, cross-process locks):
 4. For concurrency, use `threading.Barrier`/`Event` to force real overlap; for failure paths,
    `mock.patch.object` the *specific* store's `_write` (never `os.replace` globally — `os` is
    shared and you'll break the other store and test the wrong thing).
+
+## The approval page (`planning/web/`)
+
+What a card shows is tested by drawing it. `tests/pagejs.py` starts one node process
+(`tests/web/runner.js`) that loads the page's scripts in page order, with just enough of a
+browser around them, and calls the page's own functions: `card_of("r1plan")` draws a fixture
+card and parses it, `action_of(button)` reads what a button does. Every such test is
+`@needs_node` and skips where node is missing - which is the target machine.
+
+| File | Covers |
+|---|---|
+| `tests/web/fixtures.json` | one `/api/pending` entry for each kind of card; checked against the real endpoint |
+| `tests/web/golden.txt` | the exact HTML of all 16 cards, one tag per line |
+| `tests/test_page.py` | the files and how they are served, the palette, the fixtures, the golden |
+| `tests/test_page_cards.py` | what each card shows, and what each of its buttons does |
+
+A change meant to alter what the page shows records the golden again, and its diff is then
+exactly the visible change:
+
+```bash
+PLANNING_MCP_RECORD_GOLDEN=1 python -m unittest tests.test_page
+```
+
+What a click, a keystroke or a redraw does (`form.js`, `board.js`, `app.js`) does not run
+without a browser. Those tests pin the code that does it, and the click-through is done in
+a real browser against the same fixtures:
+
+```bash
+python tools/page_preview.py          # http://127.0.0.1:8810/ - every card, working buttons
+```
+
+The rebuild of the page into these files (unreleased, after 3.2.0) was shown not to change
+it, step by step: the assembled page was byte-identical to the old string but for one
+`sourceURL` line; the split and the templates drew `golden.txt` byte for byte (the templates
+with each `onclick` mechanically rewritten to `data-act`); every element's computed style,
+light and dark, before and after typing and after a reload, matched captures taken before the
+work began; and the stylesheet's palette was compared declaration by declaration for every
+selector in both schemes, `:hover` included.
 
 ## Browser verification (manual, for the approval page)
 

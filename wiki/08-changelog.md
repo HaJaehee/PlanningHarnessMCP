@@ -565,6 +565,33 @@ Verified in a real browser - see [06](06-human-in-the-loop.md#the-run-card-310).
 - Tests: 14 new in `tests/test_gate_and_run.py`; the test fake keeps a cancel apart from a
   stop as the real board does. 887 unit tests.
 
+### Unreleased (after 3.2.0) — the approval page as files
+
+Nothing the page shows or sends changed, and nothing the model reads. Committed on
+`develop` step by step, the suite green at each:
+
+- **The page is plain files.** `planning/web/`: `page.html`, `page.css` and nine scripts
+  (`state`, `html`, `format`, `labels`, `views`, `drafts`, `form`, `board`, `app`) in place of
+  a 1,168-line string in `approval.py` whose JavaScript had every escape written twice.
+  Still one response with everything inline and no static routes, read once at import - a
+  process serves the page that matches its own endpoints. Each file carries a `sourceURL`,
+  so the browser's developer tools show it by name, at its own line numbers.
+- **Cards are `html` templates.** The template escapes every `${value}`, in place of 55
+  hand-placed `esc()` calls; buttons say `data-act` with `data-*` arguments and one click
+  listener runs them, in place of 47 inline `onclick` strings. The views draw without
+  touching the page; what the page keeps between polls is one `state` object.
+- **One palette.** Every colour is named once at the top of `page.css`; the dark scheme is
+  one block of renamed colours instead of 22 `@media` blocks. Four colours have no dark
+  variant and never had - the line between cards, the amber of an edited criterion's label
+  and of the agent note's edge, the error line - and are now visible in one place.
+- **Fix:** the "agent stopped waiting" chip was taken off by the next poll
+  ([D32](09-defects-and-lessons.md#d32)).
+- **Tests:** what each card shows is asserted on the card the page's own code draws
+  (`tests/pagejs.py` runs it under node, skipped where node is missing) in place of ~190
+  source-spelling pins; `tests/web/golden.txt` holds every card's exact HTML;
+  `tools/page_preview.py` serves `tests/web/fixtures.json` in a browser. 948 unit tests.
+  How each step was shown not to change the page: [07](07-testing.md#the-approval-page-planningweb).
+
 ---
 
 ## Git commit ↔ version map

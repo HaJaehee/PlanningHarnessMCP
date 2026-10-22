@@ -128,9 +128,11 @@ planning/
   loopguard.py            서킷 브레이커 카운터 (1.16.0)
   choices.py              태스크별 대안 검증 (2.0.0)
   evidence.py             완료 기준 검증, 증거 반복 검사, 허용 폴더 안 파일 확인 (3.0.0)
+  approval.py             승인 대기열, 실행 중 계획 보드, 승인 페이지 서버
+  web/                    승인 페이지 원본: page.html, page.css, 스크립트 9개 (서버가 한 응답으로 조립)
 state/                    런타임 데이터: plan_state.json, audit.jsonl, approval.json, runs.json (.gitignore 대상)
 tests/                    단위 테스트 스위트 및 stdio 종단 간 스모크 테스트
-tools/                    패키징·설치 검증 도구, loop_report.py (감사 로그 루프 분석)
+tools/                    패키징·설치 검증 도구, loop_report.py (감사 로그 루프 분석), page_preview.py (승인 페이지 미리보기)
 package_source.ps1        tools/make_package.py 실행 래퍼 (Windows)
 agents.md                 에이전트 시스템 프롬프트 원본 (AnythingLLM에 붙여 넣는 파일)
 LICENSE.md                라이선스 (MIT)
