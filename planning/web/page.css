@@ -74,8 +74,12 @@ textarea{width:100%;box-sizing:border-box;min-height:64px;border-radius:8px;padd
 .row{display:flex;gap:.6rem;flex-wrap:wrap}
 button{flex:1 1 auto;min-width:140px;padding:.85rem 1rem;border:0;border-radius:8px;
        font:inherit;font-weight:600;cursor:pointer;font-size:.95rem}
-.ok{background:var(--green);color:var(--on-solid)}.no{background:var(--red);color:var(--on-solid)}
-.rev{background:var(--amber);color:var(--on-solid)}
+/* The three decision buttons, named with the element. What the server found about a file
+   is a line with the tone "ok" too (.ck.ok), and a bare .ok painted that line as the
+   approve button: green text on a green bar, unreadable. */
+button.ok{background:var(--green);color:var(--on-solid)}
+button.no{background:var(--red);color:var(--on-solid)}
+button.rev{background:var(--amber);color:var(--on-solid)}
 button:disabled{opacity:.5;cursor:default}
 /* A decision button: what it is, then one line for each thing it carries. */
 .bt,.bd{display:block}

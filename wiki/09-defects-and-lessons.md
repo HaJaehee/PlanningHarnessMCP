@@ -662,6 +662,23 @@ not have shown it - the chip's code was there; the page just took the chip away.
 by drawing fixed sample data for every card and comparing two captures of the same page taken
 seconds apart: the same card had its chip in one and not in the other.
 
+<a id="d33"></a>
+## D33 — what the server confirmed was green text on a green bar (3.0.0)
+
+**Symptom:** found by opening a real completion report after the page rebuild. Every line
+of a file the server confirmed (✔ … · 이 태스크 중 생성/변경됨, ✔ … · 폴더가 있음) showed as
+a solid green bar with nothing readable on it - on the one part of the report that is not
+the agent's word.
+**Root cause:** the line's tone is the class `ok` (`ck ok`), and the approve button's rule
+was a bare `.ok{background:green;color:white}`. `.ck.ok` then set the text to the same
+green. Since 3.0.0; the rebuild kept it exactly, because it was checked against the old
+page, not against what a page should look like.
+**Fix:** the decision buttons' rules name the element: `button.ok`, `button.no`,
+`button.rev`. Only the three check lines' backgrounds changed on the fixtures page.
+**Lesson:** the second class-name collision on this page after [D32](#d32). Equivalence with
+the old page proves a refactor changed nothing - including nothing that was wrong. Someone
+still has to look at the real page.
+
 [typescript-sdk#849]: https://github.com/modelcontextprotocol/typescript-sdk/pull/849
 
 ## Where the next bug probably is

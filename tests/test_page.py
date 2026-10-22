@@ -121,6 +121,16 @@ class TestThePalette(unittest.TestCase):
         self.assertLessEqual(used, set(self.light))
         self.assertEqual(set(self.light) - used, set())
 
+    def test_a_button_colour_reaches_buttons_only(self):
+        """A file the server confirmed is a line with the tone "ok" (.ck.ok). A bare .ok -
+        the approve button's rule - painted that line green on green, so the one thing on
+        a completion report that is not the agent's word could not be read (3.0.0 until
+        the page was rebuilt; the rebuild kept it, faithfully, until the real page was
+        looked at)."""
+        for name in ("ok", "no", "rev"):
+            self.assertIn(f"button.{name}{{", self.css)
+            self.assertIsNone(re.search(rf"(^|[}},\s])\.{name}\{{", self.css), name)
+
     def test_both_schemes_keep_their_words_readable(self):
         """The two ends of the palette, as they were before it was named."""
         self.assertEqual((self.light["--page"], self.light["--ink"]), ("#f6f7f9", "#16181d"))
