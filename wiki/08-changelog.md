@@ -581,9 +581,15 @@ Nothing the page shows or sends changed, and nothing the model reads. Committed 
   listener runs them, in place of 47 inline `onclick` strings. The views draw without
   touching the page; what the page keeps between polls is one `state` object.
 - **One palette.** Every colour is named once at the top of `page.css`; the dark scheme is
-  one block of renamed colours instead of 22 `@media` blocks. Four colours have no dark
-  variant and never had - the line between cards, the amber of an edited criterion's label
-  and of the agent note's edge, the error line - and are now visible in one place.
+  one block of renamed colours instead of 22 `@media` blocks.
+- **Four places get a dark scheme for the first time** - the one visible change on purpose
+  besides the fixes below. The line between cards was light grey on the dark card (contrast
+  10.4; now 1.5, as in the light scheme); an edited criterion's label and the agent note's
+  edge were dark amber (label 2.7, under the 4.5 small text needs; now the amber every
+  other dark-scheme note uses, 7.2); the line that says a click failed was a light pink band
+  (now dark red with light red words, 5.9 - the light scheme's is 5.8). The light scheme is
+  unchanged. Now only the solid buttons and two shadows are the same in both schemes, and a
+  test holds it there.
 - **Fixes**, found by looking at the page rather than at its code: the "agent stopped
   waiting" chip was taken off by the next poll ([D32](09-defects-and-lessons.md#d32));
   on a completion report every file the server confirmed was green text on a green bar

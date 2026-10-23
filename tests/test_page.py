@@ -131,6 +131,25 @@ class TestThePalette(unittest.TestCase):
             self.assertIn(f"button.{name}{{", self.css)
             self.assertIsNone(re.search(rf"(^|[}},\s])\.{name}\{{", self.css), name)
 
+    def test_every_text_line_and_wash_has_a_dark_value(self):
+        """Only the solid buttons and two shadows look the same in both schemes. Four
+        colours used to: the line between cards stayed light grey on the dark card, an
+        edited criterion's label and the agent note's edge stayed dark amber, and the error
+        line stayed a light pink band."""
+        same = {name for name in self.light if self.light[name] == self.dark[name]}
+        self.assertEqual(same, {"--sub", "--amber", "--green", "--red", "--on-solid",
+                                "--amber-btn-shadow", "--dialog-shadow"})
+        for rule in (".item+.item{border-top:1px solid var(--rule);",
+                     ".summary.agent{border-left:3px solid var(--amber-ink)}",
+                     ".dw.changed .dwl{color:var(--amber-ink);",
+                     ".err{background:var(--red-wash);color:var(--red-ink);"):
+            self.assertIn(rule, self.css)
+        # The solid colours are left to the buttons, which carry white words on them.
+        for name in ("--amber", "--green", "--red"):
+            users = re.findall(rf"([^{{}}]+)\{{[^}}]*var\({name}\)", self.css)
+            self.assertTrue(users and all(u.strip().startswith(("button.", ".task.filled"))
+                                          for u in users), (name, users))
+
     def test_both_schemes_keep_their_words_readable(self):
         """The two ends of the palette, as they were before it was named."""
         self.assertEqual((self.light["--page"], self.light["--ink"]), ("#f6f7f9", "#16181d"))

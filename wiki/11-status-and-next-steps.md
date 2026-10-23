@@ -10,9 +10,11 @@
   ([D32](09-defects-and-lessons.md#d32)); confirmed files on a completion report are no
   longer green on green ([D33](09-defects-and-lessons.md#d33)); no note about picking an
   option under a completion report. A real completion report - rework sent back, redone,
-  approved - was clicked through against a running server. 949 unit tests + 7 smoke. Committed on `develop` in steps; not pushed; no version bump,
-  the package was not rebuilt. Four colours have no dark variant and never had (top of
-  `page.css`) - a candidate for a small visible change of its own.
+  approved - was clicked through against a running server. The four colours that had no
+  dark variant (the line between cards, an edited criterion's label, the agent note's edge,
+  the error line) have one now, at about their light-scheme contrast. 950 unit tests +
+  7 smoke. Committed on `develop` in steps; not pushed; no version bump, the package was
+  not rebuilt.
 - **3.2.0 - a run whose agent stopped can be cancelled.** A run card's stop waits for the
   agent's next report, so an agent that failed mid-plan left its card on the page for good
   ([D31](09-defects-and-lessons.md#d31)). 계획 강제 취소 takes the card off at once and
