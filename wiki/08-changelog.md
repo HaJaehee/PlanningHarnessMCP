@@ -584,8 +584,11 @@ Nothing the page shows or sends changed, and nothing the model reads. Committed 
   one block of renamed colours instead of 22 `@media` blocks. Four colours have no dark
   variant and never had - the line between cards, the amber of an edited criterion's label
   and of the agent note's edge, the error line - and are now visible in one place.
-- **Fix:** the "agent stopped waiting" chip was taken off by the next poll
-  ([D32](09-defects-and-lessons.md#d32)).
+- **Fixes**, found by looking at the page rather than at its code: the "agent stopped
+  waiting" chip was taken off by the next poll ([D32](09-defects-and-lessons.md#d32));
+  on a completion report every file the server confirmed was green text on a green bar
+  ([D33](09-defects-and-lessons.md#d33)); and the note about picking an option showed
+  under a completion report, which has no options to pick.
 - **Tests:** what each card shows is asserted on the card the page's own code draws
   (`tests/pagejs.py` runs it under node, skipped where node is missing) in place of ~190
   source-spelling pins; `tests/web/golden.txt` holds every card's exact HTML;

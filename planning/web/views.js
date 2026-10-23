@@ -308,8 +308,16 @@ const CRITERION_HINT=html`[완료 기준 추가] 또는 [수정]으로 태스크
   있습니다. 적은 기준은 승인과 함께 반영되며, 수정 요청을 거치지 않습니다.<br>`;
 const WAIT_HINT=html`결정하시기 전까지 해당 에이전트는 후속 작업을 진행하지 못합니다. 요청은 응답하실
   때까지 사라지지 않으니 천천히 검토해 주시기 바랍니다.`;
+// Whether a card shows options to pick: a plan's task whose choice is still open, or a
+// halt card's draft. A completion report only names the option that was carried out, so
+// a note about picking one would describe radios that are not there.
+function showsChoice(d){
+  if(d.decided)return false;
+  if(d.phase==='PLAN')return (d.tasks||[]).some(t=>hasChoice(t)&&t.chosen==null);
+  return d.phase==='HALT'&&!!d.draft&&(d.tasks||[]).some(hasChoice);
+}
 function hintHtml(list,runs){
-  const anyChoice=list.some(d=>!d.decided&&(d.tasks||[]).some(hasChoice));
+  const anyChoice=list.some(showsChoice);
   const anyPlan=list.some(d=>!d.decided&&d.phase==='PLAN'&&(d.tasks||[]).length>0);
   return html`${runs.length>0&&RUN_HINT}${list.length>0&&html`${anyChoice&&CHOICE_HINT}${REVIEW_HINT}
     ${anyPlan&&CRITERION_HINT}${WAIT_HINT}`}`;

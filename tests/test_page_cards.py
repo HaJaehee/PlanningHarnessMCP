@@ -457,6 +457,14 @@ class TestTheNotesUnderTheCards(CardCase):
             self.assertIn(note, both)
         self.assertNotIn(run_note, self.hint(requests, []))
         self.assertNotIn(criterion_note, self.hint(completion, []))
+        # The choice note only where radios are drawn: not on a completion report, which
+        # names the option carried out, nor on a halt card with no draft to approve.
+        self.assertNotIn(choice_note, self.hint(completion, []))
+        by_id = pagejs.by_id(data)
+        self.assertIn(choice_note, self.hint([by_id["r4halt"]], []))
+        self.assertNotIn(choice_note, self.hint([dict(by_id["r4halt"], draft=False)], []))
+        chosen = [dict(t, chosen=1) if t.get("options") else t for t in by_id["r1plan"]["tasks"]]
+        self.assertNotIn(choice_note, self.hint([dict(by_id["r1plan"], tasks=chosen)], []))
         decided = [dict(d, decided="APPROVED") for d in requests]
         self.assertNotIn(choice_note, self.hint(decided, []))
         self.assertNotIn(criterion_note, self.hint(decided, []))
