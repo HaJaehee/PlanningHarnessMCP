@@ -5,9 +5,12 @@
 - **Unreleased, 2026-10-22 - the approval page rebuilt as files.** `planning/web/` holds the
   page as HTML, CSS and nine scripts; cards are `html` templates, buttons use `data-act`,
   every colour is named once with the dark scheme in one block. Nothing on screen changed
-  (shown step by step - [07](07-testing.md#the-approval-page-planningweb)), except one fix:
-  the "agent stopped waiting" chip no longer vanishes ([D32](09-defects-and-lessons.md#d32)).
-  948 unit tests + 7 smoke. Committed on `develop` in steps; not pushed; no version bump,
+  (shown step by step - [07](07-testing.md#the-approval-page-planningweb)), except three
+  fixes found by looking at the page: the "agent stopped waiting" chip no longer vanishes
+  ([D32](09-defects-and-lessons.md#d32)); confirmed files on a completion report are no
+  longer green on green ([D33](09-defects-and-lessons.md#d33)); no note about picking an
+  option under a completion report. A real completion report - rework sent back, redone,
+  approved - was clicked through against a running server. 949 unit tests + 7 smoke. Committed on `develop` in steps; not pushed; no version bump,
   the package was not rebuilt. Four colours have no dark variant and never had (top of
   `page.css`) - a candidate for a small visible change of its own.
 - **3.2.0 - a run whose agent stopped can be cancelled.** A run card's stop waits for the
