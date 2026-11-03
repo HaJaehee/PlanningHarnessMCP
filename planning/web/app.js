@@ -42,8 +42,8 @@ async function poll(){
   }catch(e){}
 }
 const KILL_ASK='실행 중인 계획을 강제로 취소하시겠습니까?\n\n에이전트의 보고를 기다리지 않고 '+
-  '계획을 닫습니다. 되돌릴 수 없으며, 에이전트가 다시 보고하면 계획이 취소되었다는 '+
-  '답을 받습니다.';
+  '계획을 종료합니다. 이 작업은 되돌릴 수 없으며, 이후 에이전트가 다시 보고하면 계획이 취소되었다는 '+
+  '응답을 받게 됩니다.';
 // A stop, a note, taking either back, or closing the plan, for a running plan's card.
 async function control(pid,action){
   if(state.busy)return;
