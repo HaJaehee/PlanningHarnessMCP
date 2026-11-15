@@ -88,8 +88,9 @@ def by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 class PageJS:
-    def __init__(self) -> None:
-        scripts = [str(approval.WEB_DIR / name) for name in approval.PAGE_SCRIPTS]
+    def __init__(self, extra: tuple[str, ...] = ()) -> None:
+        names = approval.PAGE_SCRIPTS + tuple(extra)
+        scripts = [str(approval.WEB_DIR / name) for name in names]
         env = dict(os.environ, TZ="UTC", PAGE_VERSION=PAGE_VERSION)
         self.proc = subprocess.Popen(
             [NODE, str(RUNNER), *scripts], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -131,6 +132,18 @@ def page() -> PageJS:
         _page = PageJS()
         atexit.register(_page.close)
     return _page
+
+
+_workflow_page: PageJS | None = None
+
+
+def workflow_page() -> PageJS:
+    """The page as a server with ADVANCED_WORKFLOW_PLANNING=1 serves it (3.3.0)."""
+    global _workflow_page
+    if _workflow_page is None:
+        _workflow_page = PageJS(approval.WORKFLOW_SCRIPTS)
+        atexit.register(_workflow_page.close)
+    return _workflow_page
 
 
 # ---- what the page draws -------------------------------------------------------

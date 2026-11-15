@@ -42,8 +42,11 @@ class TestThePageFiles(unittest.TestCase):
     def test_every_script_in_the_folder_is_loaded_and_only_those(self):
         """A script added to planning/web but not to PAGE_SCRIPTS would never run."""
         on_disk = sorted(p.name for p in approval.WEB_DIR.glob("*.js"))
-        self.assertEqual(sorted(approval.PAGE_SCRIPTS), on_disk)
-        self.assertEqual(sorted(p.name for p in approval.WEB_DIR.glob("*.css")), ["page.css"])
+        # 3.3: the workflow diagram's script and stylesheet are loaded only with
+        # ADVANCED_WORKFLOW_PLANNING=1 (test_workflow_page.py), but loaded then.
+        self.assertEqual(sorted(approval.PAGE_SCRIPTS + approval.WORKFLOW_SCRIPTS), on_disk)
+        self.assertEqual(sorted(p.name for p in approval.WEB_DIR.glob("*.css")),
+                         sorted(("page.css",) + approval.WORKFLOW_STYLES))
 
     def test_the_page_is_one_response_with_everything_inline(self):
         html = page_html()

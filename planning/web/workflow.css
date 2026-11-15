@@ -1,0 +1,32 @@
+/* The workflow diagram (3.3.0) - included only with ADVANCED_WORKFLOW_PLANNING=1, after
+   page.css, whose colour names it uses; it names none of its own. */
+.wf{margin:0 0 1.25rem}
+.wfsvg{background:var(--well);border-radius:8px;padding:.75rem;overflow-x:auto;
+       font-size:.85rem;text-align:center;min-height:2.5rem}
+.wfsvg svg{max-width:100%;height:auto}
+.wfsvg g.node[data-node]{cursor:pointer}
+.wfsvg g.node[data-node]:focus{outline:none}
+.wfsvg g.node[data-node]:focus>rect,.wfsvg g.node[data-node]:focus>polygon,
+.wfsvg g.node[data-node]:focus>circle,.wfsvg g.node[data-node]:focus>path,
+.wfsvg g.node[data-node]:hover>rect,.wfsvg g.node[data-node]:hover>polygon,
+.wfsvg g.node[data-node]:hover>circle,.wfsvg g.node[data-node]:hover>path{
+  stroke:var(--ink)!important;stroke-width:2px!important}
+/* A node that carries a comment: the same amber as a task row that does. */
+.wfsvg g.node.wfmark>rect,.wfsvg g.node.wfmark>polygon,.wfsvg g.node.wfmark>circle,
+.wfsvg g.node.wfmark>path{stroke:var(--amber-ink)!important;stroke-width:3px!important}
+/* A node that is new or relabelled since the human sent the workflow back. */
+.wfsvg g.node.wfchanged>rect,.wfsvg g.node.wfchanged>polygon,.wfsvg g.node.wfchanged>circle,
+.wfsvg g.node.wfchanged>path{stroke-dasharray:5 3;stroke:var(--green-ink)!important;
+  stroke-width:2.5px!important}
+.wfsvg pre{text-align:left;margin:.5rem 0}
+.wfhint{font-size:.8rem;opacity:.65;margin:.45rem 0 .3rem;line-height:1.5}
+.wfby{font-size:.82rem;color:var(--amber-ink);margin:0 0 .45rem;line-height:1.5}
+.wfraw{font-size:.82rem;margin:0 0 .5rem}
+.wfraw pre{font-size:.8rem;margin:.35rem 0 0}
+.wfcs{display:flex;flex-direction:column;gap:.4rem}
+.wfc{display:flex;gap:.5rem;align-items:baseline}
+.wfc.hid{display:none}
+.wfc .dwl{flex:0 0 auto;max-width:40%}
+.wfc textarea{min-height:2.6rem;margin:0;flex:1 1 auto}
+.wfchips{display:flex;flex-wrap:wrap;gap:.35rem;margin:.4rem 0 0}
+.wf .note{margin-left:0}

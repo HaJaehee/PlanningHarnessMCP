@@ -59,11 +59,19 @@ INCLUDE_DIRS = [
     ("tools", "*.py"),
     ("docs", "*.md"),
 ]
+# 3.3.0: the bundled browser assets (vendor/manifest.json) - mermaid.js for the approval
+# page with ADVANCED_WORKFLOW_PLANNING=1. The server starts without them; --no-vendor
+# builds the 3.2-sized package for a site that does not turn the feature on.
+VENDOR_DIRS = [
+    ("vendor", "manifest.json"),
+    ("vendor", "*.js"),
+    ("vendor", "LICENSE"),
+]
 
 EXCLUDE_NAMES = {"__pycache__", "state", "dist", ".git", ".venv", "venv"}
 
 
-def collect() -> list[Path]:
+def collect(vendor: bool = True) -> list[Path]:
     files: list[Path] = []
     for name in INCLUDE_FILES:
         path = ROOT / name
@@ -71,7 +79,7 @@ def collect() -> list[Path]:
             files.append(path)
         else:
             print(f"  ! missing, skipped: {name}")
-    for dirname, pattern in INCLUDE_DIRS:
+    for dirname, pattern in INCLUDE_DIRS + (VENDOR_DIRS if vendor else []):
         base = ROOT / dirname
         if not base.is_dir():
             print(f"  ! missing, skipped: {dirname}/")
@@ -178,6 +186,11 @@ def main() -> int:
         metavar="EMBED_ZIP",
         help="Path to the official python-3.x.y-embed-amd64.zip from python.org",
     )
+    parser.add_argument(
+        "--no-vendor", action="store_true",
+        help="Leave out vendor/ (mermaid.js). ADVANCED_WORKFLOW_PLANNING=1 then shows the "
+             "workflow as text.",
+    )
     args = parser.parse_args()
 
     stamp = datetime.date.today().strftime("%Y%m%d")
@@ -197,7 +210,16 @@ def main() -> int:
             return 1
         print(f"  runtime : {embed.name}  ({detail})")
 
-    files = collect()
+    if not args.no_vendor:
+        sys.path.insert(0, str(ROOT / "tools"))
+        from fetch_vendor import MANIFEST, check  # noqa: PLC0415
+        import json  # noqa: PLC0415
+        problems = check(json.loads(MANIFEST.read_text(encoding="utf-8")))
+        if problems:
+            print("  ! vendor/ does not match vendor/manifest.json: " + "; ".join(problems))
+            print("    run: python tools/fetch_vendor.py   (or package with --no-vendor)")
+            return 1
+    files = collect(vendor=not args.no_vendor)
     if not files:
         print("Nothing to package.")
         return 1

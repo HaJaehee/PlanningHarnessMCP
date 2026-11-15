@@ -1,0 +1,20 @@
+{
+  "_about": "Third-party files shipped with planning-mcp. The Python server needs none of them; mermaid is used by the approval page only with ADVANCED_WORKFLOW_PLANNING=1. Fetched on the build machine by tools/fetch_vendor.py, checked by tools/verify_install.py.",
+  "mermaid": {
+    "version": "11.4.1",
+    "license": "MIT",
+    "used_when": "ADVANCED_WORKFLOW_PLANNING=1",
+    "files": [
+      {
+        "path": "vendor/mermaid/mermaid.min.js",
+        "source": "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js",
+        "sha256": "a43bc1afd446f9c4cc66ac5dd45d02e8d65e26fc5344ec0ef787f88d6ddb6f9e"
+      },
+      {
+        "path": "vendor/mermaid/LICENSE",
+        "source": "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/LICENSE",
+        "sha256": "ec9fb67dcb25eccc416ed56e1aab819222c805a2a4bfe4cb19e7556bf2ffde80"
+      }
+    ]
+  }
+}

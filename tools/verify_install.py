@@ -101,6 +101,8 @@ def check_no_third_party() -> bool:
         "planning.handlers",
         "planning.protocol",
         "planning.transport",
+        "planning.approval",
+        "planning.workflow",
     ]
     before = set(sys.modules)
     try:
@@ -127,6 +129,46 @@ def check_no_third_party() -> bool:
         not foreign,
         "" if not foreign else f"unexpected: {sorted(foreign)}",
     )
+
+
+def check_vendor() -> bool:
+    """The bundled browser assets match the hashes vendor/manifest.json pins (3.3.0).
+
+    Only mermaid.js, and only used with ADVANCED_WORKFLOW_PLANNING=1. A package built
+    with --no-vendor has no vendor/ at all, which is fine; a file that is there and does
+    not match is not.
+    """
+    manifest_path = ROOT / "vendor" / "manifest.json"
+    if not manifest_path.exists():
+        return record("Bundled browser assets", True, "none (no vendor/)")
+    import json  # noqa: PLC0415
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return record("Bundled browser assets", False, f"vendor/manifest.json: {exc}")
+    bad, missing, ok = [], [], 0
+    for entry in manifest.values():
+        if not isinstance(entry, dict):
+            continue
+        for item in entry.get("files", []):
+            path = ROOT / item.get("path", "")
+            if not path.is_file():
+                missing.append(item.get("path"))
+                continue
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if digest != item.get("sha256"):
+                bad.append(item.get("path"))
+            else:
+                ok += 1
+    if bad:
+        return record("Bundled browser assets", False, f"hash mismatch: {', '.join(bad)}")
+    if missing:
+        return record(
+            "Bundled browser assets", True,
+            f"missing {', '.join(missing)} - ADVANCED_WORKFLOW_PLANNING=1 will show the "
+            "workflow as text",
+        )
+    return record("Bundled browser assets", True, f"{ok} files match vendor/manifest.json")
 
 
 def run_child(label: str, argv: list[str]) -> bool:
@@ -232,6 +274,8 @@ def main() -> int:
     print("\nIntegrity")
     check_manifest()
 
+    check_vendor()
+
     print("\nImports")
     check_no_third_party()
 
@@ -243,6 +287,7 @@ def main() -> int:
     run_child("multi-plan smoke test", ["tests/smoke_multi_plan.py"])
     run_child("SSE transport smoke test", ["tests/smoke_sse.py"])
     run_child("gate-and-run smoke test", ["tests/smoke_gate_and_run.py"])
+    run_child("workflow smoke test", ["tests/smoke_workflow.py"])
 
     failures = [label for label, ok, _ in _results if not ok]
     print("\n" + "=" * 68)
