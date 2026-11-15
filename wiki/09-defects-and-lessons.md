@@ -679,6 +679,21 @@ page, not against what a page should look like.
 the old page proves a refactor changed nothing - including nothing that was wrong. Someone
 still has to look at the real page.
 
+<a id="d34"></a>
+## D34 — a label that began with a backtick could not be drawn (3.3, before release)
+
+**Symptom:** none in use - found before release by parsing every canonical text the guard
+produced (the lint corpus plus a fuzz run, 610 texts) with the bundled mermaid.js. 12 failed,
+all `N1["`..."]`.
+**Root cause:** in Mermaid `"`` ` `` opens a Markdown string that must close with `` ` ``"`. The
+guard escaped `" < > #` but not the backtick, so a label the model began with one was
+canonical by the guard's own regex and still a parse error.
+**Fix:** `` ` `` is written `#96;`. The rerun: 611 of 611 parse.
+**Lesson:** the guard's promise is "what reaches Mermaid parses". A test that checks the
+guard's output against the guard's own idea of canonical cannot keep that promise; only the
+real parser can. Rerun the check whenever `escape_label` or the emitted syntax changes, and
+whenever mermaid's version moves.
+
 [typescript-sdk#849]: https://github.com/modelcontextprotocol/typescript-sdk/pull/849
 
 ## Where the next bug probably is
@@ -694,6 +709,11 @@ areas still are:
   allowed folder is on a share that disappears mid-plan (the check is bounded and reports
   `unknown`, but only the unit path is tested, not a real stalled share); `claims_withdrawn`
   when the model corrects a path rather than dropping it.
+- **The workflow meeting other features (3.3)**: a workflow revision with a choice still
+  open on a task, or on a plan being repaired after a failure (the drawing is relabelled, not
+  redrawn); two pages on different flags serving one state directory (only the owner's flag
+  decides what the human sees); mermaid versions other than 11.4.1 (the D34 check must be
+  rerun).
 - **The run card meeting other features (3.1.0)**: a stop or a note asked while a rework
   from the completion report is in flight; a note on a plan whose remaining tasks offer a
   choice (a rewritten task drops its options); two server processes syncing the board at

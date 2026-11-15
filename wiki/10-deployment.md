@@ -15,6 +15,7 @@ no renamed extensions). The only real variable is the Python interpreter, which 
 |---|---|
 | `make_package.py` | Builds `dist/planning-mcp-<ver>-<date>.zip` (allow-list of plain-text files) + `MANIFEST.txt` of per-file SHA-256. `--with-python <embed.zip>` bundles the official python.org embeddable distribution **verbatim** (stored, not recompressed) so its checksum can be verified against python.org. |
 | `setup_runtime.py` | On the target: unpacks the bundled interpreter and patches `python3xx._pth` (adds `..`) so `import planning` resolves under isolated mode. Idempotent; self-repairs a BOM-damaged or re-extracted `._pth`. Refuses to overwrite a running interpreter. |
+| `fetch_vendor.py` | (3.3) Build machine only. Downloads `vendor/manifest.json`'s files (mermaid 11.4.1 + its LICENSE) and refuses any whose SHA-256 is not the pinned one; `--pin` records the hashes of a new version, `--check` checks without network. |
 | `verify_install.py` | GO/NO-GO acceptance: Python version, UTF-8, writable state dir, MANIFEST integrity, stdlib-only imports, `._pth` patched & BOM-free, then the unit suite + all 5 smoke tests. |
 
 ## Build → transfer → install
@@ -52,11 +53,22 @@ skills during bring-up. Example config: `anythingllm_mcp_servers.example.json`.
 ```
 Forward slashes, absolute paths, never omit `-u`. Restart AnythingLLM fully after saving.
 
+## The workflow diagram's one dependency (3.3)
+
+`ADVANCED_WORKFLOW_PLANNING=1` needs nothing installed. The approval page draws with
+`vendor/mermaid/mermaid.min.js` (MIT, 2.5 MB), shipped in the package and pinned in
+`vendor/manifest.json`. `make_package.py` refuses to build when `vendor/` does not match its
+manifest; `--no-vendor` builds the 3.2-sized package for a site that keeps the flag off (or
+accepts the text fallback). `verify_install.py` checks the hashes when `vendor/` is there.
+There is no `requirements.txt`: pip has nothing to install, and an empty file would say the
+opposite to a reviewer.
+
 ## Security-review facts (verifiable in the code)
 
 - **No outbound network calls** (grep confirms; `urllib.parse` is string parsing only).
 - **Inbound only:** the approval page listens on `127.0.0.1:8765` (loopback), serving one HTML
-  page + 3 JSON endpoints, no filesystem serving, **no authentication** (loopback = local user
+  page + 3 JSON endpoints (with `ADVANCED_WORKFLOW_PLANNING=1`: plus `GET /vendor/mermaid.js`,
+  bytes read once at start after a SHA-256 check, and `POST /api/workflow-failed`), no filesystem serving, **no authentication** (loopback = local user
   only; disable blocking approval on a shared PC). SSE mode adds `127.0.0.1:8931`.
 - **No `eval`/`exec`/`os.system`/`subprocess`** in the server runtime. (`subprocess` appears only
   in test/tooling scripts — flag this proactively to reviewers.)

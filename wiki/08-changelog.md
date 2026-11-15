@@ -622,3 +622,15 @@ Nothing the page shows or sends changed, and nothing the model reads. Committed 
 
 `main` branch, remote `github.com/HaJaehee/PlanningHarnessMCP`. **Not pushed** as of
 this writing — see [11](11-status-and-next-steps.md).
+
+### Unreleased (3.3) — the plan as a workflow diagram
+`ADVANCED_WORKFLOW_PLANNING=1` (default off): the model sends a Mermaid flowchart with its
+final task list, the approval page draws it, and the human comments on its nodes - a comment
+turns 승인 into `수정 요청(워크플로우)` and the model redraws the workflow. A pure-Python guard
+(`planning/workflow.py`) repairs the slips models make in Mermaid and writes the canonical
+text the page draws; what it cannot repair is sent back (`WORKFLOW_INVALID`), and after two
+refusals the server draws the tasks in order. The first third-party file: mermaid.js 11.4.1
+in `vendor/`, browser-side, pinned by hash, only with the flag (Ground rule 1a). With the
+flag off the tools, the page, the state file and the fingerprint are 3.2's. Found before
+release by the real parser: [D34](09-defects-and-lessons.md#d34). Mechanism:
+[06](06-human-in-the-loop.md#the-workflow-diagram-33-unreleased).

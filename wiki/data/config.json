@@ -230,6 +230,25 @@
       "env": "PLANNING_MCP_RUN_CONTROL",
       "default": true,
       "purpose": "3.1.0. Executing plans are shown on the approval page (state/runs.json), each with a stop and a note. Both are requests applied when the agent next reports a task: a stop holds the plan (halt reason user_pause, error PLAN_PAUSED) after the DONE is recorded and before the next task starts; a note opens the unfinished tasks for task_updates (pending_revision.origin = run) and the human re-approves the change. 3.2.0: a cancel (계획 강제 취소) does not wait for a report - the card leaves the page at once and the plan is closed (CANCELLED) on the next tool call of any kind. false = no run card, and nothing asked on one is applied."
+    },
+    {
+      "field": "advanced_workflow",
+      "env": "ADVANCED_WORKFLOW_PLANNING",
+      "env_alias": "PLANNING_MCP_ADVANCED_WORKFLOW",
+      "default": false,
+      "purpose": "3.3 (unreleased). The model sends a Mermaid flowchart (`workflow`) with its final task list; planning/workflow.py repairs it and writes canonical Mermaid; the approval page draws it with vendor/mermaid.js and takes node comments (scope WORKFLOW). false = 3.2 exactly: not advertised, not stored, not in the page."
+    },
+    {
+      "field": "workflow_max_nodes",
+      "env": "PLANNING_MCP_WORKFLOW_MAX_NODES",
+      "default": 30,
+      "purpose": "3.3. A workflow with more nodes is refused (TOO_LARGE)."
+    },
+    {
+      "field": "workflow_retries",
+      "env": "PLANNING_MCP_WORKFLOW_RETRIES",
+      "default": 2,
+      "purpose": "3.3. Refusals in a row (WORKFLOW_INVALID) before the server draws the tasks in order itself. 0 = draw it at once."
     }
   ],
   "cli": {

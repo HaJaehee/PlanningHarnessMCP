@@ -21,6 +21,7 @@ thinking model reasoned about on every call ([D25](09-defects-and-lessons.md#d25
 | `auto_advance` | `update_task_progress` | as since 1.11.0 |
 | `done_when` (3.0.0) | `plan_and_think`, `update_task_progress` | on: the `done_when` field, and "if next_task has done_when, result_log must show it was met". Reasoning profile also: "to double-check a task, write the check in done_when instead of re-checking now". Off: none of it. |
 | `file_checks` (3.0.0) | `update_task_progress` | the `files` field and "the server refuses DONE for a file it cannot find" - **only** when `PLANNING_MCP_ARTIFACT_ROOTS` is set. A field the model fills in and nothing reads would promise a check that is not made. |
+| `workflow` (3.3, `ADVANCED_WORKFLOW_PLANNING`) | `plan_and_think` | on: the `workflow` field (a Mermaid example) and one rule - "with the final task_list, also send workflow ... task n is node Tn ... if the user commented on the workflow, send the whole revised workflow". Off: none of it; the tool list equals 3.2's (`TestOff`). |
 | `local_repair` (3.0.0) | `plan_and_think` | on: "if a task failed, send task_updates for it". Off: `task_updates` is described as answering the user's comments only. |
 
 With `done_when` and `local_repair` off none of the 3.0 text is advertised (`TestSchema`).
@@ -153,6 +154,25 @@ Optional: `task_list` (required when finalizing), `task_updates`, `revised_goal`
 - Guard rails: missing/empty `task_list` on finalize → `MISSING_TASK_LIST`; `step_number`
   jumps/repeats are auto-normalized (never an error); `revises_step` marks the old step
   superseded and reverts to `DRAFTING`; oversized `task_list` truncated to `max_tasks`.
+
+- **Workflow (3.3, unreleased; `ADVANCED_WORKFLOW_PLANNING=1`).** `workflow` is the plan as
+  a Mermaid flowchart; task n is node `Tn`, whose label the server takes from the task list.
+  It goes through `planning/workflow.py` before anything is stored: what can be repaired is
+  repaired (notes say what), and the page only ever gets the canonical text the guard wrote.
+  One the guard cannot read returns `WORKFLOW_INVALID` with what to fix and a
+  `workflow_example`; the task list is kept as the draft, so the model resends only the
+  workflow. After `PLANNING_MCP_WORKFLOW_RETRIES` (2) refusals in a row - or with no
+  `workflow` at all - the server draws the tasks in order (`workflow_by: "server"`). Sent
+  while thinking it is kept with the draft (`draft_workflow`). The canonical workflow joins
+  the approval fingerprint. A `task_updates` rewrite relabels the task nodes. Execution
+  ignores it: tasks still run 1..n, and no execution response carries it.
+- **Workflow revision (3.3).** When the human commented on the drawing, the plan carries
+  `pending_revision = {origin: "workflow", workflow_targets: {node: comment}, targets:
+  {task: comment}}` and the response says `revision_scope: "WORKFLOW"` with
+  `workflow_comments` (node, label, comment) and the current `workflow`. The answer is
+  `workflow` (the whole redrawn flowchart) plus `task_updates` for the commented tasks;
+  no workflow, or the same one, is `REVISION_INCOMPLETE`; a full `task_list` with a
+  workflow is accepted with a note (`workflow_replanned`).
 
 ## 2. `request_user_approval` — the HITL gate
 
@@ -327,6 +347,7 @@ Every error maps to a `next_action` that tells the model how to recover. Full li
 | `REVISION_INCOMPLETE` | no flagged task was rewritten - or, in a repair, the failed task was not | `CALL_PLAN_AND_THINK` (with the exact `task_updates` argument) |
 | `LOOP_HALTED` | the circuit breaker paused this plan (or, with no plan, stopped a repeating call) | `CALL_REQUEST_USER_APPROVAL` (`ASK_USER`) before the human has been shown the halt; `STOP_AND_WAIT_FOR_USER` after |
 | `PLAN_PAUSED` | the user stopped this plan from its run card (3.1.0); held exactly like a breaker halt | `CALL_REQUEST_USER_APPROVAL` (`ASK_USER`) until the pause card has been shown; `STOP_AND_WAIT_FOR_USER` after |
+| `WORKFLOW_INVALID` | (3.3) the workflow could not be drawn and the guard could not repair it; the task list is kept | `CALL_PLAN_AND_THINK` (resend only the corrected workflow; `workflow_example` shows one that works) |
 | `INTERNAL_ERROR` | something unexpected | `CALL_GET_CURRENT_PLAN` (resync) |
 
 ## Input leniency (invisible to the model)
@@ -335,7 +356,8 @@ Applied by `leniency.normalize()` before validation, so near-miss calls succeed:
 case/alias normalization (`done|완료`→`DONE`, `네|yes`→`APPROVED`, …); `"true"/1/"3"` coercion;
 `task_list` as a newline/comma string → array; array-of-objects → titles; numbering prefixes
 stripped; unknown keys dropped; non-string keys dropped; NaN/inf rejected for integer fields.
-3.0.0: `done_when` as `{"2": "..."}`, `"2: ..."` lines or a misnamed field (`criteria`,
+3.3: `workflow` as a list of lines or an object with `mermaid`/`code`/`text`, or under
+the names `mermaid`, `flowchart`, `diagram`. 3.0.0: `done_when` as `{"2": "..."}`, `"2: ..."` lines or a misnamed field (`criteria`,
 `acceptance_criteria`); `files` as a JSON string, objects with `path`, or a newline / semicolon
 separated string - **not** comma-separated, since a comma can be part of a file name.
 

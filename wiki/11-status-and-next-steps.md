@@ -2,6 +2,19 @@
 
 ## Current state (as of version 3.2.0, 2026-10-21)
 
+- **Unreleased, 2026-11-16 - the workflow diagram (3.3).** `ADVANCED_WORKFLOW_PLANNING=1`
+  adds a Mermaid flowchart to the plan, drawn on the approval page with node comments and
+  `수정 요청(워크플로우)`; the guard in `planning/workflow.py` keeps the model's Mermaid
+  drawable. mermaid.js is bundled in `vendor/` - the one exception to Ground rule 1, and
+  browser-only. Off by default, and off it is 3.2. Committed on `develop`; not pushed; no
+  version bump; the package was not rebuilt. **No prompt repaste:** `agents.md` is
+  unchanged - the rule is in the tool description, which only a flag-on server sends.
+  Field questions: does the model send `workflow` unprompted by the prompt (watch
+  `workflow_drawn_by_server` with `reason: missing`); how often is it refused
+  (`workflow_refused`) and for what codes; does it answer a workflow comment with a redraw
+  or with a whole new task list (`workflow_replanned`); does `state/workflow_render_failed.jsonl`
+  ever get a line (it should not - each one is a guard bug).
+
 - **Unreleased, 2026-10-22 - the approval page rebuilt as files.** `planning/web/` holds the
   page as HTML, CSS and nine scripts; cards are `html` templates, buttons use `data-act`,
   every colour is named once with the dark scheme in one block. Nothing on screen changed

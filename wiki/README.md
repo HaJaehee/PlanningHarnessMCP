@@ -27,6 +27,7 @@ Current version: **3.2.0** · 887 unit tests + 7 end-to-end smoke tests, all pas
 | How tests are organised and run | [07-testing.md](07-testing.md) |
 | What changed in each version and why | [08-changelog.md](08-changelog.md) + [data/versions.json](data/versions.json) |
 | **Known failure modes and their root causes** | [09-defects-and-lessons.md](09-defects-and-lessons.md) |
+| **The workflow diagram: ADVANCED_WORKFLOW_PLANNING, the Mermaid guard, node comments, the mermaid.js exception (unreleased, 3.3)** | [06-human-in-the-loop.md#the-workflow-diagram-33-unreleased](06-human-in-the-loop.md#the-workflow-diagram-33-unreleased) + [../docs/plan-3.3-advanced-workflow.md](../docs/plan-3.3-advanced-workflow.md) |
 | **A run card that will not go away because its agent stopped: 계획 강제 취소 (3.2)** | [06-human-in-the-loop.md#cancelling-a-run-whose-agent-stopped-320](06-human-in-the-loop.md#cancelling-a-run-whose-agent-stopped-320) + [09-defects-and-lessons.md#d31](09-defects-and-lessons.md#d31) |
 | **Who asks for approval, and what the human can do while a plan runs: the gate on the transition, the run card, stop and note (3.1)** | [06-human-in-the-loop.md#the-gate-on-the-transition-310](06-human-in-the-loop.md#the-gate-on-the-transition-310) + [06-human-in-the-loop.md#the-run-card-310](06-human-in-the-loop.md#the-run-card-310) |
 | **What "done" means and what the server checks: `done_when`, file checks, the human writing the criterion (3.0)** | [04-state-machine.md#the-verification-contract-300](04-state-machine.md#the-verification-contract-300) + [06-human-in-the-loop.md#the-contract-on-the-page-300](06-human-in-the-loop.md#the-contract-on-the-page-300) + [../docs/plan-3.0-verification-contract.md](../docs/plan-3.0-verification-contract.md) |
@@ -86,6 +87,15 @@ manual and the original phase design records.
 
 1. **Zero third-party dependencies.** Standard library only. The target machine cannot
    `pip install`. Every feature — the web server, JSON-RPC, file locking — uses stdlib.
+   This holds for the Python runtime in **every** mode; there is no `requirements.txt`
+   because there is nothing to install.
+   1a. **The one exception (3.3): mermaid.js, in the browser, only with
+   `ADVANCED_WORKFLOW_PLANNING=1`.** It is bundled in `vendor/` at a pinned version and
+   SHA-256 (`vendor/manifest.json`, fetched on the build machine by
+   `tools/fetch_vendor.py`), served from memory on one fixed route, never from a CDN. With
+   the flag off it is not read, not served, and not in the page; a missing or altered file
+   only makes the page show the workflow as text - the gate never depends on it. Any other
+   third-party file needs its own line here.
 2. **The server never crashes a call.** Every tool result carries `ok / plan_status /
    next_action / next_action_hint`. Errors return `ok:false` with a corrective `next_action`,
    never a raw exception.

@@ -698,9 +698,65 @@ stop asked mid-task (shown as asked, applied on the next report, task kept), con
 (text and caret surviving a redraw; the re-approval card marking the rewritten task), and the
 completion report opened by the last DONE.
 
+<a id="the-workflow-diagram-33-unreleased"></a>
+## The workflow diagram (3.3, unreleased)
+
+`ADVANCED_WORKFLOW_PLANNING=1` (alias `PLANNING_MCP_ADVANCED_WORKFLOW`; default off). Design
+and decisions: [`docs/plan-3.3-advanced-workflow.md`](../docs/plan-3.3-advanced-workflow.md).
+
+```
+워크플로우
+  (시작) → [1 보고서 파일 찾기] → ◇ Q3 데이터가 있나? ─예→ [2 집계] → [3 요약] → (끝)
+                                          └아니오→ (끝)
+  노드를 누르면 그 단계에 의견을 남기실 수 있습니다 ...
+  D1 · Q3 데이터가 있나?   [ 데이터가 없으면 Q2로 대신 집계 ]
+  워크플로우 전체 의견      [                               ]
+태스크 3개 ...
+[수정 요청(워크플로우) / 노드 1개 / 3번 태스크]   [거절]
+```
+
+- **Above the task list, on a PLAN request only.** Not on a completion report, a halt card or
+  a run card (decision 6 of the plan).
+- **Pressing a node** opens its comment row; a task's node opens that task's own [의견] box
+  below, so a task never has two. Nodes are focusable (Enter/Space). Commented nodes get the
+  amber edge a commented task row has.
+- **The button.** Any comment on the drawing replaces 승인 with
+  `수정 요청(워크플로우)`, one line per thing it carries (`노드 N개`, `워크플로우 전체 의견`,
+  `N번 태스크`, `태스크 완료 기준 N건 반영`). Precedence `PLAN > WORKFLOW > TASKS`: text in the
+  whole-plan box or the ticked box makes it `계획 전체 재작성`, and the node comments then
+  travel inside the comment. `scopeOf` decides both label and scope.
+- **The store** refuses the whole decision if a comment names a node the request did not show
+  (`validate_workflow_comments`); a comment on a task node becomes that task's comment; a
+  `WORKFLOW` scope with nothing on the drawing falls back to `TASKS` / `PLAN`.
+- **Re-approval** marks nodes that are new or relabelled (dashed green) and quotes what was
+  asked of each node (`↻ 요청하신 내용 (D1 · ...)`). A node the model only renamed (`start` ->
+  `S`, same words) is not marked.
+- **Drafts** are `localStorage` keys `…:<request>:wf:<node>`, restored on redraw and reload,
+  mirrored across tabs.
+- **When mermaid cannot draw**: missing or altered `vendor/mermaid/mermaid.min.js` (logged at
+  start), or a parse error. The card shows the canonical source and a button per node, so
+  every comment can still be written. A parse error is a bug in the guard: the page posts it
+  to `/api/workflow-failed` and it lands in `state/workflow_render_failed.jsonl`.
+- **The flag-off page is 3.2's byte for byte.** `workflow.js` wraps `taskRows`, `restore`,
+  `hasOpinion`, `scopeOf`, `relabel`, `reqSig`, `hintHtml` and `decide` instead of editing
+  them; its `decide` is app.js's plus `workflow_comments`, and a test compares the two.
+- **Security.** Mermaid runs with `securityLevel: 'strict'` and `htmlLabels: false`, on text
+  the guard wrote: every label quoted, `" < > # `` ` `` as entities, `click`, `style`,
+  `classDef`, `%%{init}%%` removed. The SVG is the one piece of markup not built by an
+  `html` template.
+
+Verified in a real browser against a real server: the diagram drawn from a repaired workflow
+(fence, `->`, `end`, unquoted parentheses, a click), node click to comment, the button label
+with a node and a task comment, drafts surviving a reload, the click reaching the waiting
+agent as a `WORKFLOW` revision, the redrawn card with changed nodes and the quoted request,
+dark mode, and the text fallback. 611 canonical texts from the lint corpus and a fuzz run
+parse in the bundled mermaid 11.4.1, and a sample of 62 draws - that check found
+[D34](09-defects-and-lessons.md#d34).
+
 ## Config knobs
 
 `PLANNING_MCP_BLOCKING_APPROVAL` (default true), `_APPROVAL_PORT` (8765), `_APPROVAL_TIMEOUT`
 (900), `_APPROVAL_OPEN_BROWSER` (true), `_APPROVAL_TTL` (1800), `_AUTO_ASK` (true, 3.1.0),
-`_RUN_CONTROL` (true, 3.1.0). Full list:
+`_RUN_CONTROL` (true, 3.1.0), `ADVANCED_WORKFLOW_PLANNING` (false, 3.3),
+`_WORKFLOW_MAX_NODES` (30), `_WORKFLOW_RETRIES` (2). Full list:
 [data/config.json](data/config.json).

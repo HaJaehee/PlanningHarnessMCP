@@ -59,6 +59,7 @@
     "FILE_NOT_FOUND",
     "PLAN_EVICTED",
     "PLAN_PAUSED",
+    "WORKFLOW_INVALID",
     "INTERNAL_ERROR"
   ]
 }

@@ -174,6 +174,22 @@ so its five subclasses), `self.legacy()` or `auto_ask=False` on individual tests
 so the 3.0 flow keeps the coverage it had. Three smoke tests set `PLANNING_MCP_AUTO_ASK=false`
 for the same reason; `smoke_gate_and_run` is the default flow end to end.
 
+## Workflow suites (3.3, unreleased)
+
+- `tests/test_workflow_lint.py` - the guard: one test per slip of §4.2 of the plan, the
+  removals, the refusals, canonical text linting to itself, and 1,500 fuzzed inputs that
+  must either come out canonical or be refused, never raise.
+- `tests/test_workflow_revision.py` - the server against the real approval store: flag off
+  is 3.2 (tools, state file, fingerprint, page entry), drawing / refusing / drawing in
+  order, and the `WORKFLOW` revision both ways.
+- `tests/test_workflow_page.py` - the page: nothing of it without the flag, the route and
+  the hash check, the card under node, `decide` the same as app.js's but for one field.
+- `tests/smoke_workflow.py` - a real stdio server with the flag on and plain HTTP as the
+  human.
+- **The real-parser check** is manual: build the corpus of canonical texts (the lint tests'
+  outputs plus a fuzz run) and `mermaid.parse` each in a browser on the flag-on page. Under
+  node it cannot run - mermaid's DOMPurify needs a DOM. It found [D34](09-defects-and-lessons.md#d34).
+
 ## Packaging suite (`tests/test_packaging.py`, 3.0.0)
 
 8 tests. The package is the only thing that reaches the corporate PC, so: every file the
