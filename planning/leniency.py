@@ -29,6 +29,7 @@ _ALLOWED_KEYS: dict[str, set[str]] = {
         "alternatives",
         "recommended_reasons",
         "done_when",
+        "workflow",
     },
     "request_user_approval": {"decision", "plan_summary", "user_comment", "plan_id", "choices"},
     "update_task_progress": {"task_id", "status", "result_log", "plan_id", "files"},
@@ -518,6 +519,11 @@ def normalize(tool_name: str, args: Any) -> tuple[dict[str, Any], list[str]]:
             "acceptance": "done_when",
             "acceptancecriteria": "done_when",
             "donecriteria": "done_when",
+            "mermaid": "workflow",
+            "flowchart": "workflow",
+            "diagram": "workflow",
+            "workflowdiagram": "workflow",
+            "workflowmermaid": "workflow",
             "file": "files",
             "paths": "files",
             "artifacts": "files",
@@ -617,6 +623,28 @@ def normalize(tool_name: str, args: Any) -> tuple[dict[str, Any], list[str]]:
                     "Could not read 'done_when'; ignored it. Expected "
                     '[{"task_id": 2, "check": "what exists or is true when it is done"}].'
                 )
+
+    if "workflow" in clean:
+        # The flowchart is text. A model that sends it as a list of lines, or wrapped in
+        # an object, still means the text; anything else is left for the guard to refuse.
+        raw = clean["workflow"]
+        if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
+            clean["workflow"] = "\n".join(raw)
+            notes.append("Read 'workflow' (a list of lines) as one text.")
+        elif isinstance(raw, dict):
+            text = next(
+                (raw[k] for k in ("mermaid", "code", "text", "workflow", "flowchart")
+                 if isinstance(raw.get(k), str)), None,
+            )
+            if text is None:
+                clean.pop("workflow")
+                notes.append("Could not read 'workflow'; send the flowchart as one text.")
+            else:
+                clean["workflow"] = text
+        elif raw is None or raw == "":
+            clean.pop("workflow")
+        elif not isinstance(raw, str):
+            clean["workflow"] = str(raw)
 
     if "files" in clean:
         raw = clean["files"]

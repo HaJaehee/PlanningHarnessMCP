@@ -112,6 +112,9 @@ class ErrorCode(str, Enum):
     # (3.1.0). Held like a breaker halt, but nothing went wrong: the next decision
     # is simply theirs.
     PLAN_PAUSED = "PLAN_PAUSED"
+    # The workflow sent with the final task list could not be drawn, and the guard could
+    # not repair it (3.3.0). The task list is kept; only the workflow is sent again.
+    WORKFLOW_INVALID = "WORKFLOW_INVALID"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -166,6 +169,9 @@ ORIGIN_FAILURE = "failure"
 # running (3.1.0). Finished tasks are out of reach as in a repair, but no particular
 # task has to change - the model rewrites the unfinished ones their words affect.
 ORIGIN_RUN = "run"
+# "workflow" = the human commented on the flowchart of the plan (3.3.0). The model
+# redraws it; tasks the human also commented on are rewritten through task_updates.
+ORIGIN_WORKFLOW = "workflow"
 
 # plan.halt["reason"] when the human, not the circuit breaker, stopped the plan.
 HALT_USER_PAUSE = "user_pause"
@@ -511,9 +517,40 @@ class Plan:
     # work ended (3.1.0). Shown with the completion report, which is where a change
     # to finished work is asked for; cleared when that report is answered.
     run_note: str | None = None
+    # --- the workflow diagram (3.3.0, ADVANCED_WORKFLOW_PLANNING) -------------
+    # Canonical Mermaid, as planning/workflow.py wrote it - never the model's text.
+    workflow: str | None = None
+    # "agent" when it is the model's drawing; "server" when the server drew the tasks in
+    # order because the model sent none, or sent one that could not be drawn.
+    workflow_by: str | None = None
+    # What the model sent when the server had to draw instead - shown folded on the page.
+    workflow_raw: str | None = None
+    # Times in a row the guard refused the model's workflow this drafting round.
+    workflow_retries: int = 0
+    # A workflow sent while still thinking, with the draft task list it describes.
+    draft_workflow: str | None = None
+    # {node id: label} of the version the human last sent back, so the re-approval card
+    # can mark what changed; and {node id: comment} - what they asked of each node.
+    workflow_prev: dict[str, str] | None = None
+    workflow_asked: dict[str, str] | None = None
 
     # ---- serialization -------------------------------------------------
+    _WORKFLOW_FIELDS = (
+        "workflow", "workflow_by", "workflow_raw", "workflow_retries", "draft_workflow",
+        "workflow_prev", "workflow_asked",
+    )
+
     def to_dict(self) -> dict[str, Any]:
+        out = self._to_dict()
+        # Written only when there is something to write, so a server with the workflow
+        # turned off keeps exactly the state file it had in 3.2.
+        for name in self._WORKFLOW_FIELDS:
+            value = getattr(self, name)
+            if value:
+                out[name] = value
+        return out
+
+    def _to_dict(self) -> dict[str, Any]:
         return {
             "plan_id": self.plan_id,
             "goal": self.goal,
@@ -574,6 +611,17 @@ class Plan:
             halt=raw.get("halt") if isinstance(raw.get("halt"), dict) else None,
             guidance=str(raw["guidance"]) if raw.get("guidance") else None,
             run_note=str(raw["run_note"]) if raw.get("run_note") else None,
+            workflow=str(raw["workflow"]) if raw.get("workflow") else None,
+            workflow_by=str(raw["workflow_by"]) if raw.get("workflow_by") else None,
+            workflow_raw=str(raw["workflow_raw"]) if raw.get("workflow_raw") else None,
+            workflow_retries=_safe_int(raw.get("workflow_retries"), 0),
+            draft_workflow=str(raw["draft_workflow"]) if raw.get("draft_workflow") else None,
+            workflow_prev={
+                str(k): str(v) for k, v in raw["workflow_prev"].items()
+            } if isinstance(raw.get("workflow_prev"), dict) else None,
+            workflow_asked={
+                str(k): str(v) for k, v in raw["workflow_asked"].items()
+            } if isinstance(raw.get("workflow_asked"), dict) else None,
         )
 
     # ---- queries -------------------------------------------------------
@@ -726,6 +774,7 @@ class Plan:
         self.draft_alternatives = []
         self.draft_reasons = {}
         self.draft_done_when = {}
+        self.draft_workflow = None
 
     def next_task_brief(self) -> dict[str, Any] | None:
         """The one task the model may act on now - the ONLY place an id is published.
@@ -793,6 +842,19 @@ class Plan:
     def steering(self) -> bool:
         """Is the pending revision the human's note on a running plan (3.1.0)?"""
         return (self.pending_revision or {}).get("origin") == ORIGIN_RUN
+
+    def workflow_revision(self) -> bool:
+        """Is the pending revision the human's comments on the workflow (3.3.0)?"""
+        return (self.pending_revision or {}).get("origin") == ORIGIN_WORKFLOW
+
+    def workflow_targets(self) -> dict[str, str]:
+        """{node id: the human's comment} for a workflow revision; "*" = the whole one."""
+        if not self.workflow_revision():
+            return {}
+        raw = (self.pending_revision or {}).get("workflow_targets") or {}
+        if not isinstance(raw, dict):
+            return {}
+        return {str(k): str(v) for k, v in raw.items() if str(v or "").strip()}
 
     def paused_by_user(self) -> bool:
         return bool(self.halt) and self.halt.get("reason") == HALT_USER_PAUSE

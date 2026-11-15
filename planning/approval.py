@@ -25,6 +25,7 @@ owner exits another process takes the same port over and the open tab keeps work
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import logging
@@ -91,7 +92,10 @@ AGENT_IDLE_SEC = 25.0
 # How much of the plan one REVISE is allowed to change.
 SCOPE_PLAN = "PLAN"    # rewrite the whole breakdown (the original behaviour)
 SCOPE_TASKS = "TASKS"  # rewrite only the tasks the human commented on
-SCOPES = (SCOPE_PLAN, SCOPE_TASKS)
+# Redraw the workflow diagram the human commented on (3.3.0); tasks they also commented
+# on are rewritten as in TASKS. Only on a PLAN request that carried a workflow.
+SCOPE_WORKFLOW = "WORKFLOW"
+SCOPES = (SCOPE_PLAN, SCOPE_TASKS, SCOPE_WORKFLOW)
 
 
 @dataclass
@@ -113,6 +117,47 @@ class Verdict:
     # 3.0.0 - {task_id: done_when} for the tasks whose criterion the human wrote or
     # rewrote on the page. "" means they removed it. Validated the same way.
     criteria: dict[str, str] = field(default_factory=dict)
+    # 3.3.0 - {node id: comment} on the workflow diagram; "*" = about the whole diagram.
+    # Validated against the nodes the request showed.
+    workflow_comments: dict[str, str] = field(default_factory=dict)
+
+
+def validate_workflow_comments(
+    workflow: Any, raw: Any
+) -> tuple[dict[str, str], dict[str, str]] | None:
+    """({node id: comment}, {task id: comment}) from what the page posted, or None.
+
+    Every id must be a node the request showed, or "*". A comment on a task's node is
+    a comment on that task - the page sends it as one, and one that arrives here anyway
+    is moved there rather than counted twice. Anything else is a stale tab or a forged
+    request, and the whole decision is refused, as for choices and criteria.
+    """
+    if raw in (None, "", {}):
+        return {}, {}
+    if not isinstance(raw, dict):
+        return None
+    nodes = (workflow or {}).get("nodes") if isinstance(workflow, dict) else None
+    if not isinstance(nodes, list):
+        return None
+    by_id = {str(n.get("id")): n for n in nodes if isinstance(n, dict)}
+    out: dict[str, str] = {}
+    tasks: dict[str, str] = {}
+    for key, value in raw.items():
+        node_id = str(key).strip()
+        text = str(value or "").strip()
+        if not text:
+            continue
+        if node_id == "*":
+            out["*"] = text
+            continue
+        node = by_id.get(node_id)
+        if node is None:
+            return None
+        if isinstance(node.get("task_id"), int):
+            tasks[str(node["task_id"])] = text
+        else:
+            out[node_id] = text
+    return out, tasks
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +250,7 @@ class ApprovalStore:
         summary: str = "",
         draft: bool = False,
         origin: str = "",
+        workflow: dict[str, Any] | None = None,
     ) -> str | None:
         """Queue a request for the human. Returns its id, or None if it could not be saved.
 
@@ -253,6 +299,10 @@ class ApprovalStore:
             # page shows its own version, and says so when a request came from another.
             "server_version": SERVER_VERSION,
         }
+        if workflow:
+            # 3.3.0, only when the plan has one: an entry without it is exactly 3.2's.
+            entry["workflow"] = workflow
+            entry["workflow_comments"] = {}
         with exclusive(self.lock_path) as got:
             record = self.read()
             queue = self._requests(record)
@@ -299,6 +349,7 @@ class ApprovalStore:
         scope: Any = None,
         choices: Any = None,
         criteria: Any = None,
+        workflow_comments: Any = None,
     ) -> bool:
         """Called by the page, for one specific queued request.
 
@@ -353,17 +404,49 @@ class ApprovalStore:
                             log.warning("Refused criteria for tasks not on screen: %r", criteria)
                             return False
                         written = valid
+                    drawn: dict[str, str] = {}
+                    if decision == "REVISE" and entry.get("phase") == PHASE_PLAN                             and entry.get("workflow"):
+                        checked_wf = validate_workflow_comments(
+                            entry.get("workflow"), workflow_comments
+                        )
+                        if checked_wf is None:
+                            log.warning(
+                                "Refused workflow comments on nodes not on screen: %r",
+                                workflow_comments,
+                            )
+                            return False
+                        drawn, on_tasks = checked_wf
+                        for task_id, text in on_tasks.items():
+                            cleaned.setdefault(task_id, text)
+                    if wanted == SCOPE_WORKFLOW and not drawn:
+                        # Nothing was said about the drawing itself after all.
+                        wanted = SCOPE_TASKS if cleaned else SCOPE_PLAN
+                    elif drawn and wanted == SCOPE_TASKS:
+                        wanted = SCOPE_WORKFLOW
                     entry["decision"] = decision
                     entry["comment"] = comment or ""
                     entry["task_comments"] = cleaned
                     entry["scope"] = wanted
                     entry["choices"] = picked
                     entry["criteria"] = written
+                    if drawn or "workflow" in entry:
+                        entry["workflow_comments"] = drawn
                     entry["decided_at"] = time.time()
                     # If this cannot be saved the click did nothing; say so rather than
                     # letting the page claim the decision was recorded.
                     return self._write({"requests": queue})
             return False
+
+    def note_render_failure(self, request_id: str, plan_id: str, error: str) -> None:
+        """Append what the page reported to workflow_render_failed.jsonl (3.3.0)."""
+        record = {"at": time.time(), "request_id": request_id, "plan_id": plan_id,
+                  "error": error}
+        try:
+            with open(self.state_dir / "workflow_render_failed.jsonl", "a",
+                      encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
 
     def peek(self) -> list[dict[str, Any]]:
         """Everything currently queued, oldest first."""
@@ -468,6 +551,10 @@ class ApprovalStore:
                 str(k): v for k, v in (entry.get("criteria") or {}).items()
                 if isinstance(v, str)
             } if isinstance(entry.get("criteria"), dict) else {},
+            workflow_comments={
+                str(k): str(v) for k, v in (entry.get("workflow_comments") or {}).items()
+                if str(v or "").strip()
+            } if isinstance(entry.get("workflow_comments"), dict) else {},
         )
 
     def _take(self, match) -> Verdict | None:
@@ -738,6 +825,14 @@ PAGE_SCRIPTS = (
     "board.js",   # putting cards on the page, one at a time
     "app.js",     # polling, decisions, controls; starts the page
 )
+# 3.3.0 - only with ADVANCED_WORKFLOW_PLANNING: the diagram's stylesheet after page.css,
+# its script after app.js (it extends the others, see the top of workflow.js), and the
+# bundled mermaid.js ahead of every script. Without the flag none of it is in the page.
+WORKFLOW_STYLES = ("workflow.css",)
+WORKFLOW_SCRIPTS = ("workflow.js",)
+MERMAID_ROUTE = "/vendor/mermaid.js"
+VENDOR_DIR = Path(__file__).resolve().parent.parent / "vendor"
+MERMAID_FILE = VENDOR_DIR / "mermaid" / "mermaid.min.js"
 _STYLE_SLOT = "<!-- planning-mcp:style -->"
 _SCRIPTS_SLOT = "<!-- planning-mcp:scripts -->"
 
@@ -747,7 +842,7 @@ def _web_file(name: str) -> str:
     return text if text.endswith("\n") else text + "\n"
 
 
-def _assemble_page() -> str:
+def _assemble_page(workflow: bool = False) -> str:
     """page.html with its stylesheet and scripts put inline.
 
     Each file ends with a sourceURL comment, so the browser's developer tools list it
@@ -758,12 +853,18 @@ def _assemble_page() -> str:
     if shell.count(_STYLE_SLOT) != 1 or shell.count(_SCRIPTS_SLOT) != 1:
         raise ValueError("page.html must hold the style slot and the scripts slot once each")
     style = _web_file("page.css")
+    if workflow:
+        style += "".join(_web_file(name) for name in WORKFLOW_STYLES)
     # Inline, the first "</style" or "</script" ends the tag - even inside a comment
     # or a string - and the rest of the file would be shown as text.
     if "</style" in style.lower():
         raise ValueError("page.css contains '</style', which cannot be inlined")
     scripts = []
-    for name in PAGE_SCRIPTS:
+    if workflow:
+        # Not inline: a bundled library may well contain "</script", and 2.5 MB has no
+        # business in every page load. One fixed route, served from memory.
+        scripts.append(f'<script src="{MERMAID_ROUTE.lstrip("/")}"></script>')
+    for name in PAGE_SCRIPTS + (WORKFLOW_SCRIPTS if workflow else ()):
         code = _web_file(name)
         if "</script" in code.lower():
             raise ValueError(f"{name} contains '</script', which cannot be inlined")
@@ -773,6 +874,31 @@ def _assemble_page() -> str:
 
 
 _PAGE = _assemble_page()
+_PAGE_WORKFLOW = _assemble_page(workflow=True)
+
+
+def load_mermaid() -> tuple[bytes | None, str]:
+    """The bundled mermaid.js, if it is there and is the file vendor/manifest.json pins.
+
+    Returns (bytes, "") or (None, why). A file that does not match its pinned hash is
+    not served: the page then shows the workflow as text, which is a degraded page, not
+    a broken gate.
+    """
+    try:
+        data = MERMAID_FILE.read_bytes()
+    except OSError:
+        return None, f"{MERMAID_FILE} is missing (run tools/fetch_vendor.py)"
+    try:
+        manifest = json.loads((VENDOR_DIR / "manifest.json").read_text(encoding="utf-8"))
+        pinned = next(
+            f.get("sha256") for f in manifest["mermaid"]["files"]
+            if f.get("path", "").endswith("mermaid.min.js")
+        )
+    except (OSError, ValueError, KeyError, StopIteration, TypeError, AttributeError):
+        return None, "vendor/manifest.json does not pin mermaid.min.js"
+    if hashlib.sha256(data).hexdigest() != pinned:
+        return None, f"{MERMAID_FILE} does not match the sha256 pinned in vendor/manifest.json"
+    return data, ""
 
 _VERSION_TOKEN = "__PLANNING_MCP_VERSION__"
 _AUTHOR_TOKEN = "__PLANNING_MCP_AUTHOR__"
@@ -783,6 +909,7 @@ def page_html(
     version: str = SERVER_VERSION,
     author: str = SERVER_AUTHOR,
     email: str = SERVER_AUTHOR_EMAIL,
+    workflow: bool = False,
 ) -> str:
     """The page as it is served: the template with this server's version filled in.
 
@@ -794,7 +921,7 @@ def page_html(
     """
     safe = "".join(ch for ch in str(version) if ch.isalnum() or ch in ".-+") or "?"
     return (
-        _PAGE.replace(_VERSION_TOKEN, safe)
+        (_PAGE_WORKFLOW if workflow else _PAGE).replace(_VERSION_TOKEN, safe)
         .replace(_AUTHOR_TOKEN, html.escape(str(author)))
         .replace(_EMAIL_TOKEN, html.escape(str(email)))
     )
@@ -830,8 +957,16 @@ class ApprovalServer:
         port: int = 8765,
         open_browser: bool = True,
         takeover_interval: float = 5.0,
+        workflow: bool = False,
     ):
         self.store = store
+        # 3.3.0: serve the page with the workflow diagram, and mermaid.js beside it.
+        self.workflow = bool(workflow)
+        self.mermaid: bytes | None = None
+        if self.workflow:
+            self.mermaid, why = load_mermaid()
+            if self.mermaid is None:
+                log.error("Workflow diagrams will be shown as text: %s", why)
         # Plans that are running, and what the human asked of them (3.1.0). Beside the
         # approval state, in the same directory, for the same reason: any process may
         # write it and the one that owns the page reads it.
@@ -944,10 +1079,11 @@ class ApprovalServer:
     def open_request(
         self, plan_id: str, goal: str, display: str, tasks: list[dict[str, Any]],
         fingerprint: str = "", phase: str = PHASE_PLAN, summary: str = "",
-        draft: bool = False, origin: str = "",
+        draft: bool = False, origin: str = "", workflow: dict[str, Any] | None = None,
     ) -> str | None:
         request_id = self.store.publish(
-            plan_id, goal, display, tasks, fingerprint, phase, summary, draft, origin
+            plan_id, goal, display, tasks, fingerprint, phase, summary, draft, origin,
+            workflow,
         )
         self._surface()
         return request_id
@@ -1084,11 +1220,12 @@ class ApprovalServer:
             def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
                 log.debug("approval-ui %s", fmt % args)
 
-            def _send(self, code: int, body: bytes, ctype: str) -> None:
+            def _send(self, code: int, body: bytes, ctype: str,
+                      cache: str = "no-store") -> None:
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
+                self.send_header("Cache-Control", cache)
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -1102,7 +1239,12 @@ class ApprovalServer:
             def do_GET(self) -> None:  # noqa: N802
                 path = urlparse(self.path).path
                 if path == "/":
-                    self._send(200, page_html().encode("utf-8"), "text/html; charset=utf-8")
+                    self._send(200, page_html(workflow=server.workflow).encode("utf-8"),
+                               "text/html; charset=utf-8")
+                elif path == MERMAID_ROUTE and server.workflow and server.mermaid is not None:
+                    # Fixed bytes read once at start: nothing here looks up a path on disk.
+                    self._send(200, server.mermaid, "text/javascript; charset=utf-8",
+                               cache="max-age=86400")
                 elif path == "/api/health":
                     self._json(
                         {"server": SERVER_SIGNATURE, "state_dir": str(server.store.state_dir)}
@@ -1140,6 +1282,10 @@ class ApprovalServer:
                             "agent_waiting": (
                                 now - float(e.get("agent_last_seen") or 0.0)
                             ) < AGENT_IDLE_SEC,
+                            # 3.3.0, only for a request that has one, so the answer for
+                            # every other request is exactly 3.2's.
+                            **({"workflow": e["workflow"]}
+                               if isinstance(e.get("workflow"), dict) else {}),
                         }
                         for e in server.store.peek()
                     ], "runs": [
@@ -1167,7 +1313,9 @@ class ApprovalServer:
 
             def do_POST(self) -> None:  # noqa: N802
                 route = urlparse(self.path).path
-                if route not in ("/api/decide", "/api/control"):
+                if route not in ("/api/decide", "/api/control") and not (
+                    route == "/api/workflow-failed" and server.workflow
+                ):
                     self.send_error(404)
                     return
                 length = int(self.headers.get("Content-Length") or 0)
@@ -1178,6 +1326,19 @@ class ApprovalServer:
                     return
                 if not isinstance(body, dict):
                     self.send_error(400)
+                    return
+                if route == "/api/workflow-failed":
+                    # Mermaid could not draw text the guard wrote: a bug in the guard,
+                    # recorded so it can be found and fixed (planning/workflow.py).
+                    log.error(
+                        "The page could not draw the workflow of %s: %s",
+                        str(body.get("plan_id", ""))[:80], str(body.get("error", ""))[:300],
+                    )
+                    server.store.note_render_failure(
+                        str(body.get("id", ""))[:64], str(body.get("plan_id", ""))[:80],
+                        str(body.get("error", ""))[:300],
+                    )
+                    self._json({"ok": True})
                     return
                 if route == "/api/control":
                     # A running plan: stop it, change what is left, take that back, or
@@ -1196,6 +1357,7 @@ class ApprovalServer:
                     body.get("scope"),
                     body.get("choices"),
                     body.get("criteria"),
+                    body.get("workflow_comments"),
                 )
                 self._json({"ok": ok})
 

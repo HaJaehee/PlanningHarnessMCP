@@ -92,6 +92,34 @@ _CHECK_LATER_REASONING = """
 If you want to double-check a task, do not re-check it now. Write the check in
 done_when; it is checked when the task is done."""
 
+# Appended when ADVANCED_WORKFLOW_PLANNING is on (3.3.0). One rule: what to send and
+# when; how it looks is the parameter's example. agents.md says nothing about it - the
+# pasted prompt is the same for every server, and a server with the flag off must not be
+# described as one that wants a workflow (Ground rule 7).
+_WORKFLOW_STANDARD = """
+
+WITH THE FINAL task_list, ALSO SEND workflow: the plan as a Mermaid flowchart. Task n is
+node Tn; a decision is D1{...}; start and end are S and E. If the user commented on the
+workflow, send the whole revised workflow."""
+
+_WORKFLOW_REASONING = """
+With task_list, also send workflow: the plan as a Mermaid flowchart (task n is node Tn,
+a decision D1{...}, start S, end E). If the user commented on the workflow, send the
+whole revised workflow."""
+
+_WORKFLOW_PARAM = {
+    "type": "string",
+    "description": (
+        "Mermaid flowchart of the plan, one edge per line. Quote labels. Example:\n"
+        "flowchart TD\n"
+        '  S([시작]) --> T1["매출 파일 읽기"]\n'
+        '  T1 --> D1{"Q3 데이터가 있나?"}\n'
+        '  D1 -->|예| T2["피벗으로 집계"]\n'
+        "  D1 -->|아니오| E([끝])\n"
+        "  T2 --> E"
+    ),
+}
+
 # Appended to update_task_progress when the matching feature is on, so the description
 # never promises a check the running server does not make.
 _DONE_WHEN_EXEC = """
@@ -603,6 +631,7 @@ def build_tool_definitions(
     file_checks: bool = False,
     local_repair: bool = True,
     auto_ask: bool = True,
+    workflow: bool = False,
 ) -> list[dict[str, Any]]:
     """The advertised tool list for a given configuration.
 
@@ -685,6 +714,13 @@ def build_tool_definitions(
         if reasoning:
             plan_text += _CHECK_LATER_REASONING
         update_text += _DONE_WHEN_EXEC
+    if workflow:
+        plan_schema["properties"] = {**plan_schema["properties"], "workflow": _WORKFLOW_PARAM}
+        if reasoning:
+            plan_text += _WORKFLOW_REASONING
+        else:
+            closing = "\n\nDo not execute anything or answer the user while planning."
+            plan_text = plan_text.replace(closing, _WORKFLOW_STANDARD + closing)
     if file_checks:
         # Offered only where the server will actually look. A field the model fills in
         # and nothing reads is a promise of verification that is not kept.

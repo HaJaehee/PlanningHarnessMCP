@@ -225,5 +225,8 @@ def render_plan_for_user(
             else "선택지가 있는 태스크는 승인하실 때 '2번 B안'처럼 알려 주십시오. "
             "말씀이 없으면 [권장]안으로 진행합니다."
         )
+    if plan.workflow and not on_page:
+        # In chat the diagram is its source; a chat that renders Mermaid draws it.
+        lines += ["워크플로우:", "```mermaid", plan.workflow, "```", ""]
     lines.append("이 계획을 승인합니까? (승인 / 수정 요청 / 거절)")
     return "\n".join(lines)

@@ -26,6 +26,7 @@ from .approval import (
     CONTROL_NOTE,
     SCOPE_PLAN,
     SCOPE_TASKS,
+    SCOPE_WORKFLOW,
     ApprovalServer,
     ApprovalStore,
     Verdict,
@@ -73,6 +74,7 @@ from .models import (
     HALT_USER_PAUSE,
     ORIGIN_FAILURE,
     ORIGIN_RUN,
+    ORIGIN_WORKFLOW,
     Plan,
     PlanStatus,
     TERMINAL_PLAN_STATUSES,
@@ -96,6 +98,9 @@ from .state_machine import (
     repair_note,
 )
 from .store import State, Store, goal_key, title_key
+from .workflow import errors_text as workflow_errors_text
+from .workflow import linear as linear_workflow
+from .workflow import lint as lint_workflow
 
 log = logging.getLogger("planning-mcp.handlers")
 
@@ -241,6 +246,7 @@ class PlanningHandlers:
                 ApprovalStore(config.state_dir),
                 port=config.approval_port,
                 open_browser=config.approval_open_browser,
+                workflow=config.advanced_workflow,
             )
         else:
             self.approval_ui = None
@@ -1140,6 +1146,9 @@ class PlanningHandlers:
                 )
                 for t in plan.tasks
             ]
+            # The workflow the human read is part of what they approved (3.3.0). Only
+            # when there is one, so every other plan keeps its 3.2 fingerprint.
+            + ([f"wf:{plan.workflow}"] if plan.workflow else [])
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
@@ -1193,6 +1202,8 @@ class PlanningHandlers:
         plan.pending_revision = None
         plan.rework_from_completion = False
         plan.clear_draft()
+        plan.workflow_prev = None
+        plan.workflow_asked = None
         if plan.status is PlanStatus.AWAITING_COMPLETION:
             plan.run_note = None  # shown with the report this approval answers
         self._milestone(plan)
@@ -1243,6 +1254,7 @@ class PlanningHandlers:
         task_comments: dict[str, str] | None = None,
         scope: str = SCOPE_PLAN,
         criteria: dict[Any, str] | None = None,
+        workflow_comments: dict[str, str] | None = None,
     ) -> tuple[str, Any]:
         """Route the human's "no" to the mutation that actually answers it.
 
@@ -1262,7 +1274,9 @@ class PlanningHandlers:
                 plan, comment, {int(k): v for k, v in targets.items()}
             )
             return "REWORK", reopened
-        return "REVISE", self._mutate_revise(plan, comment, task_comments, scope, criteria)
+        return "REVISE", self._mutate_revise(
+            plan, comment, task_comments, scope, criteria, workflow_comments
+        )
 
     def _mutate_rework(
         self, plan: Plan, comment: str | None, targets: dict[int, str]
@@ -1313,6 +1327,7 @@ class PlanningHandlers:
         task_comments: dict[str, str] | None = None,
         scope: str = SCOPE_PLAN,
         criteria: dict[Any, str] | None = None,
+        workflow_comments: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """Send a plan back for changes. Returns the per-task targets, if any.
 
@@ -1336,11 +1351,29 @@ class PlanningHandlers:
         # are applied to them. A whole-plan one replaces every task, so there is
         # nothing to attach them to - they travel in the comment instead, where the
         # model reads them while redrafting. Either way nothing typed is dropped (D22).
+        drawing = (
+            {str(k): str(v) for k, v in (workflow_comments or {}).items() if str(v).strip()}
+            if plan.workflow else {}
+        )
+        if scope == SCOPE_WORKFLOW and not drawing:
+            scope = SCOPE_TASKS if self._revision_targets(plan, task_comments) else SCOPE_PLAN
+        keeps_tasks = scope in (SCOPE_TASKS, SCOPE_WORKFLOW)
         if criteria and not plan.rework_from_completion:
-            if scope == SCOPE_TASKS and self._revision_targets(plan, task_comments):
+            if keeps_tasks and (
+                scope == SCOPE_WORKFLOW or self._revision_targets(plan, task_comments)
+            ):
                 self._apply_criteria(plan, criteria)
             else:
                 comment = self._criteria_as_comment(plan, comment, criteria)
+        if drawing and scope == SCOPE_PLAN:
+            # A whole-plan revision replaces the drawing too; what was said about its
+            # nodes travels in the comment the model reads while redrafting (D22).
+            comment = self._workflow_as_comment(plan, comment, drawing)
+        if plan.workflow:
+            # What the human sent back, so the next card can mark what changed (3.3.0).
+            plan.workflow_prev = {n["id"]: n["label"] for n in self._workflow_nodes(plan)}
+            plan.workflow_asked = drawing if scope == SCOPE_WORKFLOW else None
+        plan.workflow_retries = 0
         plan.approval.revision_count += 1
         plan.approval.user_comment = comment or ""
         plan.approval.reset_request()
@@ -1352,7 +1385,7 @@ class PlanningHandlers:
         # Markers from a previous round would otherwise read as complaints about this one.
         plan.clear_revision_marks()
         targets = (
-            self._revision_targets(plan, task_comments) if scope == SCOPE_TASKS else {}
+            self._revision_targets(plan, task_comments) if keeps_tasks else {}
         )
         # A whole-plan revision names no task to rewrite, but what the human typed about
         # particular tasks is still theirs. It is kept with the plan so that it reaches
@@ -1360,13 +1393,26 @@ class PlanningHandlers:
         # response of a call that happened to be waiting at that moment.
         said = {} if targets else self._revision_targets(plan, task_comments)
         plan.pending_revision = (
-            {"targets": targets} if targets
+            {"origin": ORIGIN_WORKFLOW, "workflow_targets": drawing, "targets": targets}
+            if scope == SCOPE_WORKFLOW
+            else {"targets": targets} if targets
             else {"targets": {}, "comments": said} if said
             else None
         )
         plan.set_status(PlanStatus.DRAFTING)
         self._withdraw_approval_request(plan)
         return targets
+
+    def _workflow_as_comment(
+        self, plan: Plan, comment: str | None, drawing: dict[str, str]
+    ) -> str:
+        parts = [comment.strip()] if (comment or "").strip() else []
+        for item in self._workflow_comments_brief(plan, drawing) or []:
+            where = "워크플로우 전체" if item["node"] == "*" else (
+                f"워크플로우 {item['node']} '{item['label']}'"
+            )
+            parts.append(f"[{where}] {item['user_comment']}")
+        return " / ".join(parts)
 
     @staticmethod
     def _criteria_as_comment(
@@ -1426,7 +1472,7 @@ class PlanningHandlers:
         else:
             self._mutate_no(
                 plan, verdict.comment, verdict.task_comments, verdict.scope,
-                verdict.criteria,
+                verdict.criteria, verdict.workflow_comments,
             )
         self.store.save(state)
         self.store.audit(
@@ -1436,6 +1482,7 @@ class PlanningHandlers:
             comment=verdict.comment,
             scope=verdict.scope,
             task_comments=verdict.task_comments or None,
+            workflow_comments=verdict.workflow_comments or None,
         )
         log.warning("Applied a late human decision for %s: %s", plan.plan_id, verdict.decision)
 
@@ -1996,6 +2043,9 @@ class PlanningHandlers:
             )
             done_when = {}
 
+        # --- workflow (3.3.0) -------------------------------------------------
+        wf_raw = self._workflow_arg(args, notes)
+
         # --- thinking budget --------------------------------------------------
         # The round's budget is fixed on its first step. A model whose habit is one
         # more check (D25) is not refused when it runs out - a refusal is one more thing
@@ -2012,6 +2062,7 @@ class PlanningHandlers:
             plan.draft_alternatives = alternatives
             plan.draft_reasons = {str(k): v for k, v in reasons.items()}
             plan.draft_done_when = {str(k): v for k, v in done_when.items()}
+            plan.draft_workflow = wf_raw
         elif need_more and (alternatives or reasons) and plan.draft_tasks:
             plan.draft_alternatives = alternatives
             plan.draft_reasons = {str(k): v for k, v in reasons.items()}
@@ -2019,6 +2070,8 @@ class PlanningHandlers:
             # Criteria sent on their own join the draft they number into, like the
             # alternatives above.
             plan.draft_done_when = {str(k): v for k, v in done_when.items()}
+        if need_more and wf_raw and plan.draft_tasks and not args.get("task_list"):
+            plan.draft_workflow = wf_raw  # joins the draft it draws, like the criteria
         auto_submitted = False
         if need_more and budget > 0 and step_number >= plan.step_budget_end:
             if plan.draft_tasks:
@@ -2071,6 +2124,8 @@ class PlanningHandlers:
                 done_when = {
                     int(k): v for k, v in plan.draft_done_when.items() if str(k).isdigit()
                 }
+            if wf_raw is None and plan.draft_workflow:
+                wf_raw = plan.draft_workflow
             if not auto_submitted:
                 notes.append(
                     "No task_list was sent, so your latest draft task_list was used."
@@ -2105,6 +2160,14 @@ class PlanningHandlers:
                 f"{len(unmatched)} entry/entries in task_updates had no task_id and were "
                 f"ignored: the user commented on {len(targets)} tasks, so there is no way "
                 'to tell which one you meant. Send [{"task_id": <number>, "title": "..."}].'
+            )
+
+        if plan.workflow_revision() and self.config.advanced_workflow and not task_list:
+            # The human commented on the workflow (3.3.0): a redrawn workflow is the
+            # answer, with task_updates for the tasks they also commented on.
+            return self._apply_workflow_revision(
+                state, plan, wf_raw, task_updates, targets, notes, step_number, done_when,
+                thought,
             )
 
         if task_updates and not targets:
@@ -2155,6 +2218,32 @@ class PlanningHandlers:
                 notes=notes,
                 recorded_step=step_number,
             )
+
+        # The workflow is drawn before anything is replaced (3.3.0). One the guard
+        # refuses sends the call back with the task list kept as the draft, so the model
+        # resends only the workflow - and the plan is not half-replaced in between.
+        drawn: tuple[str, str, str | None] | None = None
+        if self.config.advanced_workflow:
+            titles = list(task_list)[: self.config.max_tasks]
+
+            def keep_draft() -> None:
+                plan.draft_tasks = titles
+                plan.draft_alternatives = alternatives
+                plan.draft_reasons = {str(k): v for k, v in reasons.items()}
+                plan.draft_done_when = {str(k): v for k, v in done_when.items()}
+                plan.draft_workflow = None
+
+            drawn, refusal = self._draw_workflow(
+                state, plan, wf_raw, titles, notes, step_number, keep_draft
+            )
+            if refusal is not None:
+                return refusal
+            if plan.workflow_revision():
+                notes.append(
+                    "You replaced the whole task list in answer to comments on the "
+                    "workflow. It was accepted; the user re-approves every task."
+                )
+                self.store.audit("workflow_replanned", plan_id=plan.plan_id)
 
         if targets and plan.repairing():
             # A task failed and the model re-planned everything instead of repairing
@@ -2231,6 +2320,8 @@ class PlanningHandlers:
                 )
         self._attach_options(plan, alternatives, reasons, notes)
         self._attach_done_when(plan, done_when, notes)
+        if drawn is not None:
+            plan.workflow, plan.workflow_by, plan.workflow_raw = drawn
         plan.set_status(PlanStatus.AWAITING_APPROVAL)
         plan.approval.reset_request()
         plan.clear_draft()
@@ -2290,6 +2381,204 @@ class PlanningHandlers:
                 f"Plan created with {len(plan.tasks)} tasks. It does not need more "
                 "checking - the user reviews it next. Execution is locked until they "
                 "approve." + offered
+            ),
+        )
+
+    # ---- the workflow diagram (3.3.0) -------------------------------------
+    def _workflow_arg(self, args: dict[str, Any], notes: list[str]) -> str | None:
+        raw = args.get("workflow")
+        if not isinstance(raw, str) or not raw.strip():
+            return None
+        if not self.config.advanced_workflow:
+            notes.append(
+                "The workflow diagram is turned off on this server; 'workflow' was ignored."
+            )
+            return None
+        return raw
+
+    def _draw_workflow(
+        self, state: State, plan: Plan, raw: str | None, titles: list[str],
+        notes: list[str], step_number: int, keep: Any = None,
+    ) -> tuple[tuple[str, str, str | None] | None, dict[str, Any] | None]:
+        """(canonical text, who drew it, the model's text if refused) - or a refusal.
+
+        The model's drawing is used when the guard can read it, repairs included. When
+        it cannot, the call is sent back with what to fix - up to `workflow_retries`
+        times in a row - and after that the server draws the tasks in order itself, so
+        the plan reaches the human whatever the model can manage. A missing workflow
+        is drawn by the server at once: there is nothing to correct.
+        """
+        if raw is None:
+            notes.append(
+                "No workflow was sent, so the server drew the tasks in order. Send "
+                "workflow with the final task_list."
+            )
+            self.store.audit(
+                "workflow_drawn_by_server", plan_id=plan.plan_id, reason="missing"
+            )
+            return (linear_workflow(titles).text, "server", None), None
+        result = lint_workflow(raw, titles, self.config.workflow_max_nodes)
+        notes.extend(result.notes)
+        if result.ok:
+            plan.workflow_retries = 0
+            return (result.text, "agent", None), None
+        problems = workflow_errors_text(result.errors)
+        codes = [e.get("code") for e in result.errors]
+        if plan.workflow_retries < self.config.workflow_retries:
+            plan.workflow_retries += 1
+            if keep is not None:
+                keep()
+            plan.touch()
+            self.store.save(state)
+            self.store.audit(
+                "workflow_refused", plan_id=plan.plan_id, errors=codes,
+                attempt=plan.workflow_retries,
+            )
+            return None, error(
+                plan,
+                ErrorCode.WORKFLOW_INVALID,
+                "The workflow could not be drawn. " + problems,
+                notes=notes,
+                recorded_step=step_number,
+                workflow_errors=result.errors,
+                workflow_example=linear_workflow(titles).text,
+            )
+        plan.workflow_retries = 0
+        notes.append(
+            "The workflow still could not be drawn (" + problems + "), so the server "
+            "drew the tasks in order instead."
+        )
+        self.store.audit(
+            "workflow_drawn_by_server", plan_id=plan.plan_id, reason="invalid", errors=codes
+        )
+        return (linear_workflow(titles).text, "server", raw), None
+
+    def _relabel_workflow(self, plan: Plan) -> None:
+        """Task titles changed (task_updates): the task nodes follow them."""
+        if not plan.workflow:
+            return
+        titles = [t.title for t in plan.tasks]
+        result = lint_workflow(plan.workflow, titles, max(self.config.workflow_max_nodes, 1000))
+        if result.ok:
+            plan.workflow = result.text
+        else:  # a task count that no longer matches the drawing
+            plan.workflow = linear_workflow(titles).text
+            plan.workflow_by = "server"
+
+    def _workflow_nodes(self, plan: Plan) -> list[dict[str, Any]]:
+        if not plan.workflow:
+            return []
+        titles = [t.title for t in plan.tasks]
+        result = lint_workflow(plan.workflow, titles, 1000)
+        return (result if result.ok else linear_workflow(titles)).nodes
+
+    def _workflow_payload(self, plan: Plan) -> dict[str, Any] | None:
+        """What the approval page draws, for a plan that has a workflow."""
+        if not plan.workflow or not self.config.advanced_workflow:
+            return None
+        nodes = self._workflow_nodes(plan)
+        prev = plan.workflow_prev or {}
+        # New or relabelled. A node the model only renamed (start -> S, same words) is
+        # not a change the human asked about, so the words decide, not the id.
+        labels = set(prev.values())
+        changed = [
+            n["id"] for n in nodes
+            if (n["id"] in prev and prev[n["id"]] != n["label"])
+            or (n["id"] not in prev and n["label"] not in labels)
+        ] if prev else []
+        return {
+            "text": plan.workflow,
+            "nodes": nodes,
+            "by": plan.workflow_by or "agent",
+            "raw": plan.workflow_raw or "",
+            "changed": changed,
+            "asked": dict(plan.workflow_asked or {}),
+        }
+
+    def _workflow_comments_brief(
+        self, plan: Plan, comments: dict[str, str]
+    ) -> list[dict[str, str]] | None:
+        """The human's workflow comments, with the label of the node each one is on."""
+        labels = {n["id"]: n["label"] for n in self._workflow_nodes(plan)}
+        out = []
+        for node_id, text in sorted(comments.items(), key=lambda kv: (kv[0] != "*", kv[0])):
+            if node_id == "*":
+                out.append({"node": "*", "label": "(the whole workflow)", "user_comment": text})
+            else:
+                out.append({"node": node_id, "label": labels.get(node_id, ""),
+                            "user_comment": text})
+        return out or None
+
+    def _apply_workflow_revision(
+        self, state: State, plan: Plan, raw: str | None, task_updates: list[dict[str, Any]],
+        targets: dict[int, str], notes: list[str], step_number: int,
+        done_when: dict[int, str], thought: str,
+    ) -> dict[str, Any]:
+        """Answer the human's comments on the workflow: a redrawn workflow, and
+        task_updates for the tasks they also commented on. Task ids stay as they are."""
+        if raw is None:
+            plan.touch()
+            self.store.save(state)
+            return error(
+                plan, ErrorCode.REVISION_INCOMPLETE,
+                "The user commented on the workflow, but no workflow was sent.",
+                notes=notes, recorded_step=step_number, tasks=plan.tasks_brief(),
+            )
+        titles = [t.title for t in plan.tasks]
+        check = lint_workflow(raw, titles, self.config.workflow_max_nodes)
+        if check.ok and check.text == plan.workflow:
+            plan.touch()
+            self.store.save(state)
+            return error(
+                plan, ErrorCode.REVISION_INCOMPLETE,
+                "The workflow you sent is the same as the one the user commented on.",
+                notes=notes, recorded_step=step_number, tasks=plan.tasks_brief(),
+            )
+        if task_updates and targets:
+            return self._apply_task_updates(
+                state, plan, task_updates, targets, notes, step_number, done_when,
+                thought=thought, workflow_raw=raw,
+            )
+        if task_updates:
+            notes.append(
+                "task_updates was ignored: the user commented on the workflow, not on a "
+                "task."
+            )
+        drawn, refusal = self._draw_workflow(state, plan, raw, titles, notes, step_number)
+        if refusal is not None:
+            return refusal
+        if targets:
+            notes.append(
+                "The user also commented on task(s) "
+                f"{', '.join(str(t) for t in sorted(targets))}, which you did not rewrite. "
+                "They are unchanged and the user will see that when they review."
+            )
+        plan.workflow, plan.workflow_by, plan.workflow_raw = drawn
+        plan.pending_revision = None
+        plan.clear_draft()
+        plan.set_status(PlanStatus.AWAITING_APPROVAL)
+        plan.approval.reset_request()
+        self._milestone(plan)
+        self.store.save(state)
+        self.store.audit(
+            "workflow_revised", plan_id=plan.plan_id, by=plan.workflow_by,
+            unaddressed=sorted(targets) or None,
+        )
+        if self._ctx().trip is None and self._asks_itself():
+            return self._ask_user(
+                state, plan, {"plan_summary": self._spoken(thought)}, notes, own=True,
+                recorded="Redrew the workflow. The user is reviewing the change.",
+            )
+        return build(
+            plan,
+            recorded_step=step_number,
+            total_steps=plan.total_steps,
+            tasks=plan.tasks_brief(),
+            notes=notes,
+            qualify=len(state.active_plans()) > 1,
+            message=(
+                "Redrew the workflow as the user asked. Every task is unchanged. "
+                "Execution stays locked until the user approves this version."
             ),
         )
 
@@ -2385,6 +2674,7 @@ class PlanningHandlers:
         step_number: int,
         done_when: dict[int, str] | None = None,
         thought: str = "",
+        workflow_raw: str | None = None,
     ) -> dict[str, Any]:
         """Rewrite only the tasks the human flagged, leaving the rest untouched.
 
@@ -2454,6 +2744,18 @@ class PlanningHandlers:
                 tasks=plan.tasks_brief(),
             )
 
+        # A redrawn workflow sent with the rewrites (3.3.0) is checked against the titles
+        # it will stand beside, before anything is written.
+        drawn: tuple[str, str, str | None] | None = None
+        if workflow_raw is not None and self.config.advanced_workflow:
+            renamed = dict(planned)
+            new_titles = [renamed.get(t.task_id, t.title) for t in plan.tasks]
+            drawn, refusal = self._draw_workflow(
+                state, plan, workflow_raw, new_titles, notes, step_number
+            )
+            if refusal is not None:
+                return refusal
+
         plan.superseded_tasks.append([t.to_dict() for t in plan.tasks])
         for task_id, title in planned:
             task = plan.get_task(task_id)
@@ -2488,6 +2790,10 @@ class PlanningHandlers:
             task.clear_file_evidence()
 
         applied = [task_id for task_id, _ in planned]
+        if drawn is not None:
+            plan.workflow, plan.workflow_by, plan.workflow_raw = drawn
+        else:
+            self._relabel_workflow(plan)
         self._attach_done_when(plan, done_when or {}, notes, only=set(applied))
         if ignored:
             notes.append(
@@ -2728,7 +3034,14 @@ class PlanningHandlers:
                 # the call that was waiting for it (_revise).
                 user_comment=(plan.approval.user_comment or None) if sent_back else None,
                 revision_count=plan.approval.revision_count if sent_back else None,
-                revision_scope=(SCOPE_TASKS if flagged else SCOPE_PLAN) if sent_back else None,
+                revision_scope=(
+                    SCOPE_WORKFLOW if plan.workflow_revision()
+                    else SCOPE_TASKS if flagged else SCOPE_PLAN
+                ) if sent_back else None,
+                workflow_comments=self._workflow_comments_brief(
+                    plan, plan.workflow_targets()
+                ),
+                workflow=plan.workflow if plan.workflow_revision() else None,
                 revision_targets=[
                     {"task_id": task_id, "title": plan.get_task(task_id).title,
                      "user_comment": body}
@@ -2818,9 +3131,12 @@ class PlanningHandlers:
         if self.approval_ui is not None:
             fingerprint = self._fingerprint(plan)
             phase = PHASE_COMPLETION if completion_phase else PHASE_PLAN
+            drawing = None if completion_phase else self._workflow_payload(plan)
             request_id = self.approval_ui.open_request(
                 plan.plan_id, plan.goal, display, plan.tasks_for_page(),
                 fingerprint, phase, plan_summary,
+                # Passed only when there is one, so the call is 3.2's otherwise.
+                **({"workflow": drawing} if drawing else {}),
             )
             if request_id is None:
                 return self._wait_unavailable(plan, notes, display)
@@ -3356,6 +3672,7 @@ class PlanningHandlers:
             verdict.task_comments if verdict else None,
             verdict.scope if verdict else SCOPE_PLAN,
             verdict.criteria if verdict else None,
+            verdict.workflow_comments if verdict else None,
         )
         if kind == "REWORK":
             return self._reworked(state, plan, detail, comment, verdict, notes)
@@ -3369,9 +3686,41 @@ class PlanningHandlers:
             plan_id=plan.plan_id,
             revision_count=plan.approval.revision_count,
             user_comment=comment,
-            scope=SCOPE_TASKS if targets else SCOPE_PLAN,
+            scope=(
+                SCOPE_WORKFLOW if plan.workflow_revision()
+                else SCOPE_TASKS if targets else SCOPE_PLAN
+            ),
             task_comments=(verdict.task_comments or None) if verdict else None,
+            workflow_comments=plan.workflow_targets() or None,
         )
+
+        if plan.workflow_revision():
+            flagged = plan.revision_targets()
+            return build(
+                plan,
+                message=(
+                    "The user commented on the workflow. Redraw it and send the whole "
+                    "workflow again with plan_and_think"
+                    + (", with task_updates for the tasks they commented on" if flagged
+                       else "")
+                    + ". Every other task stays exactly as it is."
+                ),
+                notes=notes,
+                user_comment=comment or None,
+                revision_count=plan.approval.revision_count,
+                revision_scope=SCOPE_WORKFLOW,
+                workflow_comments=self._workflow_comments_brief(
+                    plan, plan.workflow_targets()
+                ),
+                revision_targets=[
+                    {"task_id": task_id, "title": plan.get_task(task_id).title,
+                     "user_comment": body}
+                    for task_id, body in sorted(flagged.items())
+                    if plan.get_task(task_id) is not None
+                ] or None,
+                workflow=plan.workflow,
+                tasks=plan.tasks_brief(),
+            )
 
         if targets:
             flagged = plan.revision_targets()

@@ -100,6 +100,32 @@ def _repair_hint(plan: Plan) -> str:
     )
 
 
+def _workflow_hint(plan: Plan) -> str:
+    """The human commented on the workflow (3.3.0): what they said, and the exact call."""
+    said = plan.workflow_targets()
+    listed = "; ".join(
+        ("the whole workflow" if node == "*" else node) + f': "{_clip(text)}"'
+        for node, text in sorted(said.items(), key=lambda kv: (kv[0] != "*", kv[0]))
+    )
+    targets = plan.revision_targets()
+    also = ""
+    if targets:
+        example = ", ".join(
+            '{"task_id": %d, "title": "<the rewritten task>"}' % tid for tid in sorted(targets)
+        )
+        which = ", ".join(str(t) for t in sorted(targets))
+        also = (
+            f" The user also commented on task(s) {which}: send task_updates=[{example}] "
+            "too."
+        )
+    return (
+        f"The user commented on the workflow ({listed}). Call plan_and_think with "
+        "need_more_thinking=false and workflow=<the whole revised flowchart>. Keep the "
+        f"task nodes T1..T{len(plan.tasks)}. If a change needs a task added or removed, "
+        "send the full task_list with it." + also
+    )
+
+
 def _steer_hint(plan: Plan) -> str:
     """What to send after the human wrote to the agent while the plan was running.
 
@@ -379,7 +405,19 @@ def _error_action(plan: Plan | None, code: ErrorCode) -> tuple[str, str]:
             "tasks. task_updates may ONLY be used to answer a per-task revision request. "
             "If you are re-planning, send a full task_list instead.",
         )
+    if code is ErrorCode.WORKFLOW_INVALID:
+        return (
+            NextAction.CALL_PLAN_AND_THINK.value,
+            "Call plan_and_think again with need_more_thinking=false and the workflow "
+            "corrected as message says. Your task_list is kept - you need not send it "
+            "again (send task_updates again if you sent them). workflow_example shows "
+            "your tasks as a flowchart that can be drawn.",
+        )
     if code is ErrorCode.REVISION_INCOMPLETE:
+        if plan is not None and plan.workflow_revision():
+            return NextAction.CALL_PLAN_AND_THINK.value, (
+                "The user asked for the workflow to change. " + _workflow_hint(plan)
+            )
         if plan is not None and plan.steering() and plan.revision_targets():
             return (
                 NextAction.CALL_PLAN_AND_THINK.value,
@@ -489,6 +527,8 @@ def _status_action_inner(plan: Plan | None) -> tuple[str, str]:
         # alone. Handing a weak model the literal argument to send is what makes this
         # usable at all; it copies the hint far more reliably than it composes one.
         targets = plan.revision_targets()
+        if plan.workflow_revision():
+            return NextAction.CALL_PLAN_AND_THINK.value, _workflow_hint(plan)
         if targets and plan.repairing():
             return NextAction.CALL_PLAN_AND_THINK.value, _repair_hint(plan)
         if targets and plan.steering():

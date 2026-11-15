@@ -239,6 +239,16 @@ class Config:
     # cancel it outright (3.2.0), for an agent that stopped reporting: the card goes
     # at once and the plan is closed on the next tool call of any kind.
     run_control: bool = True
+    # --- the workflow diagram (3.3.0) ----------------------------------------
+    # ADVANCED_WORKFLOW_PLANNING=1: the model sends a Mermaid flowchart with its final
+    # task list, the approval page draws it with the bundled mermaid.js (vendor/), and
+    # the human comments on its nodes. Off = 3.2 exactly: nothing advertised, nothing
+    # drawn, nothing extra in the page or the state file.
+    advanced_workflow: bool = False
+    workflow_max_nodes: int = 30
+    # Times the guard sends an undrawable workflow back before drawing the tasks in
+    # order itself. 0 = never send it back.
+    workflow_retries: int = 2
 
     @property
     def file_checks(self) -> bool:
@@ -305,6 +315,14 @@ class Config:
             local_repair=_env_bool("PLANNING_MCP_LOCAL_REPAIR", True),
             auto_ask=_env_bool("PLANNING_MCP_AUTO_ASK", True),
             run_control=_env_bool("PLANNING_MCP_RUN_CONTROL", True),
+            # The name the feature was asked for by; the prefixed one is the alias that
+            # matches every other setting.
+            advanced_workflow=_env_bool(
+                "ADVANCED_WORKFLOW_PLANNING",
+                _env_bool("PLANNING_MCP_ADVANCED_WORKFLOW", False),
+            ),
+            workflow_max_nodes=_env_int("PLANNING_MCP_WORKFLOW_MAX_NODES", 30),
+            workflow_retries=_env_int("PLANNING_MCP_WORKFLOW_RETRIES", 2),
         )
 
 

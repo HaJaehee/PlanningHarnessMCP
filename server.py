@@ -64,6 +64,7 @@ def build_protocol(config: Config, log=None) -> McpProtocol:
             # Not under the test-only bypass: nothing is asked there, so the texts
             # must not promise that the server asks.
             auto_ask=config.auto_ask and not config.autoapprove,
+            workflow=config.advanced_workflow,
         ),
         SERVER_NAME,
         SERVER_VERSION,
