@@ -1,8 +1,8 @@
 # 07 · Testing
 
-**887 unit tests + 7 end-to-end smoke tests, all passing** (as of 3.2.0; one unit test skips
-where the OS will not let it create a symlink). 948 since the approval page was rebuilt as
-files (unreleased); the page tests among them skip where node is missing. Standard-library
+**1035 unit tests + 8 end-to-end smoke tests, all passing** (as of 3.3.0; one unit test skips
+where the OS will not let it create a symlink, and the page tests skip where node is
+missing). Standard-library
 `unittest` only. This project's defect history proves the rule: *test the seam before you
 trust it.* See [09-defects-and-lessons.md](09-defects-and-lessons.md).
 
@@ -174,7 +174,7 @@ so its five subclasses), `self.legacy()` or `auto_ask=False` on individual tests
 so the 3.0 flow keeps the coverage it had. Three smoke tests set `PLANNING_MCP_AUTO_ASK=false`
 for the same reason; `smoke_gate_and_run` is the default flow end to end.
 
-## Workflow suites (3.3, unreleased)
+## Workflow suites (3.3.0)
 
 - `tests/test_workflow_lint.py` - the guard: one test per slip of §4.2 of the plan, the
   removals, the refusals, canonical text linting to itself, and 1,500 fuzzed inputs that
@@ -264,7 +264,7 @@ a real browser against the same fixtures:
 python tools/page_preview.py          # http://127.0.0.1:8810/ - every card, working buttons
 ```
 
-The rebuild of the page into these files (unreleased, after 3.2.0) was shown not to change
+The rebuild of the page into these files (3.3.0) was shown not to change
 it, step by step: the assembled page was byte-identical to the old string but for one
 `sourceURL` line; the split and the templates drew `golden.txt` byte for byte (the templates
 with each `onclick` mechanically rewritten to `data-act`); every element's computed style,

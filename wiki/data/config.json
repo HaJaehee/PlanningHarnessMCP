@@ -236,19 +236,19 @@
       "env": "ADVANCED_WORKFLOW_PLANNING",
       "env_alias": "PLANNING_MCP_ADVANCED_WORKFLOW",
       "default": false,
-      "purpose": "3.3 (unreleased). The model sends a Mermaid flowchart (`workflow`) with its final task list; planning/workflow.py repairs it and writes canonical Mermaid; the approval page draws it with vendor/mermaid.js and takes node comments (scope WORKFLOW). false = 3.2 exactly: not advertised, not stored, not in the page."
+      "purpose": "3.3.0. The model sends a Mermaid flowchart (`workflow`) with its final task list; planning/workflow.py repairs it and writes canonical Mermaid; the approval page draws it with vendor/mermaid.js and takes node comments (scope WORKFLOW). false = 3.2 exactly: not advertised, not stored, not in the page."
     },
     {
       "field": "workflow_max_nodes",
       "env": "PLANNING_MCP_WORKFLOW_MAX_NODES",
       "default": 30,
-      "purpose": "3.3. A workflow with more nodes is refused (TOO_LARGE)."
+      "purpose": "3.3.0. A workflow with more nodes is refused (TOO_LARGE)."
     },
     {
       "field": "workflow_retries",
       "env": "PLANNING_MCP_WORKFLOW_RETRIES",
       "default": 2,
-      "purpose": "3.3. Refusals in a row (WORKFLOW_INVALID) before the server draws the tasks in order itself. 0 = draw it at once."
+      "purpose": "3.3.0. Refusals in a row (WORKFLOW_INVALID) before the server draws the tasks in order itself. 0 = draw it at once."
     }
   ],
   "cli": {

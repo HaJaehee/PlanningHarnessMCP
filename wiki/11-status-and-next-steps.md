@@ -1,13 +1,13 @@
 # 11 · Status and Next Steps
 
-## Current state (as of version 3.2.0, 2026-10-21)
+## Current state (as of version 3.3.0, 2026-11-18)
 
-- **Unreleased, 2026-11-16 - the workflow diagram (3.3).** `ADVANCED_WORKFLOW_PLANNING=1`
+- **3.3.0, 2026-11-18 - the workflow diagram.** `ADVANCED_WORKFLOW_PLANNING=1`
   adds a Mermaid flowchart to the plan, drawn on the approval page with node comments and
   `수정 요청(워크플로우)`; the guard in `planning/workflow.py` keeps the model's Mermaid
   drawable. mermaid.js is bundled in `vendor/` - the one exception to Ground rule 1, and
-  browser-only. Off by default, and off it is 3.2. Committed on `develop`; not pushed; no
-  version bump; the package was not rebuilt. **No prompt repaste:** `agents.md` is
+  browser-only. Off by default, and off it is 3.2. Committed on `develop`; not pushed;
+  the package was not rebuilt. 1035 unit tests + 8 smoke. **No prompt repaste:** `agents.md` is
   unchanged - the rule is in the tool description, which only a flag-on server sends.
   Field questions: does the model send `workflow` unprompted by the prompt (watch
   `workflow_drawn_by_server` with `reason: missing`); how often is it refused
@@ -15,7 +15,7 @@
   or with a whole new task list (`workflow_replanned`); does `state/workflow_render_failed.jsonl`
   ever get a line (it should not - each one is a guard bug).
 
-- **Unreleased, 2026-10-22 - the approval page rebuilt as files.** `planning/web/` holds the
+- **3.3.0 (built 2026-10-22) - the approval page rebuilt as files.** `planning/web/` holds the
   page as HTML, CSS and nine scripts; cards are `html` templates, buttons use `data-act`,
   every colour is named once with the dark scheme in one block. Nothing on screen changed
   (shown step by step - [07](07-testing.md#the-approval-page-planningweb)), except three
@@ -26,7 +26,7 @@
   approved - was clicked through against a running server. The four colours that had no
   dark variant (the line between cards, an edited criterion's label, the agent note's edge,
   the error line) have one now, at about their light-scheme contrast. 950 unit tests +
-  7 smoke. Committed on `develop` in steps; not pushed; no version bump, the package was
+  7 smoke at the time. Committed on `develop` in steps; not pushed; the package was
   not rebuilt.
 - **3.2.0 - a run whose agent stopped can be cancelled.** A run card's stop waits for the
   agent's next report, so an agent that failed mid-plan left its card on the page for good

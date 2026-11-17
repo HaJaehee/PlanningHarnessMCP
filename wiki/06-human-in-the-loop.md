@@ -698,8 +698,8 @@ stop asked mid-task (shown as asked, applied on the next report, task kept), con
 (text and caret surviving a redraw; the re-approval card marking the rewritten task), and the
 completion report opened by the last DONE.
 
-<a id="the-workflow-diagram-33-unreleased"></a>
-## The workflow diagram (3.3, unreleased)
+<a id="the-workflow-diagram-330"></a>
+## The workflow diagram (3.3.0)
 
 `ADVANCED_WORKFLOW_PLANNING=1` (alias `PLANNING_MCP_ADVANCED_WORKFLOW`; default off). Design
 and decisions: [`docs/plan-3.3-advanced-workflow.md`](../docs/plan-3.3-advanced-workflow.md).

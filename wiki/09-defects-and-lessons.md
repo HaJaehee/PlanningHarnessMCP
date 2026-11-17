@@ -680,7 +680,7 @@ the old page proves a refactor changed nothing - including nothing that was wron
 still has to look at the real page.
 
 <a id="d34"></a>
-## D34 — a label that began with a backtick could not be drawn (3.3, before release)
+## D34 — a label that began with a backtick could not be drawn (3.3.0, before release)
 
 **Symptom:** none in use - found before release by parsing every canonical text the guard
 produced (the lint corpus plus a fuzz run, 610 texts) with the bundled mermaid.js. 12 failed,

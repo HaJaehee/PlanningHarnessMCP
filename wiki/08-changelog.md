@@ -565,10 +565,30 @@ Verified in a real browser - see [06](06-human-in-the-loop.md#the-run-card-310).
 - Tests: 14 new in `tests/test_gate_and_run.py`; the test fake keeps a cancel apart from a
   stop as the real board does. 887 unit tests.
 
-### Unreleased (after 3.2.0) — the approval page as files
+### 3.3.0 — the plan as a workflow diagram; the approval page as files
 
-Nothing the page shows or sends changed, and nothing the model reads. Committed on
-`develop` step by step, the suite green at each:
+**The workflow diagram.** `ADVANCED_WORKFLOW_PLANNING=1` (default off): the model sends a Mermaid flowchart with its
+final task list, the approval page draws it, and the human comments on its nodes - a comment
+turns 승인 into `수정 요청(워크플로우)` and the model redraws the workflow. A pure-Python guard
+(`planning/workflow.py`) repairs the slips models make in Mermaid and writes the canonical
+text the page draws; what it cannot repair is sent back (`WORKFLOW_INVALID`), and after two
+refusals the server draws the tasks in order. The first third-party file: mermaid.js 11.4.1
+in `vendor/`, browser-side, pinned by hash, only with the flag (Ground rule 1a). With the
+flag off the tools, the page, the state file and the fingerprint are 3.2's. Found before
+release by the real parser: [D34](09-defects-and-lessons.md#d34). Mechanism:
+[06](06-human-in-the-loop.md#the-workflow-diagram-330).
+
+- **Nothing changes with the flag off**: no prompt repaste - `agents.md` is unchanged;
+  the rule is in the tool description, which only a flag-on server sends. New settings
+  `PLANNING_MCP_WORKFLOW_MAX_NODES` (30), `PLANNING_MCP_WORKFLOW_RETRIES` (2); new error
+  `WORKFLOW_INVALID`; new scope `WORKFLOW`; audit `workflow_refused`,
+  `workflow_drawn_by_server`; `state/workflow_render_failed.jsonl`.
+- Tests: `test_workflow_lint.py` (40), `test_workflow_revision.py` (28),
+  `test_workflow_page.py` (17), the eighth smoke test `smoke_workflow.py`. 1035 unit
+  tests + 8 smoke.
+
+**The approval page as files.** Nothing the page shows or sends changed, and nothing the
+model reads. Committed on `develop` step by step, the suite green at each:
 
 - **The page is plain files.** `planning/web/`: `page.html`, `page.css` and nine scripts
   (`state`, `html`, `format`, `labels`, `views`, `drafts`, `form`, `board`, `app`) in place of
@@ -622,15 +642,3 @@ Nothing the page shows or sends changed, and nothing the model reads. Committed 
 
 `main` branch, remote `github.com/HaJaehee/PlanningHarnessMCP`. **Not pushed** as of
 this writing — see [11](11-status-and-next-steps.md).
-
-### Unreleased (3.3) — the plan as a workflow diagram
-`ADVANCED_WORKFLOW_PLANNING=1` (default off): the model sends a Mermaid flowchart with its
-final task list, the approval page draws it, and the human comments on its nodes - a comment
-turns 승인 into `수정 요청(워크플로우)` and the model redraws the workflow. A pure-Python guard
-(`planning/workflow.py`) repairs the slips models make in Mermaid and writes the canonical
-text the page draws; what it cannot repair is sent back (`WORKFLOW_INVALID`), and after two
-refusals the server draws the tasks in order. The first third-party file: mermaid.js 11.4.1
-in `vendor/`, browser-side, pinned by hash, only with the flag (Ground rule 1a). With the
-flag off the tools, the page, the state file and the fingerprint are 3.2's. Found before
-release by the real parser: [D34](09-defects-and-lessons.md#d34). Mechanism:
-[06](06-human-in-the-loop.md#the-workflow-diagram-33-unreleased).

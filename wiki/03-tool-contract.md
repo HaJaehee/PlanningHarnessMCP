@@ -155,7 +155,7 @@ Optional: `task_list` (required when finalizing), `task_updates`, `revised_goal`
   jumps/repeats are auto-normalized (never an error); `revises_step` marks the old step
   superseded and reverts to `DRAFTING`; oversized `task_list` truncated to `max_tasks`.
 
-- **Workflow (3.3, unreleased; `ADVANCED_WORKFLOW_PLANNING=1`).** `workflow` is the plan as
+- **Workflow (3.3.0; `ADVANCED_WORKFLOW_PLANNING=1`).** `workflow` is the plan as
   a Mermaid flowchart; task n is node `Tn`, whose label the server takes from the task list.
   It goes through `planning/workflow.py` before anything is stored: what can be repaired is
   repaired (notes say what), and the page only ever gets the canonical text the guard wrote.

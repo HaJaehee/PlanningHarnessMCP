@@ -1,12 +1,12 @@
 # planning-mcp (PlanningHarnessMCP)
 
-**버전: 3.2.0** · MCP 서버 이름: `planning-mcp` · 버전 단일 출처: `planning/config.py`의 `SERVER_VERSION` (MCP `initialize` 응답의 `serverInfo.version`으로 보고됩니다)
+**버전: 3.3.0** · MCP 서버 이름: `planning-mcp` · 버전 단일 출처: `planning/config.py`의 `SERVER_VERSION` (MCP `initialize` 응답의 `serverInfo.version`으로 보고됩니다)
 
 AnythingLLM Agent Mode를 위한 경량 **계획·작업 관리 MCP 서버입니다**. 폐쇄망 환경에서 성능이 제한적인 사내 LLM이 기억에만 의존하여 즉각 답변하는 대신, `계획 → 사람 승인 → 실행 → 보고`의 생애주기를 준수하도록 하네스(Harness)를 제공합니다.
 
 **외부 의존성이 없습니다 (0개).** Python 3.9 이상 표준 라이브러리만 사용하므로 `pip install`이 필요하지 않습니다. 외부 패키지 저장소에 접근할 수 없는 폐쇄망 환경에서 매우 유용합니다.
 
-> **예외 한 가지 (3.3, 미배포):** `ADVANCED_WORKFLOW_PLANNING=1`로 워크플로우 다이어그램 기능을 활성화하면 승인 페이지가 브라우저에서 mermaid.js(MIT)를 사용합니다. 이 에셋은 `vendor/` 디렉터리에 버전과 SHA-256 해시를 고정하여 함께 패키징하며, 추가로 설치해야 하는 Python 패키지는 여전히 없습니다(`requirements.txt` 없음). 기능을 비활성화하면(기본값) 해당 파일을 읽거나 브라우저로 전송하지 않습니다.
+> **예외 한 가지 (3.3.0):** `ADVANCED_WORKFLOW_PLANNING=1`로 워크플로우 다이어그램 기능을 활성화하면 승인 페이지가 브라우저에서 mermaid.js(MIT)를 사용합니다. 이 에셋은 `vendor/` 디렉터리에 버전과 SHA-256 해시를 고정하여 함께 패키징하며, 추가로 설치해야 하는 Python 패키지는 여전히 없습니다(`requirements.txt` 없음). 기능을 비활성화하면(기본값) 해당 파일을 읽거나 브라우저로 전송하지 않습니다.
 
 ---
 
@@ -185,7 +185,7 @@ docs/                     Phase 1~4 문서: 스키마, 아키텍처, 에이전�
 | `PLANNING_MCP_ARTIFACT_ROOTS` | (비어 있음) | 3.0.0. 서버가 파일의 실재 여부를 검증할 수 있는 허용 폴더 목록입니다(`;`로 구분). 비어 있으면 파일 존재를 확인하지 않고 도구 스키마에 `files` 필드도 노출하지 않습니다. 지정된 폴더 외부의 경로는 검증하지 않으며 반려하지도 않습니다. 에이전트 도구가 산출물을 저장하는 폴더를 지정하십시오. |
 | `PLANNING_MCP_LOCAL_REPAIR` | `true` | 3.0.0. 태스크가 실패하면 해당 태스크만 국소적으로 다시 계획합니다. `false`이면 2.0 방식처럼 계획 전체를 처음부터 다시 수립합니다. |
 | `PLANNING_MCP_AUTO_ASK` | `true` | 3.1.0. 승인 요청을 서버가 직접 게시합니다. 모델이 최종 `task_list`를 전송하는 호출과 마지막 태스크의 `DONE` 호출이 곧 승인 요청이 되므로, 모델이 `request_user_approval`을 따로 호출해야 하는 단계가 없어집니다. `false`이면 3.0 방식처럼 모델이 `request_user_approval(ASK_USER)`를 `plan_summary`와 함께 호출합니다. |
-| `ADVANCED_WORKFLOW_PLANNING` | `0` | 3.3(미배포). `1`로 설정하면 에이전트가 계획과 함께 Mermaid 순서도(`workflow`)를 전송하고, 승인 페이지에서 이를 다이어그램으로 시각화합니다. 노드를 클릭하여 검토 의견을 남기면 [승인] 버튼이 [수정 요청(워크플로우)]로 전환됩니다. 에이전트가 작성한 Mermaid 코드는 서버의 문법 가드(`planning/workflow.py`)를 통해 검증 및 정규화된 후에만 페이지로 전달됩니다. `0`(기본값)이면 기존 3.2와 동일하게 동작합니다. 별칭 `PLANNING_MCP_ADVANCED_WORKFLOW`. |
+| `ADVANCED_WORKFLOW_PLANNING` | `0` | 3.3.0. `1`로 설정하면 에이전트가 계획과 함께 Mermaid 순서도(`workflow`)를 전송하고, 승인 페이지에서 이를 다이어그램으로 시각화합니다. 노드를 클릭하여 검토 의견을 남기면 [승인] 버튼이 [수정 요청(워크플로우)]로 전환됩니다. 에이전트가 작성한 Mermaid 코드는 서버의 문법 가드(`planning/workflow.py`)를 통해 검증 및 정규화된 후에만 페이지로 전달됩니다. `0`(기본값)이면 기존 3.2와 동일하게 동작합니다. 별칭 `PLANNING_MCP_ADVANCED_WORKFLOW`. |
 | `PLANNING_MCP_RUN_CONTROL` | `true` | 3.1.0. 실행 중인 계획을 승인 페이지에 표시하고, 사용자가 멈춤과 의견 전달을 요청할 수 있게 합니다. 요청은 에이전트가 진행 중인 태스크를 보고하는 시점에 적용됩니다. 계획 강제 취소(3.2.0)는 에이전트의 보고를 기다리지 않고 다음 도구 호출 시 즉시 적용됩니다. `false`이면 실행 중에는 페이지에 아무것도 표시하지 않습니다. |
 | `PLANNING_MCP_AUTOAPPROVE` | `false` | **테스트 전용 옵션**입니다. HITL 승인 게이트를 건너뜁니다. 호출 시마다 경고 로그가 기록됩니다. |
 

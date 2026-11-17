@@ -1,7 +1,7 @@
 # 3.3 계획 — 워크플로우 다이어그램 (`ADVANCED_WORKFLOW_PLANNING`)
 
-> **상태: 구현 완료 (미배포, 2026-11-16), develop 브랜치에 커밋, 미패키징·미푸시, 버전 미변경.** §9의 결정은 모두 권장안대로 확정했습니다. 구현·검증 결과는 §11에 있습니다.
-> 영문 상세: [wiki 06](../wiki/06-human-in-the-loop.md#the-workflow-diagram-33-unreleased), [wiki 03](../wiki/03-tool-contract.md), [D34](../wiki/09-defects-and-lessons.md#d34).
+> **상태: 3.3.0으로 반영 (2026-11-18), develop 브랜치에 커밋, 미패키징·미푸시.** §9의 결정은 모두 권장안대로 확정했습니다. 구현·검증 결과는 §11에 있습니다.
+> 영문 상세: [wiki 06](../wiki/06-human-in-the-loop.md#the-workflow-diagram-330), [wiki 03](../wiki/03-tool-contract.md), [D34](../wiki/09-defects-and-lessons.md#d34).
 > 작성: 2026-11-16, `d19077f` 기준 (3.2.0 + 미배포 페이지 재구성).
 
 ---

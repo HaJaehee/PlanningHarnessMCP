@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SERVER_NAME = "planning-mcp"
-SERVER_VERSION = "3.2.0"
+SERVER_VERSION = "3.3.0"
 # Shown in the approval page's information dialog (the small "i" beside the version).
 SERVER_AUTHOR = "Ha, Jaehee"
 SERVER_AUTHOR_EMAIL = "lovesm135@naver.com"
