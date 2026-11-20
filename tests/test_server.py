@@ -2494,6 +2494,21 @@ class TestApprovalQueueEdges(HandlerTestCase):
         self.assertEqual(len(queue), 1)
         self.assertEqual(queue[0]["id"], second)
 
+    def test_a_decided_card_can_be_dismissed_and_its_decision_still_reaches_the_agent(self):
+        """The human takes a decided card off the page. Only the card goes: an
+        agent that comes back still collects what was decided."""
+        s = self.store_for("dismiss")
+        rid = s.publish("plan_a", "g", "d", [], "fp")
+        self.assertFalse(s.dismiss(rid))          # undecided: someone is waiting on it
+        self.assertFalse(s.dismiss("nope"))
+        self.assertTrue(s.record_decision(rid, "REJECTED", "no"))
+        self.assertTrue(s.dismiss(rid))
+        self.assertTrue(s.dismiss(rid))           # a second tab: same outcome
+        self.assertTrue(s.peek()[0]["dismissed"])
+        verdict = s.claim_for_plan("plan_a", "fp")
+        self.assertEqual((verdict.decision, verdict.comment), ("REJECTED", "no"))
+        self.assertEqual(s.peek(), [])
+
     def test_sibling_entries_coexist_and_claim_independently(self):
         s = self.store_for("q2")
         ra = s.publish("plan_a", "ga", "da", [], "fpa")

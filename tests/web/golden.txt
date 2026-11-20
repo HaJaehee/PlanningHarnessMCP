@@ -454,10 +454,12 @@
 === r7decided
 <div class="done">plan_20261022_0007 — 승인되었습니다<br>
 <span style="font-weight:400;opacity:.6;font-size:.9rem">에이전트가 이 결정을 반영합니다.</span>
+<button class="linkbtn" type="button" data-act="dismiss" data-id="r7decided">목록에서 지우기</button>
 </div>
 === r8halted
 <div class="done">plan_20261022_0008 — 계속 진행하도록 했습니다<br>
 <span style="font-weight:400;opacity:.6;font-size:.9rem">에이전트가 이 결정을 반영합니다.</span>
+<button class="linkbtn" type="button" data-act="dismiss" data-id="r8halted">목록에서 지우기</button>
 </div>
 === run-plan_20261022_0011
 <h1>실행 중 · plan_20261022_0011</h1>

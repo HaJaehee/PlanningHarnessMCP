@@ -93,6 +93,19 @@ async function decide(id,dec){
   state.busy=false;stale('q-'+id);poll();
 }
 
+// Takes a decided card off the page. The decision itself stays for the agent.
+async function dismiss(id){
+  if(state.busy)return;state.busy=true;
+  lock('q-'+id);
+  try{
+    const r=await fetch('/api/dismiss',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:id})});
+    const j=await r.json();
+    state.lastError=j&&j.ok?'':'카드를 지우지 못했습니다. 화면이 최신이 아닐 수 있으니 잠시 후 다시 시도해 주십시오.';
+  }catch(e){state.lastError='요청을 전송하지 못했습니다. 다시 시도해 주십시오.';}
+  state.busy=false;stale('q-'+id);poll();
+}
+
 // ---- information dialog -------------------------------------------------------
 // The small "i" beside the version: author, contact and version. A native <dialog>, so
 // Esc closes it and focus stays inside it; a click on the backdrop closes it too (the
@@ -111,6 +124,7 @@ function aboutClose(){const d=document.getElementById('about');if(d.open)d.close
 const ACTIONS={
   decide:b=>decide(b.dataset.id,b.dataset.decision),
   control:b=>control(b.dataset.plan,b.dataset.control),
+  dismiss:b=>dismiss(b.dataset.id),
   toggleComment:b=>toggleComment(b),
   toggleCriterion:b=>toggleCriterion(b,b.dataset.id,b.dataset.task),
   editCriterion:b=>editCriterion(b,b.dataset.id,b.dataset.task),

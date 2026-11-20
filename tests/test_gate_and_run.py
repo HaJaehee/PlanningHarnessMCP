@@ -1445,6 +1445,23 @@ class TestTheEndpoints(GateCase):
         self.assertTrue(self.post(plan_id=pid, action="CLEAR"))
         self.assertIsNone(self.get()["runs"][0]["control"])
 
+    def test_a_decided_card_is_taken_off_the_page_by_the_real_endpoint(self):
+        store = self.ui.store
+        rid = store.publish("plan_x", GOAL, "d", [], "fp")
+
+        def dismiss(**body):
+            req = Request(f"{self.base}/api/dismiss", data=json.dumps(body).encode("utf-8"),
+                          headers={"Content-Type": "application/json"}, method="POST")
+            with urlopen(req, timeout=5) as resp:
+                return json.loads(resp.read().decode("utf-8"))["ok"]
+
+        self.assertFalse(dismiss(id=rid))
+        self.assertEqual(len(self.get()["requests"]), 1)
+        store.record_decision(rid, "APPROVED", "")
+        self.assertTrue(dismiss(id=rid))
+        self.assertEqual(self.get()["requests"], [])
+        self.assertEqual(store.claim(rid).decision, "APPROVED")
+
     def test_what_cannot_be_recorded_is_answered_with_false(self):
         h, pid = self.approved()
         self.assertFalse(self.post(plan_id="plan_nope", action="PAUSE"))

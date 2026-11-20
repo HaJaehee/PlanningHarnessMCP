@@ -228,3 +228,5 @@ input.dwi{display:none;flex:1 1 auto;min-width:0;box-sizing:border-box;border-ra
 .ctlrow .linkbtn{margin-top:0}
 .ctlrow.end{justify-content:flex-end}
 .linkbtn.kill{color:var(--red-ink)}
+/* Taking a decided card off the page. */
+.done .linkbtn{margin:.9rem auto 0}

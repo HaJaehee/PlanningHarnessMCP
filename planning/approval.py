@@ -437,6 +437,21 @@ class ApprovalStore:
                     return self._write({"requests": queue})
             return False
 
+    def dismiss(self, request_id: str) -> bool:
+        """Take a decided card off the page. Only the card: the decision stays
+        queued for the agent to collect, so a plan approved or rejected on the page is
+        still approved or rejected when its agent comes back. An undecided request is a
+        question someone is waiting on, and cannot be dismissed."""
+        with exclusive(self.lock_path):
+            queue = self._requests(self.read())
+            for entry in queue:
+                if entry.get("id") == request_id and entry.get("decision"):
+                    if entry.get("dismissed"):
+                        return True
+                    entry["dismissed"] = True
+                    return self._write({"requests": queue})
+            return False
+
     def note_render_failure(self, request_id: str, plan_id: str, error: str) -> None:
         """Append what the page reported to workflow_render_failed.jsonl (3.3.0)."""
         record = {"at": time.time(), "request_id": request_id, "plan_id": plan_id,
@@ -1288,6 +1303,8 @@ class ApprovalServer:
                                if isinstance(e.get("workflow"), dict) else {}),
                         }
                         for e in server.store.peek()
+                        # Taken off the page by the human; still waiting to be collected.
+                        if not e.get("dismissed")
                     ], "runs": [
                         {
                             "plan_id": r.get("plan_id"),
@@ -1313,7 +1330,7 @@ class ApprovalServer:
 
             def do_POST(self) -> None:  # noqa: N802
                 route = urlparse(self.path).path
-                if route not in ("/api/decide", "/api/control") and not (
+                if route not in ("/api/decide", "/api/control", "/api/dismiss") and not (
                     route == "/api/workflow-failed" and server.workflow
                 ):
                     self.send_error(404)
@@ -1348,6 +1365,10 @@ class ApprovalServer:
                         str(body.get("action", "")).upper(),
                         body.get("comment", ""),
                     )})
+                    return
+                if route == "/api/dismiss":
+                    # A decided card the human no longer wants to see.
+                    self._json({"ok": server.store.dismiss(str(body.get("id", "")))})
                     return
                 ok = server.store.record_decision(
                     str(body.get("id", "")),

@@ -181,6 +181,7 @@ def rows_of(key: str, **changes: Any) -> list[Node]:
 ACTIONS = {
     "decide": ("data-id", "data-decision"),
     "control": ("data-plan", "data-control"),
+    "dismiss": ("data-id",),
     "toggleComment": (),
     "toggleCriterion": ("data-id", "data-task"),
     "editCriterion": ("data-id", "data-task"),

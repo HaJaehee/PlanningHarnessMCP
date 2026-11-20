@@ -58,6 +58,7 @@ class TestEveryButtonDoesWhatItSays(CardCase):
         self.assertIn("document.getElementById('root').addEventListener('click',onClick);", app)
         for line in ("decide:b=>decide(b.dataset.id,b.dataset.decision),",
                      "control:b=>control(b.dataset.plan,b.dataset.control),",
+                     "dismiss:b=>dismiss(b.dataset.id),",
                      "toggleComment:b=>toggleComment(b),",
                      "toggleCriterion:b=>toggleCriterion(b,b.dataset.id,b.dataset.task),",
                      "editCriterion:b=>editCriterion(b,b.dataset.id,b.dataset.task),"):
@@ -351,10 +352,13 @@ class TestOlderAndDecidedRequests(CardCase):
         for key in ("r7decided", "r8halted"):
             for decision in ("APPROVED", "REJECTED", "REVISE"):
                 c = self.card(key, decided=decision)
-                self.assertFalse(c.has("button") or c.has("textarea"))
+                self.assertFalse(c.has("textarea"))
+                # One button only: taking the card off the page, not the decision.
+                self.assertEqual([(b.text(), action_of(b)) for b in c.find_all("button")],
+                                 [("목록에서 지우기", ("dismiss", key))])
                 said[key, decision] = c.one("div", "done").text()
         self.assertEqual(said["r7decided", "APPROVED"],
-                         "plan_20261022_0007 — 승인되었습니다에이전트가 이 결정을 반영합니다.")
+                         "plan_20261022_0007 — 승인되었습니다에이전트가 이 결정을 반영합니다.목록에서 지우기")
         self.assertIn("거절되었습니다", said["r7decided", "REJECTED"])
         self.assertIn("수정 요청되었습니다", said["r7decided", "REVISE"])
         self.assertIn("초안이 승인되었습니다", said["r8halted", "APPROVED"])

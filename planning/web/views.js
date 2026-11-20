@@ -324,11 +324,18 @@ function hintHtml(list,runs){
 }
 
 // ---- one request, whatever it asks ------------------------------------------------
+// A decided card stays until its agent collects the decision, which an agent
+// that stopped never does. This takes the card off the page and nothing else: the
+// decision still reaches the agent when it comes back. The run card's small button.
+function dismissBtn(d){
+  return html`<button class="linkbtn" type="button" data-act="dismiss" data-id="${d.id}">목록에서 지우기</button>`;
+}
 function requestCard(d){
   if(d.decided){
     const label=(d.phase==='HALT'?HALT_DONE_LABEL:DONE_LABEL)[d.decided]||d.decided;
     return html`<div class="done">${d.plan_id} — ${label}<br>
-      <span style="font-weight:400;opacity:.6;font-size:.9rem">에이전트가 이 결정을 반영합니다.</span></div>`;
+      <span style="font-weight:400;opacity:.6;font-size:.9rem">에이전트가 이 결정을 반영합니다.</span>
+      ${dismissBtn(d)}</div>`;
   }
   if(d.phase==='HALT')return haltCard(d);
   // An entry with no phase was published by an older server process on this same
