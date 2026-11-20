@@ -621,6 +621,13 @@ model reads. Committed on `develop` step by step, the suite green at each:
   `tools/page_preview.py` serves `tests/web/fixtures.json` in a browser. 948 unit tests.
   How each step was shown not to change the page: [07](07-testing.md#the-approval-page-planningweb).
 
+### Unreleased — taking a decided card off the page
+A decided card stayed on the page until its agent collected the decision - for good, when
+the agent had stopped. Each decided card now has a small [목록에서 지우기] button
+(`POST /api/dismiss`). It hides the card only: the decision stays queued and still reaches
+the agent if it comes back. Undecided requests cannot be dismissed. See
+[06](06-human-in-the-loop.md#taking-a-decided-card-off-the-page-unreleased).
+
 ---
 
 ## Git commit ↔ version map

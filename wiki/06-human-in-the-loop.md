@@ -158,6 +158,21 @@ Whatever the human clicks afterwards is collected on the **next tool call of any
 (`_apply_late_decision`, audited `late_decision_applied`) and applied. A late decision is only
 honoured for the exact plan version that was on screen (fingerprint), else discarded.
 
+### Taking a decided card off the page (unreleased)
+
+A decided card ("plan_… — 승인되었습니다 · 에이전트가 이 결정을 반영합니다") stays until
+its agent collects the decision. An agent that has stopped never does, and the card used to
+stay until the approval went cold. Under the message is a small **[목록에서 지우기]** button
+(the run card's `linkbtn`, centred). It is offered only once a decision is recorded -
+approved, rejected, sent back, or the halt card's continue/cancel.
+
+- `POST /api/dismiss {id}` -> `ApprovalStore.dismiss`: marks the entry `dismissed`; it is no
+  longer sent to the page (`/api/pending` skips it), in every tab.
+- **Only the card goes.** The entry and its decision stay in the queue, so an agent that
+  comes back still collects exactly what was decided (`claim` / `claim_for_plan` are
+  unchanged). An undecided request cannot be dismissed (`ok: false`): someone may be
+  waiting on it. No `confirm`: nothing is lost.
+
 ## Two enforcement layers
 
 1. **Instructional gate:** `STOP_AND_WAIT_FOR_USER` + pre-rendered `display_to_user`. The model
@@ -172,7 +187,7 @@ Blocking approval adds a third, physical layer on top of these.
 
 - Loopback-only HTTP on `127.0.0.1:8765` (configurable). Serves one self-contained HTML page
   plus JSON endpoints: `GET /api/health`, `GET /api/pending`, `POST /api/decide`,
-  `POST /api/control`. The page's source is plain files in `planning/web/`, read once at
+  `POST /api/control`, `POST /api/dismiss`. The page's source is plain files in `planning/web/`, read once at
   import and served with the CSS and every script inline — **no static routes, zero
   dependencies**. Each script carries a `sourceURL`, so the browser's developer tools show
   it as its own file. Because the page is held in memory, a process always serves the page
